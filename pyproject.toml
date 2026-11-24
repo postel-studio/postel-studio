@@ -3,11 +3,25 @@ name = "postel-studio"
 version = "0.1.0"
 description = "以仓库为第一视图的 Agent 工作台"
 readme = "README.md"
+license = { text = "Proprietary" }
+keywords = ["git", "agent", "workbench", "code-review", "bot", "worktree"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
 authors = [
     { name = "MaoZhiqin", email = "1940428933@qq.com" }
 ]
 requires-python = ">=3.12"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/postel-studio/postel-studio"
+Repository = "https://github.com/postel-studio/postel-studio"
 
 [project.scripts]
 postel-studio = "postel_studio:main"
