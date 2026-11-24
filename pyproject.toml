@@ -1,7 +1,7 @@
 [project]
-name = "repocrew"
+name = "postel-studio"
 version = "0.1.0"
-description = "Add your description here"
+description = "以仓库为第一视图的 Agent 工作台"
 readme = "README.md"
 authors = [
     { name = "MaoZhiqin", email = "1940428933@qq.com" }
@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
-repocrew = "repocrew:main"
+postel-studio = "postel_studio:main"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
