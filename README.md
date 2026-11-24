@@ -43,5 +43,4 @@ Naming convention: distribution `postel-studio` (hyphen), importable package `po
 
 ## License
 
-No license is declared yet, so the package is "all rights reserved" by default. A license must be
-chosen before the project is published publicly.
+[MIT](LICENSE) © 2026 MaoZhiqin

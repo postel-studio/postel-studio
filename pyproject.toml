@@ -1,9 +1,10 @@
 [project]
 name = "postel-studio"
-version = "0.1.0"
+version = "0.1.1"
 description = "以仓库为第一视图的 Agent 工作台"
 readme = "README.md"
-license = { text = "Proprietary" }
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["git", "agent", "workbench", "code-review", "bot", "worktree"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
