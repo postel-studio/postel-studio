@@ -30,3 +30,92 @@ postel-studio = "postel_studio:main"
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.6",
+]
+
+# ---------------------------------------------------------------------------
+# 质量门禁（全部与 CI 使用同一份配置，本地与 CI 不允许分叉）
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py312"
+# 与 mypy 的 strict 心智一致：行长限制只作可读性参考，不苛求 79
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "PTH",   # flake8-use-pathlib
+    "RUF",   # ruff 自有规则
+]
+ignore = [
+    # 中文注释与文档字符串不需要西式标点限制
+    "RUF001", "RUF002", "RUF003",
+    # 允许 assert 出现在测试之外的防御性断言（后续按需收紧）
+    "S101",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "PTH"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_any_generics = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+# 测试里允许不写返回注解（夹具与断言更紧凑）
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    # 需要真实 Agent（opencode / dsh / pi）的集成测试，缺失时 skip
+    "real_agent: 需要本机已安装的真实 Agent，缺失则跳过",
+    # 慢集成测试（启真实子进程、真实 git worktree）
+    "slow: 耗时超过数秒的集成测试",
+]
+
+[tool.coverage.run]
+source = ["postel_studio"]
+branch = true
+
+[tool.coverage.report]
+# M1 起步阶段降低门槛，随 Issue 推进逐步上调
+fail_under = 60
+show_missing = true
+skip_empty = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]

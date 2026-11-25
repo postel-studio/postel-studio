@@ -36,6 +36,14 @@ uv build                # build sdist + wheel into dist/
 Naming convention: distribution `postel-studio` (hyphen), importable package `postel_studio`
 (underscore) — this mirrors the upstream repo layout.
 
+## Quality gates
+
+```bash
+bash scripts/check.sh    # lint + format + types + tests/coverage + secret scan
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Links
 
 - Source: https://github.com/postel-studio/postel-studio (private)
