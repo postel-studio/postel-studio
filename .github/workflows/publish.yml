@@ -1,0 +1,62 @@
+name: publish
+
+# 发布由 tag 触发：git tag 0.1.2 && git push --tags
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      # 发布前做一次"从产物安装并执行入口"的冒烟，
+      # 避免把打了却跑不起来的包发出去
+      - name: Smoke-test the wheel
+        run: |
+          uv venv --python 3.12 /tmp/probe
+          uv pip install --python /tmp/probe/bin/python dist/*.whl
+          /tmp/probe/bin/postel-studio
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # 这个环境名必须与 PyPI 上 Trusted Publisher 里填的一致
+    environment:
+      name: pypi
+      url: https://pypi.org/project/postel-studio/
+    permissions:
+      id-token: write # OIDC，无需 API token
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
