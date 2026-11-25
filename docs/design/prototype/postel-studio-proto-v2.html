@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postel Studio · 仓库页全量复刻 v2</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0" rel="stylesheet">
+<style>
+/* ===== Primer 语义 token（取自真实 GitHub 页面 computed style）===== */
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;
+  --cjk:"Noto Sans SC",var(--font);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --r6:6px; --rail:250px; --rail-min:60px; --tr:200ms cubic-bezier(.25,.46,.45,.94);
+}
+[data-theme="light"]{
+  --fg:#1f2328; --fg-muted:#59636e; --fg-subtle:#6e7781;
+  --link:#0969da; --link-hover:#0550ae;
+  --success:#1a7f37; --danger:#d1242f; --attention:#9a6700;
+  --bg:#fff; --bg-muted:#f6f8fa; --bg-inset:#f6f8fa; --bg-emphasis:#dfe2e6;
+  --border:#d1d9e0; --border-muted:#d1d9e099;
+  --btn-bg:#f6f8fa; --btn-hover:#eff2f5; --btn-border:#d1d9e0;
+  --prim:#1f883d; --prim-hover:#1a7f37; --prim-border:#1f232826;
+  --row-hover:#f6f8fa; --sel:#ddf4ff;
+  --lbl-open:#1a7f37; --lbl-bg:#dafbe1; --lbl-closed:#cf222e; --lbl-closebg:#ffebe9;
+  --lbl-neutral:#59636e; --lbl-neubg:#eff2f5;
+  --shadow:0 1px 0 rgba(31,35,40,.04);
+  --chart-grid:#d1d9e0; --chart-bar:#54aeff;
+}
+[data-theme="dark"]{
+  --fg:#e6edf3; --fg-muted:#9198a1; --fg-subtle:#8b949e;
+  --link:#4493f8; --link-hover:#6cb6ff;
+  --success:#3fb950; --danger:#f85149; --attention:#d29922;
+  --bg:#0d1117; --bg-muted:#151b23; --bg-inset:#010409; --bg-emphasis:#3d444d;
+  --border:#3d444d; --border-muted:#3d444d80;
+  --btn-bg:#212830; --btn-hover:#262c36; --btn-border:#3d444d;
+  --prim:#238636; --prim-hover:#2ea043; --prim-border:rgba(240,246,252,.1);
+  --row-hover:#161b22; --sel:#1c2b41;
+  --lbl-open:#3fb950; --lbl-bg:#1f3b28; --lbl-closed:#f85149; --lbl-closebg:#3d1618;
+  --lbl-neutral:#9198a1; --lbl-neubg:#212830;
+  --shadow:0 0 transparent;
+  --chart-grid:#3d444d; --chart-bar:#4493f8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--cjk);font-size:14px;line-height:1.5;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+a{color:var(--link);text-decoration:none} a:hover{text-decoration:underline}
+.oct{display:inline-block;vertical-align:text-bottom;fill:currentColor;flex:none}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+table{border-collapse:collapse;width:100%}
+
+/* ===== 布局 ===== */
+.app{display:grid;grid-template-columns:var(--rail) 1fr;height:100vh;overflow:hidden}
+.app.collapsed{grid-template-columns:var(--rail-min) 1fr}
+.rail{display:flex;flex-direction:column;min-height:0;background:var(--bg-muted);border-right:1px solid var(--border)}
+.rail-brand{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid var(--border-muted)}
+.logo{width:26px;height:26px;border-radius:var(--r6);background:#24292f;color:#fff;display:grid;place-items:center;font-weight:700;font-size:12px;flex:none}
+.brand-txt{font-size:13px;font-weight:600;white-space:nowrap}
+.rail-toggle{margin-left:auto;width:26px;height:26px;border-radius:var(--r6);display:grid;place-items:center;color:var(--fg-muted)}
+.rail-toggle:hover{background:var(--border-muted)}
+.sec{display:flex;flex-direction:column;min-height:0}
+.sec.bots{flex:0 0 auto}
+.sec.repos{flex:1 1 auto;border-top:1px solid var(--border);overflow:hidden}
+.sec-head{display:flex;align-items:center;gap:6px;width:100%;padding:10px 14px 6px;font-size:12px;font-weight:600;text-align:left}
+.sec-head:hover{background:var(--border-muted)}
+.sec-head .caret{transition:transform var(--tr)}
+.sec.closed .caret{transform:rotate(-90deg)}
+.sec-body{overflow:auto;padding:0 8px 10px;min-height:0}
+.sec.closed .sec-body{display:none}
+.bot,.repo{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--r6);width:100%;text-align:left}
+.bot:hover,.repo:hover{background:var(--border-muted)}
+.bot.active,.repo.active{background:var(--bg);box-shadow:0 0 0 1px var(--border)}
+.avatar{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:600;flex:none;background:#8250df;color:#fff}
+.bot .nm,.repo .nm{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.repo .nm{font-weight:500}
+.bot .rl,.repo .grp{font-size:11.5px;color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;margin-left:auto;box-shadow:0 0 0 2px var(--bg-muted)}
+.dot.idle{background:#8c959f}.dot.run{background:#1f883d}.dot.wait{background:#bf8700}
+.cnt{font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--border);color:var(--fg);margin-left:auto;line-height:18px}
+.app.collapsed .brand-txt,.app.collapsed .sec-head .tt,.app.collapsed .bot>div,
+.app.collapsed .repo>div,.app.collapsed .cnt{display:none}
+.app.collapsed .sec-head{justify-content:center;padding:10px 0 6px}
+.app.collapsed .bot,.app.collapsed .repo{justify-content:center;padding:6px 0}
+.app.collapsed .rail-toggle{margin:0 auto}
+
+.main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.gtop{display:flex;align-items:center;gap:10px;padding:10px 16px 8px;border-bottom:1px solid var(--border-muted)}
+.crumb{display:flex;align-items:center;gap:6px;font-size:16px;min-width:0}
+.crumb .o{color:var(--link)} .crumb .r{color:var(--link);font-weight:600}
+.crumb .sep{color:var(--fg-muted)}
+.pill{font-size:11.5px;font-weight:500;color:var(--fg-muted);border:1px solid var(--border);border-radius:999px;padding:1px 8px;line-height:18px}
+.search{margin-left:auto;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--bg-muted);border-radius:var(--r6);padding:3px 10px;min-width:260px;height:30px}
+.search input{border:none;outline:none;background:transparent;font:inherit;font-size:13px;color:var(--fg);width:100%}
+.search .oct{color:var(--fg-muted)}
+.icobtn{width:30px;height:30px;border-radius:var(--r6);display:grid;place-items:center;color:var(--fg-muted);border:1px solid var(--border);background:var(--bg-muted)}
+.icobtn:hover{background:var(--btn-hover)}
+
+/* ===== 一级 tab（UnderlineNav）===== */
+.tabs{display:flex;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;flex:none}
+.tab{display:flex;align-items:center;gap:7px;padding:0 9px;height:48px;font-size:14px;color:var(--fg);border-bottom:2px solid transparent;white-space:nowrap}
+.tab .oct{color:var(--fg-muted)}
+.tab:hover{border-bottom-color:var(--border)}
+.tab.on{font-weight:600;border-bottom-color:#fd8c73}
+.tab .cn{font-size:12px;color:var(--fg-muted);padding:0 6px;border-radius:999px;background:var(--border);line-height:18px}
+.body{flex:1;min-height:0;overflow:auto}
+.page{display:none;padding:16px 24px 60px}
+.page.on{display:block}
+
+/* ===== 通用组件 ===== */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border-radius:var(--r6);
+  font-size:14px;font-weight:500;background:var(--btn-bg);border:1px solid var(--btn-border);color:var(--fg);box-shadow:var(--shadow);white-space:nowrap}
+.btn:hover{background:var(--btn-hover)}
+.btn .oct{color:var(--fg-muted)}
+.btn.primary{background:var(--prim);border-color:var(--prim-border);color:#fff}
+.btn.primary:hover{background:var(--prim-hover)} .btn.primary .oct{color:#fff}
+.btn .cn{font-size:12px;font-weight:600;padding:0 6px;border-radius:999px;background:rgba(255,255,255,.2);line-height:18px}
+.btn.danger{color:var(--danger)} .btn.sm{height:28px;font-size:12px;padding:0 10px}
+.lbl{display:inline-block;font-size:11.5px;font-weight:600;padding:0 8px;border-radius:999px;line-height:20px}
+.lbl.open{background:var(--lbl-bg);color:var(--lbl-open)}
+.lbl.closed{background:var(--lbl-closebg);color:var(--lbl-closed)}
+.lbl.neutral{background:var(--lbl-neubg);color:var(--lbl-neutral)}
+.lbl.pr{background:#fbefff;color:#8250df}
+.lbl.bug{background:#ffebe9;color:#a40e26}
+.lbl.enh{background:#ddf4ff;color:#0550ae}
+.box{border:1px solid var(--border);border-radius:var(--r6);overflow:hidden;background:var(--bg)}
+.box-h{padding:8px 16px;background:var(--bg-muted);border-bottom:1px solid var(--border);font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+.box-b{padding:16px}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:8px 12px;font-size:14px}
+.kv dt{color:var(--fg-muted)} .kv dd{}
+.mono{font-family:var(--mono);font-size:12px;background:var(--bg-muted);padding:1px 5px;border-radius:var(--r6)}
+.sub{color:var(--fg-muted);font-size:12px}
+
+/* ===== 列表页通用（Issues / PRs / Projects）===== */
+.with-side{display:grid;grid-template-columns:240px minmax(0,1fr);gap:24px;align-items:start}
+@media(max-width:1000px){.with-side{grid-template-columns:minmax(0,1fr)}}
+.side-nav{font-size:13px}
+.side-nav h3{font-size:12px;font-weight:600;color:var(--fg-muted);padding:8px 8px 4px;text-transform:uppercase;letter-spacing:.02em}
+.side-nav a,.side-nav .item{display:block;padding:5px 8px;border-radius:var(--r6);color:var(--fg);font-size:13px}
+.side-nav a:hover,.side-nav .item:hover{background:var(--bg-muted);text-decoration:none}
+.side-nav .item.on{background:var(--btn-hover);font-weight:600}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.toolbar .grow{margin-left:auto;display:flex;gap:8px}
+.tabbar{display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--border);margin-bottom:12px;font-size:13px}
+.tabbar a{color:var(--fg);display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:2px solid transparent}
+.tabbar a.on{border-bottom-color:#fd8c73;font-weight:600}
+.tabbar .n{font-size:12px;color:var(--fg-muted);padding:0 6px;border-radius:999px;background:var(--border);line-height:18px}
+.filters{display:flex;gap:8px;align-items:center;margin:12px 0;font-size:12px;color:var(--fg-muted);flex-wrap:wrap}
+.iss{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border)}
+.iss:last-child{border-bottom:none}
+.iss:hover{background:var(--row-hover)}
+.iss .ico{flex:none;margin-top:3px}
+.iss .ico.open{color:var(--success)} .iss .ico.closed{color:#8250df} .iss .ico.pr{color:var(--success)}
+.iss .mid{flex:1;min-width:0}
+.iss .title{font-size:14px;font-weight:600;color:var(--fg);display:block;margin-bottom:4px}
+.iss .title:hover{color:var(--link)}
+.iss .meta{font-size:12px;color:var(--fg-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.iss .tags{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+.iss .avatar-mini{width:16px;height:16px;border-radius:50%;background:#8c959f;color:#fff;display:inline-grid;place-items:center;font-size:9px;flex:none}
+.iss .cmt{display:flex;align-items:center;gap:4px;color:var(--fg-muted);font-size:12px}
+.empty{padding:48px;text-align:center;color:var(--fg-muted)}
+
+/* ===== Actions ===== */
+.actions-wrap{display:grid;grid-template-columns:280px minmax(0,1fr);gap:24px;align-items:start}
+.wf-list{border:1px solid var(--border);border-radius:var(--r6);overflow:hidden}
+.wf{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:13px;border-bottom:1px solid var(--border-muted)}
+.wf:last-child{border-bottom:none}
+.wf:hover{background:var(--row-hover)}
+.wf.on{background:var(--sel);font-weight:600}
+.wf .oct{color:var(--fg-muted)}
+.wf .badge{font-size:11px;padding:0 6px;border-radius:999px;background:var(--border);color:var(--fg-muted)}
+.run-item{display:flex;gap:12px;padding:12px;border-bottom:1px solid var(--border)}
+.run-item:last-child{border-bottom:none}
+.run-item:hover{background:var(--row-hover)}
+.run-item .st{flex:none;margin-top:3px}
+.run-item .st.ok{color:var(--success)} .run-item .st.fail{color:var(--danger)} .run-item .st.wait{color:var(--attention)}
+.run-title{font-size:14px;font-weight:600;margin-bottom:4px;color:var(--fg)}
+.run-meta{font-size:12px;color:var(--fg-muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* ===== Security ===== */
+.sec-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px;align-items:start}
+@media(max-width:1000px){.sec-grid{grid-template-columns:minmax(0,1fr)}}
+.policy{padding:16px;border:1px solid var(--border);border-radius:var(--r6);font-size:14px;line-height:1.6}
+.policy h3{font-size:16px;margin:16px 0 8px}
+.adv{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border-muted);font-size:13px}
+.adv:last-child{border-bottom:none}
+
+/* ===== Insights（含子导航）===== */
+.ins-nav{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:20px;overflow-x:auto;font-size:13px}
+.ins-nav a{padding:8px 10px;color:var(--fg);border-bottom:2px solid transparent;white-space:nowrap}
+.ins-nav a.on{border-bottom-color:#fd8c73;font-weight:600}
+.ins-page{display:none} .ins-page.on{display:block}
+.stat-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}
+@media(max-width:1000px){.stat-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.statcard{border:1px solid var(--border);border-radius:var(--r6);padding:12px 14px}
+.statcard .l{font-size:12px;color:var(--fg-muted);margin-bottom:6px}
+.statcard .v{font-size:22px;font-weight:600;letter-spacing:-.02em}
+.statcard .d{font-size:12px;color:var(--fg-muted);margin-top:4px}
+.chart{border:1px solid var(--border);border-radius:var(--r6);padding:16px;margin-bottom:16px}
+.chart-h{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+.chart-h .t{font-size:14px;font-weight:600}
+.chart-h .p{font-size:12px;color:var(--fg-muted)}
+.bars{display:flex;align-items:flex-end;gap:6px;height:140px;padding-top:8px;border-bottom:1px solid var(--chart-grid)}
+.bars .b{flex:1;background:var(--chart-bar);border-radius:2px 2px 0 0;min-height:2px;position:relative}
+.bars .b:hover{opacity:.8}
+.bar-labels{display:flex;gap:6px;margin-top:6px;font-size:11px;color:var(--fg-muted)}
+.bar-labels span{flex:1;text-align:center}
+.checklist{font-size:14px}
+.checklist .row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-muted)}
+.checklist .row:last-child{border-bottom:none}
+.checklist .ok{color:var(--success)} .checklist .no{color:var(--fg-muted)}
+.dep-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-muted);font-size:13px}
+.fork-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border-muted);font-size:13px}
+.netwrap{position:relative;height:220px;border:1px solid var(--border);border-radius:var(--r6);background:var(--bg-inset);overflow:hidden}
+.netwrap .line{position:absolute;height:2px;background:var(--border);transform-origin:0 0}
+.netwrap .node{position:absolute;width:9px;height:9px;border-radius:50%;background:var(--link)}
+
+/* ===== Code 页（沿用 v1）===== */
+.repo-layout{display:grid;grid-template-columns:minmax(0,1fr) 296px;gap:24px;align-items:start}
+@media(max-width:1100px){.repo-layout{grid-template-columns:minmax(0,1fr)}}
+.bar2{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.split{border-radius:var(--r6);overflow:hidden;display:inline-flex}
+.split .btn{border-radius:0} .split .btn:first-child{border-right:1px solid var(--prim-border)}
+.statline{font-size:12px;color:var(--fg-muted);display:flex;align-items:center;gap:6px;margin-left:auto}
+.sha{font-family:var(--mono);font-size:12px;padding:1px 6px;border:1px solid var(--border);border-radius:var(--r6)}
+.avatar-mini{width:18px;height:18px;border-radius:50%;background:#57606a;color:#fff;display:inline-grid;place-items:center;font-size:10px;font-weight:600;flex:none}
+.files{border:1px solid var(--border);border-radius:var(--r6);overflow:hidden}
+.files thead th{text-align:left;font-size:12px;font-weight:600;padding:8px 16px;background:var(--bg-muted);border-bottom:1px solid var(--border)}
+.files tbody tr{border-bottom:1px solid var(--border)} .files tbody tr:last-child{border-bottom:none}
+.files tbody tr:hover{background:var(--row-hover)}
+.files td{padding:7px 16px;font-size:13px;vertical-align:middle}
+.cell-name{display:flex;align-items:center;gap:8px;min-width:0}
+.cell-name a{color:var(--fg)} .cell-name a:hover{color:var(--link)}
+.name-cell{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cell-msg{display:flex;align-items:center;gap:6px;color:var(--fg-muted);font-size:12.5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cell-msg a{color:var(--fg-muted)}
+.cell-age{text-align:right;color:var(--fg-muted);font-size:12.5px;white-space:nowrap}
+.readme{margin-top:16px;border:1px solid var(--border);border-radius:var(--r6);overflow:hidden}
+.readme-h{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--bg-muted);border-bottom:1px solid var(--border);font-size:13px;font-weight:600}
+.readme-b{padding:24px 32px;font-size:16px;line-height:1.6}
+.readme-b h1{font-size:2em;font-weight:600;padding-bottom:.3em;border-bottom:1px solid var(--border);margin:0 0 16px}
+.readme-b h2{font-size:1.5em;font-weight:600;margin:24px 0 16px;padding-bottom:.3em;border-bottom:1px solid var(--border)}
+.readme-b p{margin:0 0 16px} .readme-b ul,.readme-b ol{margin:0 0 16px;padding-left:2em}
+.readme-b li{margin:4px 0} .readme-b code{font-family:var(--mono);font-size:85%;background:var(--bg-muted);padding:.2em .4em;border-radius:var(--r6)}
+.readme-b pre{background:var(--bg-muted);padding:16px;border-radius:var(--r6);overflow:auto;margin:0 0 16px}
+.readme-b pre code{background:none;padding:0;font-size:85%}
+.readme-b blockquote{margin:0 0 16px;padding:0 1em;color:var(--fg-muted);border-left:.25em solid var(--border)}
+.side{display:flex;flex-direction:column;gap:22px}
+.side h2{font-size:16px;font-weight:600;margin-bottom:8px}
+.side p{font-size:14px;margin-bottom:12px}
+.topics{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.topic{font-size:12px;font-weight:500;color:var(--link);background:var(--bg-muted);border:1px solid var(--border);border-radius:999px;padding:1px 10px;line-height:20px}
+.pbar{display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0}
+.pbar span{height:100%}
+.langlist{list-style:none;font-size:12px;display:flex;flex-wrap:wrap;gap:4px 14px}
+.langlist li{display:flex;align-items:center;gap:5px}
+.ldot{width:8px;height:8px;border-radius:50%;flex:none}
+.side-link{display:flex;align-items:center;gap:8px;font-size:14px;padding:4px 0}
+.side-link a{color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- 左栏 -->
+  <aside class="rail">
+    <div class="rail-brand">
+      <div class="logo">P</div><div class="brand-txt">Postel Studio</div>
+      <button class="rail-toggle" id="collapse"><span class="mi" style="font-family:'Material Symbols Rounded';font-size:18px">left_panel_close</span></button>
+    </div>
+    <div class="sec bots" id="sec-bots">
+      <button class="sec-head" data-sec="bots"><span class="caret" style="transition:transform .2s">▾</span><span class="tt">Bots</span></button>
+      <div class="sec-body">
+        <button class="bot active"><div class="avatar">B</div><div><div class="nm">Builder</div><div class="rl">实现功能与修复</div></div><span class="dot run"></span></button>
+        <button class="bot"><div class="avatar" style="background:#1f883d">R</div><div><div class="nm">Reviewer</div><div class="rl">只读 · 评审建议</div></div><span class="dot idle"></span></button>
+        <button class="bot"><div class="avatar" style="background:#bc4c00">M</div><div><div class="nm">Maintainer</div><div class="rl">依赖升级与清理</div></div><span class="dot wait"></span></button>
+      </div>
+    </div>
+    <div class="sec repos" id="sec-repos">
+      <button class="sec-head" data-sec="repos"><span class="caret">▾</span><span class="tt">仓库</span></button>
+      <div class="sec-body">
+        <button class="repo active"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg><div><div class="nm">postel-studio</div><div class="grp">postel-studio / postel-studio</div></div><span class="cnt">3</span></button>
+        <button class="repo"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg><div><div class="nm">hermes-agent</div><div class="grp">NousResearch / hermes-agent</div></div></button>
+        <button class="repo"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg><div><div class="nm">LinkStudio</div><div class="grp">本地仓库</div></div></button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主区 -->
+  <div class="main">
+    <div class="gtop">
+      <div class="crumb"><span class="o">postel-studio</span><span class="sep">/</span><span class="r">postel-studio</span><span class="pill">Private</span></div>
+      <div class="search"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg><input placeholder="Type / to search"></div>
+      <button class="icobtn" id="theme" title="切换主题"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg></button>
+    </div>
+
+    <!-- 一级 tab：与你截图完全一致，无 Agents -->
+    <nav class="tabs" id="tabs">
+      <button class="tab on" data-page="code"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25H4.5v-13Zm4.25 0v13h6.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25Z"/></svg>Code</button>
+      <button class="tab" data-page="issues"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg>Issues <span class="cn">3</span></button>
+      <button class="tab" data-page="pulls"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z"/></svg>Pull requests <span class="cn">1</span></button>
+      <button class="tab" data-page="actions"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M6.75 0h.5a.75.75 0 0 1 .75.75v1.5h1.5a.75.75 0 0 1 .75.75v2.29a.75.75 0 0 0 1.28.53l1.06-1.06a.75.75 0 0 1 1.06 0l1.772 1.772a.75.75 0 0 1 0 1.06L13.5 10.06a..."/></svg>Actions</button>
+      <button class="tab" data-page="projects"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0ZM1.5 1.75v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25ZM3.75 6h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5ZM3 3.75A.75.75 0 0 1 3.75 3h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 3 3.75ZM3.75 9h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5ZM3.75 12h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5Zm4-6h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Zm0 3h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Zm0 3h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Z"/></svg>Projects</button>
+      <button class="tab" data-page="security"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M7.467.133a1.748 1.748 0 0 1 1.066 0l5.25 1.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.7 1.7 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667Z"/></svg>Security and quality <span class="cn">1</span></button>
+      <button class="tab" data-page="insights"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"/></svg>Insights</button>
+    </nav>
+
+    <div class="body">
+
+      <!-- ================= Code ================= -->
+      <section class="page on" id="pg-code">
+        <div class="repo-layout">
+          <div>
+            <div class="bar2">
+              <div class="split">
+                <button class="btn primary"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.492 2.492 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"/></svg>main<span class="oct">▾</span></button>
+                <button class="btn primary"><span class="cn">3</span></button>
+              </div>
+              <button class="btn"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1 1.75C1 .784 1.784 0 2.75 0h7.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16H2.75A1.75 1.75 0 0 1 1 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25V4.664a.25.25 0 0 0-.073-.177l-2.914-2.914a.25.25 0 0 0-.177-.073Z"/></svg>Go to file</button>
+              <button class="btn">Add file ▾</button>
+              <div class="statline"><span class="avatar-mini">M</span><strong style="color:var(--fg)">chore(release): 0.1.2</strong><span class="sha">0b163e0</span><span>·</span><span>昨天</span></div>
+            </div>
+
+            <div class="files">
+              <table>
+                <thead><tr><th>Name</th><th>Last commit message</th><th style="text-align:right;width:150px">Last commit date</th></tr></thead>
+                <tbody>
+                  <tr><td><div class="cell-name"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg><a class="name-cell" href="#">.github</a></div></td><td><div class="cell-msg"><a href="#">ci: Trusted Publishing 发布工作流</a><span>·</span><span>昨天</span></div></td><td class="cell-age">昨天</td></tr>
+                  <tr><td><div class="cell-name"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg><a class="name-cell" href="#">src</a></div></td><td><div class="cell-msg"><a href="#">chore: 0.1.2 版本号</a><span>·</span><span>昨天</span></div></td><td class="cell-age">昨天</td></tr>
+                  <tr><td><div class="cell-name"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9.75 4.25V1.5Z"/></svg><a class="name-cell" href="#">README.md</a></div></td><td><div class="cell-msg"><a href="#">docs: 英文版说明</a><span>·</span><span>昨天</span></div></td><td class="cell-age">昨天</td></tr>
+                  <tr><td><div class="cell-name"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9.75 4.25V1.5Z"/></svg><a class="name-cell" href="#">pyproject.toml</a></div></td><td><div class="cell-msg"><a href="#">chore: MIT 许可证</a><span>·</span><span>昨天</span></div></td><td class="cell-age">昨天</td></tr>
+                  <tr><td><div class="cell-name"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16H3.75A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25Z"/></svg><a class="name-cell" href="#">AGENTS.md</a></div></td><td><div class="cell-msg"><a href="#">docs: Bot 上下文注入规范</a><span>·</span><span>昨天</span></div></td><td class="cell-age">昨天</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="readme">
+              <div class="readme-h"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25Z"/></svg>README.md</div>
+              <div class="readme-b">
+                <h1>Postel Studio</h1>
+                <p><strong>A repository-first Agent workbench.</strong></p>
+                <p>Postel Studio 是仓库常驻 Bot 的控制面。人派活、看 diff、做验收；Bot 住在仓库里，从仓库事件流认领工作，产出分支、检查与拉取请求。</p>
+                <ul><li><strong>仓库是第一视图</strong>，不是编辑器的侧边栏。</li><li><strong>Bot 是仓库的一等公民</strong>：身份、记忆、独立 worktree、工作日志。</li><li><strong>Agent 可插拔</strong>：产品是适配器层。</li><li><strong>本地执行优先</strong>，远程沙箱可选。</li></ul>
+                <blockquote>Status: early skeleton (v0.1).</blockquote>
+                <h2>Install</h2><pre><code>pip install postel-studio</code></pre>
+                <h2>License</h2><p><a href="#">MIT</a> © 2026 MaoZhiqin</p>
+              </div>
+            </div>
+          </div>
+
+          <aside class="side">
+            <div><h2>About</h2><p>以仓库为第一视图的 Agent 工作台</p>
+              <div class="side-link"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M7.775 3.275a.75.75 0 0 0 1.06 1.06l1.25-1.25a2 2 0 1 1 2.83 2.83l-2.5 2.5a2 2 0 0 1-2.83 0 .75.75 0 0 0-1.06 1.06 3.5 3.5 0 0 0 4.95 0l2.5-2.5a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25Z"/></svg><a href="#">pypi.org/project/postel-studio</a></div>
+              <div class="topics"><span class="topic">git</span><span class="topic">agent</span><span class="topic">workbench</span><span class="topic">worktree</span></div>
+            </div>
+            <div><h2>Releases <span style="font-weight:400;color:var(--fg-muted)">3</span></h2><div class="side-link"><span><b>0.1.2</b></span><span class="pill">Latest</span><span class="sub">· 昨天</span></div></div>
+            <div><h2>Packages <span style="font-weight:400;color:var(--fg-muted)">1</span></h2><div class="side-link"><a href="#">postel-studio</a><span class="sub">· PyPI</span></div></div>
+            <div><h2>Contributors <span style="font-weight:400;color:var(--fg-muted)">1</span></h2><div style="display:flex;gap:4px;margin-top:6px"><span class="avatar-mini" style="width:26px;height:26px;background:#8250df">M</span></div></div>
+            <div><h2>Languages</h2><div class="pbar"><span style="width:88%;background:#3572a5"></span><span style="width:10%;background:#89e051"></span><span style="width:2%;background:#ededed"></span></div>
+              <ul class="langlist"><li><span class="ldot" style="background:#3572a5"></span>Python 88.0%</li><li><span class="ldot" style="background:#89e051"></span>Shell 10.0%</li><li><span class="ldot" style="background:#ededed"></span>Other 2.0%</li></ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ================= Issues ================= -->
+      <section class="page" id="pg-issues">
+        <div class="with-side">
+          <nav class="side-nav">
+            <h3>快捷视图</h3>
+            <div class="item">已分配给我</div><div class="item">我创建的</div><div class="item">@ 我的</div><div class="item">最近活动</div>
+            <h3>分组</h3><div class="item">视图</div><div class="item">项目</div><div class="item">里程碑</div><div class="item">标签</div>
+            <div class="item" style="color:var(--fg-muted);margin-top:8px">收起侧栏</div>
+          </nav>
+          <div>
+            <div class="toolbar">
+              <h2 style="font-size:20px;font-weight:400">Issues</h2>
+              <div class="grow"><button class="btn primary">New issue</button></div>
+            </div>
+            <div class="filters"><div class="search" style="min-width:300px;flex:1"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg><input placeholder="Search all issues" value="is:issue state:open"></div></div>
+            <div class="tabbar">
+              <a class="on"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg>Open <span class="n">3</span></a>
+              <a>Active <span class="n">3</span></a>
+              <a>Closed <span class="n">0</span></a>
+            </div>
+            <div class="filters"><span>Author ▾</span><span>Labels ▾</span><span>Projects ▾</span><span>Milestones ▾</span><span style="margin-left:auto">Sort: Newest ▾</span></div>
+            <div class="box">
+              <div class="iss">
+                <span class="ico open"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg></span>
+                <div class="mid"><a class="title" href="#">Bot 产出的候选变更为空时，收件箱没有区分「无事可做」与「任务失败」</a>
+                  <div class="meta"><span class="lbl open">Open</span><span>postel-studio/postel-studio#12</span><span>·</span><span class="avatar-mini">M</span><span>MaoZhiqin opened 2 小时前</span></div>
+                  <div class="tags"><span class="lbl bug">bug</span><span class="lbl neutral">area/收件箱</span><span class="lbl neutral">P2</span></div></div>
+              </div>
+              <div class="iss">
+                <span class="ico open"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg></span>
+                <div class="mid"><a class="title" href="#">AGENTS.md 与 Bot charter 冲突时，注入没有阻断而是静默让仓库层生效</a>
+                  <div class="meta"><span class="lbl open">Open</span><span>postel-studio/postel-studio#11</span><span>·</span><span class="avatar-mini">M</span><span>MaoZhiqin opened 昨天</span></div>
+                  <div class="tags"><span class="lbl bug">bug</span><span class="lbl neutral">area/上下文</span><span class="lbl neutral">P1</span></div></div>
+              </div>
+              <div class="iss">
+                <span class="ico open"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg></span>
+                <div class="mid"><a class="title" href="#">worktree 回收：Bot 任务结束但 worktree 长期残留</a>
+                  <div class="meta"><span class="lbl open">Open</span><span>postel-studio/postel-studio#10</span><span>·</span><span class="avatar-mini">M</span><span>MaoZhiqin opened 昨天</span></div>
+                  <div class="tags"><span class="lbl enh">enhancement</span><span class="lbl neutral">area/worktree</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Pull requests ================= -->
+      <section class="page" id="pg-pulls">
+        <div class="with-side">
+          <nav class="side-nav">
+            <h3>筛选</h3>
+            <div class="item">我创作的</div><div class="item">分配给我</div><div class="item">与我相关</div><div class="item">等待评审</div>
+            <h3>分组</h3><div class="item">里程碑</div><div class="item">标签</div>
+          </nav>
+          <div>
+            <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Pull requests</h2><div class="grow"><button class="btn primary">New pull request</button></div></div>
+            <div class="filters"><div class="search" style="min-width:300px;flex:1"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg><input placeholder="Search all pull requests" value="is:pr state:open"></div></div>
+            <div class="tabbar"><a class="on"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Z"/></svg>Open <span class="n">1</span></a><a>Closed <span class="n">2</span></a></div>
+            <div class="filters"><span>Author ▾</span><span>Label ▾</span><span>Projects ▾</span><span>Milestones ▾</span><span>Reviews ▾</span><span>Assignee ▾</span><span style="margin-left:auto">Sort by Newest ▾</span></div>
+            <div class="box">
+              <div class="iss">
+                <span class="ico pr"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z"/></svg></span>
+                <div class="mid"><a class="title" href="#">docs: set a Lua version for Selene linting</a>
+                  <div class="meta"><span class="lbl open">Open</span><span>#160091</span><span>·</span><span class="avatar-mini">M</span><span>MaoZhiqin wants to merge 1 commit into main from docs/selene-version</span></div>
+                  <div class="tags"><span class="lbl neutral">documentation</span><span class="lbl neutral">ready for review</span></div></div>
+              </div>
+              <div class="iss">
+                <span class="ico closed"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Z"/></svg></span>
+                <div class="mid"><a class="title" href="#">chore: 0.1.3</a>
+                  <div class="meta"><span class="lbl pr">Merged</span><span>#9</span><span>·</span><span class="avatar-mini">M</span><span>MaoZhiqin merged 1 commit into main</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Actions ================= -->
+      <section class="page" id="pg-actions">
+        <div class="actions-wrap">
+          <div>
+            <div class="box" style="margin-bottom:16px">
+              <div class="wf on"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Z"/></svg>All workflows</div>
+              <div class="wf">publish <span class="badge">1</span></div>
+              <div class="wf">Tests</div>
+            </div>
+            <div class="sub" style="padding:0 4px">Workflows</div>
+            <div class="wf-list" style="margin-top:6px">
+              <div class="wf">publish</div><div class="wf">Tests</div><div class="wf">CI</div><div class="wf">CodeQL</div><div class="wf">Dependabot Updates</div><div class="wf">Deploy Site</div>
+            </div>
+          </div>
+          <div>
+            <div class="toolbar"><h2 style="font-size:20px;font-weight:400">publish</h2>
+              <div class="grow">
+                <div class="search" style="min-width:220px"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg><input placeholder="Filter workflow runs"></div>
+                <button class="btn">Run workflow ▾</button>
+              </div>
+            </div>
+            <div class="filters"><span class="lbl open">✓ 0 success</span><span class="lbl closed">× 0 failure</span><span>·</span><span>1 次运行</span><span style="margin-left:auto">Sort: Most recent</span></div>
+            <div class="box">
+              <div class="run-item">
+                <span class="st ok"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg></span>
+                <div style="flex:1;min-width:0">
+                  <div class="run-title">build · chore(release): 0.1.2</div>
+                  <div class="run-meta"><span>#1</span><span>·</span><span>master</span><span>·</span><span class="avatar-mini">M</span><span>昨天 · 1m 12s</span></div>
+                </div>
+                <span class="lbl open">Success</span>
+              </div>
+              <div class="run-item">
+                <span class="st fail"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/></svg></span>
+                <div style="flex:1;min-width:0">
+                  <div class="run-title">build · docs: 补 README</div>
+                  <div class="run-meta"><span>#2</span><span>·</span><span>main</span><span>·</span><span class="avatar-mini">M</span><span>昨天 · 0m 48s</span></div>
+                </div>
+                <span class="lbl closed">Failure</span>
+              </div>
+              <div class="run-item">
+                <span class="st wait"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm0 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm.75 2.75v4.19l2.83 1.63-.75 1.3L7.7 9.5H7.25V4.25h1.5Z"/></svg></span>
+                <div style="flex:1;min-width:0">
+                  <div class="run-title">build · ci: Trusted Publishing</div>
+                  <div class="run-meta"><span>#3</span><span>·</span><span>main</span><span>·</span><span class="avatar-mini">M</span><span>刚刚 · 进行中</span></div>
+                </div>
+                <span class="lbl neutral">Queued</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Projects ================= -->
+      <section class="page" id="pg-projects">
+        <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Projects</h2></div>
+        <div class="tabbar"><a class="on">All</a><a>Templates</a></div>
+        <div class="filters"><div class="search" style="flex:1;max-width:420px"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg><input placeholder="Search projects"></div><span style="margin-left:auto">Sort: Recently updated ▾</span></div>
+        <div class="box">
+          <div class="tabbar" style="margin:0;padding:0 16px"><a class="on">Open <span class="n">0</span></a><a>Closed <span class="n">0</span></a></div>
+          <div class="empty">No projects found · 没有与该仓库关联的项目。</div>
+        </div>
+      </section>
+
+      <!-- ================= Security and quality ================= -->
+      <section class="page" id="pg-security">
+        <div class="sec-grid">
+          <div>
+            <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Security</h2><div class="grow"><button class="btn">Report a vulnerability</button></div></div>
+            <div class="box" style="margin-bottom:16px">
+              <div class="box-h"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M7.467.133a1.748 1.748 0 0 1 1.066 0l5.25 1.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.7 1.7 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667Z"/></svg>SECURITY.md</div>
+              <div class="policy">
+                <p><strong>Hermes Agent Security Policy</strong> · 本文件描述信任模型，点名项目视为承载的那一条安全边界，并划定漏洞报告的范围。</p>
+                <h3>1. Reporting a Vulnerability</h3>
+                <p>通过 GitHub Security Advisories 或邮箱私密报告。不要为安全漏洞开公开 issue。项目不运营 bug bounty。</p>
+                <h3>2. Trust boundary</h3>
+                <p>一份有用的报告需要：简洁描述与严重度评估；受影响组件（文件路径与行号）；环境信息（版本、commit SHA、OS、Python 版本）；对 main 或最新 release 的复现；**跨过的是哪条信任边界**。</p>
+              </div>
+            </div>
+            <div class="box">
+              <div class="box-h">Security advisories</div>
+              <div class="adv"><svg class="oct" viewBox="0 0 16 16" width="16" height="16" style="color:var(--success)"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg><span style="flex:1">No known vulnerabilities</span><span class="sub">0 个 advisory</span></div>
+            </div>
+          </div>
+          <div>
+            <h2 style="font-size:16px;font-weight:600;margin-bottom:8px">Quality</h2>
+            <div class="checklist">
+              <div class="row"><span class="ok">✓</span>Security policy</div>
+              <div class="row"><span class="ok">✓</span>Dependabot enabled</div>
+              <div class="row"><span class="no">—</span>Code scanning</div>
+              <div class="row"><span class="no">—</span>Secret scanning</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Insights（含 9 个子页）================= -->
+      <section class="page" id="pg-insights">
+        <div class="ins-nav" id="insNav">
+          <a class="on" data-ins="overview">Repository insights <span class="sub" style="margin-left:4px">New</span></a>
+          <a data-ins="pulse">Pulse</a>
+          <a data-ins="contributors">Contributors</a>
+          <a data-ins="community">Community standards</a>
+          <a data-ins="commits">Commits</a>
+          <a data-ins="codefreq">Code frequency</a>
+          <a data-ins="deps">Dependency graph</a>
+          <a data-ins="network">Network</a>
+          <a data-ins="forks">Forks</a>
+          <a data-ins="usage">Actions usage metrics</a>
+          <a data-ins="perf">Actions performance metrics</a>
+        </div>
+
+        <!-- 概览 -->
+        <div class="ins-page on" id="ins-overview">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Repository insights</h2><div class="grow"><span class="sub">Nov 18 – Nov 24</span></div></div>
+          <div class="chart">
+            <div class="chart-h"><span class="t">Pull request throughput</span><span class="p">该周合并的 PR 总数与每日分布</span></div>
+            <div class="bars">
+              <div class="b" style="height:26%"></div><div class="b" style="height:42%"></div><div class="b" style="height:55%"></div>
+              <div class="b" style="height:38%"></div><div class="b" style="height:70%"></div><div class="b" style="height:62%"></div><div class="b" style="height:88%"></div>
+            </div>
+            <div class="bar-labels"><span>11/18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span></div>
+            <div class="sub" style="margin-top:8px">共 3 个 PR 合并 · 7 个新开</div>
+          </div>
+          <div class="chart">
+            <div class="chart-h"><span class="t">Median time to merge</span><span class="p">从打开到合并的中位时长（周趋势）</span></div>
+            <div class="bars">
+              <div class="b" style="height:60%"></div><div class="b" style="height:52%"></div><div class="b" style="height:48%"></div>
+              <div class="b" style="height:41%"></div><div class="b" style="height:36%"></div><div class="b" style="height:30%"></div><div class="b" style="height:24%"></div>
+            </div>
+            <div class="bar-labels"><span>11/18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span></div>
+          </div>
+        </div>
+
+        <!-- Pulse -->
+        <div class="ins-page" id="ins-pulse">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Pulse</h2><div class="grow"><span class="sub">2026 年 11 月 18 日 – 11 月 25 日 · Period: 1 week ▾</span></div></div>
+          <h3 style="font-size:16px;margin-bottom:10px">Overview</h3>
+          <div class="stat-cards">
+            <div class="statcard"><div class="l">活跃 PR</div><div class="v">0</div><div class="d">已合并 0 · 已打开 0</div></div>
+            <div class="statcard"><div class="l">活跃 issue</div><div class="v">0</div><div class="d">已关闭 0 · 新开 0</div></div>
+            <div class="statcard"><div class="l">推送的 commit 数</div><div class="v">0</div><div class="d">到 main</div></div>
+            <div class="statcard"><div class="l">贡献者</div><div class="v">1</div><div class="d">不含合并提交</div></div>
+          </div>
+          <div class="box"><div class="box-h">Summary</div><div class="box-b sub">去除合并提交，1 位作者向 main 推送了 0 个 commit。</div></div>
+        </div>
+
+        <!-- Contributors -->
+        <div class="ins-page" id="ins-contributors">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Contributors</h2><div class="grow"><span class="sub">Period: Last 3 months ▾</span></div></div>
+          <div class="chart"><div class="chart-h"><span class="t">Commits over time</span><span class="p">每周（2026-08-22 → 2026-11-22）</span></div>
+            <div class="bars"><div class="b" style="height:20%"></div><div class="b" style="height:55%"></div><div class="b" style="height:35%"></div><div class="b" style="height:12%"></div><div class="b" style="height:8%"></div></div>
+            <div class="bar-labels"><span>8/22</span><span>9/22</span><span>10/22</span><span>11/8</span><span>11/22</span></div>
+          </div>
+          <div class="box"><div class="box-b"><div class="fork-row"><span class="avatar-mini" style="width:24px;height:24px">M</span><strong>MaoZhiqin</strong><span class="sub">· 3 commits</span></div></div></div>
+        </div>
+
+        <!-- Community standards -->
+        <div class="ins-page" id="ins-community">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Community Standards</h2></div>
+          <div class="box"><div class="box-h">Checklist</div>
+            <div class="box-b checklist">
+              <div class="row"><span class="ok">✓</span><span style="flex:1">Description</span><span class="sub">已填写</span></div>
+              <div class="row"><span class="ok">✓</span><span style="flex:1">README</span><span class="sub">README.md</span></div>
+              <div class="row"><span class="no">—</span><span style="flex:1">Code of conduct</span><span class="btn sm">Propose</span></div>
+              <div class="row"><span class="no">—</span><span style="flex:1">Contributing</span><span class="sub">未找到</span></div>
+              <div class="row"><span class="ok">✓</span><span style="flex:1">License</span><span class="sub">MIT</span></div>
+              <div class="row"><span class="no">—</span><span style="flex:1">Security policy</span><span class="sub">未找到</span></div>
+              <div class="row"><span class="no">—</span><span style="flex:1">Issue templates</span><span class="sub">未找到</span></div>
+              <div class="row"><span class="no">—</span><span style="flex:1">Pull request template</span><span class="sub">未找到</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Commits -->
+        <div class="ins-page" id="ins-commits">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Commits over the last year</h2></div>
+          <div class="chart"><div class="chart-h"><span class="t">Commits</span><span class="p">每周 commit 数 · 52 根柱</span></div>
+            <div class="bars" id="commitBars"></div>
+            <div class="bar-labels"><span>2025-11</span><span>2026-02</span><span>2026-05</span><span>2026-08</span><span>2026-11</span></div>
+          </div>
+        </div>
+
+        <!-- Code frequency -->
+        <div class="ins-page" id="ins-codefreq">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Code frequency</h2></div>
+          <div class="box"><div class="empty">没有足够的数据生成此图。此仓库的 commit 数较少，或本周无提交。</div></div>
+        </div>
+
+        <!-- Dependency graph -->
+        <div class="ins-page" id="ins-deps">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Dependency graph</h2><div class="grow"><span class="sub">dependency files checked for commit 0b163e0</span><span class="btn sm">Export SBOM</span></div></div>
+          <div class="tabbar"><a class="on">Dependencies</a><a>Dependents</a></div>
+          <div class="filters"><div class="search" style="flex:1;max-width:380px"><svg class="oct" viewBox="0 0 16 16" width="16" height="16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg><input placeholder="Search all dependencies"></div><span class="sub" style="margin-left:auto">3 Total</span></div>
+          <div class="box"><div class="box-b" style="padding:8px 16px">
+            <div class="dep-row"><span class="mono">fastapi</span><span class="sub">pip · pyproject.toml</span><span class="lbl open" style="margin-left:auto">Direct</span></div>
+            <div class="dep-row"><span class="mono">uvicorn</span><span class="sub">pip · pyproject.toml</span><span class="lbl open" style="margin-left:auto">Direct</span></div>
+            <div class="dep-row"><span class="mono">pytest</span><span class="sub">pip · 开发依赖</span><span class="lbl neutral" style="margin-left:auto">Dev</span></div>
+          </div></div>
+        </div>
+
+        <!-- Network -->
+        <div class="ins-page" id="ins-network">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Network graph</h2><div class="grow"><span class="sub">最近提交的时间线，按最近推送排序，每日更新</span></div></div>
+          <div class="netwrap" id="netwrap"></div>
+          <div class="sub" style="margin-top:8px">本仓库网络中没有分支或 fork 的提交。</div>
+        </div>
+
+        <!-- Forks -->
+        <div class="ins-page" id="ins-forks">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Forks</h2><div class="grow"><span class="sub">Period: 2 years ▾ · Repository type: Active ▾ · Sort: Most starred ▾</span></div></div>
+          <div class="box"><div class="empty">该仓库还没有被 fork。</div></div>
+        </div>
+
+        <!-- Actions usage metrics -->
+        <div class="ins-page" id="ins-usage">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Actions Usage Metrics</h2><div class="grow"><span class="sub">Period: Current month ▾</span></div></div>
+          <div class="stat-cards">
+            <div class="statcard"><div class="l">Total minutes</div><div class="v">0</div><div class="d">本月所有工作流的总分钟数</div></div>
+            <div class="statcard"><div class="l">Total job runs</div><div class="v">0</div><div class="d">本月所有 job 运行数</div></div>
+            <div class="statcard"><div class="l">Billable minutes</div><div class="v">0</div><div class="d">计费分钟</div></div>
+            <div class="statcard"><div class="l">Runner type</div><div class="v">ubuntu</div><div class="d">默认 runner</div></div>
+          </div>
+          <div class="chart"><div class="chart-h"><span class="t">Job minutes by workflow</span></div>
+            <div class="bars"><div class="b" style="height:1%"></div></div><div class="sub" style="margin-top:8px">本月暂无运行记录。</div></div>
+        </div>
+
+        <!-- Actions performance metrics -->
+        <div class="ins-page" id="ins-perf">
+          <div class="toolbar"><h2 style="font-size:20px;font-weight:400">Actions Performance Metrics</h2><div class="grow"><span class="sub">Period: Current month ▾</span></div></div>
+          <div class="stat-cards">
+            <div class="statcard"><div class="l">Avg job run time</div><div class="v">—</div><div class="d">平均 job 运行时长</div></div>
+            <div class="statcard"><div class="l">Avg job queue time</div><div class="v">—</div><div class="d">平均排队时长</div></div>
+            <div class="statcard"><div class="l">Avg run count</div><div class="v">0</div><div class="d">平均运行次数</div></div>
+            <div class="statcard"><div class="l">Cancelled runs</div><div class="v">0</div><div class="d">取消的运行</div></div>
+          </div>
+          <div class="box"><div class="empty">本月暂无 Actions 运行数据。</div></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script>
+const app = document.getElementById('app');
+document.getElementById('collapse').onclick = () => app.classList.toggle('collapsed');
+document.getElementById('theme').onclick = () => {
+  const el = document.documentElement;
+  el.dataset.theme = el.dataset.theme === 'dark' ? 'light' : 'dark';
+};
+document.querySelectorAll('.sec-head').forEach(b => b.onclick = () => b.closest('.sec').classList.toggle('closed'));
+
+// 一级 tab
+document.querySelectorAll('.tab[data-page]').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
+    t.classList.add('on');
+    document.getElementById('pg-' + t.dataset.page).classList.add('on');
+  };
+});
+
+// Insights 子导航
+document.querySelectorAll('#insNav a').forEach(a => {
+  a.onclick = () => {
+    document.querySelectorAll('#insNav a').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.ins-page').forEach(p => p.classList.remove('on'));
+    a.classList.add('on');
+    document.getElementById('ins-' + a.dataset.ins).classList.add('on');
+  };
+});
+
+// 52 周 commit 柱（示意数据）
+const cb = document.getElementById('commitBars');
+let html = '';
+for (let i = 0; i < 52; i++) {
+  const h = 4 + Math.round(Math.abs(Math.sin(i * 0.7)) * (i > 44 ? 90 : 55));
+  html += '<div class="b" style="height:' + h + '%"></div>';
+}
+cb.innerHTML = html;
+
+// 网络图示意（无 fork 时为空）
+document.getElementById('netwrap').innerHTML = '';
+
+// 左栏选中
+document.querySelectorAll('.bot,.repo').forEach(el => {
+  el.onclick = () => {
+    const sel = el.classList.contains('bot') ? '.bot' : '.repo';
+    document.querySelectorAll(sel).forEach(x => x.classList.remove('active'));
+    el.classList.add('active');
+  };
+});
+</script>
+</body>
+</html>

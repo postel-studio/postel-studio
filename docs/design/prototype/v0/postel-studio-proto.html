@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postel Studio · 设计原型 v0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0">
+<style>
+/* ---------- tokens：取自参考项目 style-guide 的 GitHub 配色 ---------- */
+:root{
+  --font-primary:"Poppins","Noto Sans SC",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --r8:8px; --r12:12px; --pill:500px;
+  --tr:250ms cubic-bezier(.14,.97,.59,1);
+  --rail:248px; --rail-collapsed:56px;
+}
+[data-theme="light"]{
+  --bg:#fff; --ink:hsl(220,40%,13%);
+  --surface:hsl(223,100%,96%); --on-surface:hsl(222,11%,40%);
+  --line:hsl(223,10%,83%); --line-soft:hsl(223,18%,90%);
+  --muted:hsl(223,14%,45%);
+  --accent:hsl(212,100%,50%); --accent-hover:hsl(212,100%,45%);
+  --add-bg:hsl(140,60%,94%); --add-ink:hsl(140,50%,28%);
+  --del-bg:hsl(0,80%,95%); --del-ink:hsl(0,54%,42%);
+  --bot-bg:hsl(260,60%,96%); --bot-ink:hsl(260,45%,38%);
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 6px 20px rgba(31,35,40,.08);
+}
+[data-theme="dark"]{
+  --bg:hsl(220,40%,13%); --ink:#fff;
+  --surface:hsl(222,41%,17%); --on-surface:hsl(222,16%,72%);
+  --line:hsl(223,40%,20%); --line-soft:hsl(222,41%,23%);
+  --muted:hsl(223,13%,60%);
+  --accent:hsl(212,100%,50%); --accent-hover:hsl(212,100%,55%);
+  --add-bg:hsla(140,50%,45%,.16); --add-ink:hsl(140,60%,70%);
+  --del-bg:hsla(0,80%,60%,.16); --del-ink:hsl(0,100%,76%);
+  --bot-bg:hsla(260,60%,60%,.18); --bot-ink:hsl(260,70%,78%);
+  --shadow:0 1px 3px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:var(--font-primary);font-size:14px;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
+.mi{font-family:"Material Symbols Rounded";font-variation-settings:"opsz" 24,"FILL" 1;font-size:20px;line-height:1;user-select:none}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+/* ---------- 三栏骨架 ---------- */
+.app{display:grid;grid-template-columns:var(--rail) 1fr;height:100vh;transition:grid-template-columns var(--tr)}
+.app.collapsed{grid-template-columns:var(--rail-collapsed) 1fr}
+
+/* ---------- 左栏：上 Bot / 下 仓库 ---------- */
+.rail{display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--surface);min-height:0}
+.rail-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;min-width:0}
+.logo{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--accent),#7c5cff);display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px;flex:none}
+.brand-name{font-size:13px;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
+.rail-toggle{margin-left:auto;width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:var(--muted)}
+.rail-toggle:hover{background:var(--line-soft)}
+
+.sec{display:flex;flex-direction:column;min-height:0}
+.sec.bots{flex:0 0 auto}
+.sec.repos{flex:1 1 auto;border-top:1px solid var(--line)}
+.sec-head{display:flex;align-items:center;gap:6px;padding:10px 14px 6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.sec-head .mi{font-size:16px}
+.caret{transition:transform var(--tr)}
+.sec.closed .caret{transform:rotate(-90deg)}
+.sec-body{overflow:auto;padding:2px 8px 10px;min-height:0}
+.sec.closed .sec-body{display:none}
+
+/* Bot 条目 */
+.bot{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:var(--r8);position:relative}
+.bot:hover{background:var(--line-soft)}
+.bot.active{background:var(--bot-bg)}
+.avatar{width:26px;height:26px;border-radius:var(--pill);display:grid;place-items:center;font-size:11px;font-weight:700;flex:none;background:var(--bot-bg);color:var(--bot-ink)}
+.dot{width:6px;height:6px;border-radius:50%;flex:none;margin-left:auto}
+.dot.idle{background:hsl(220,10%,70%)} .dot.run{background:hsl(140,60%,45%)} .dot.wait{background:hsl(38,90%,55%)}
+.bot .nm{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bot .rl{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 仓库条目 */
+.repo{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:var(--r8);width:100%;text-align:left}
+.repo:hover{background:var(--line-soft)}
+.repo.active{background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)}
+.repo .mi{font-size:17px;color:var(--muted)}
+.repo .nm{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.repo .grp{font-size:11px;color:var(--muted)}
+.badge-n{font-size:10px;font-weight:700;padding:1px 6px;border-radius:var(--pill);background:var(--accent);color:#fff;margin-left:auto}
+
+/* 折叠态只露图标 */
+.app.collapsed .brand-name,.app.collapsed .sec-head span.tt,
+.app.collapsed .bot>div,.app.collapsed .repo .nm,
+.app.collapsed .repo .grp,.app.collapsed .badge-n{display:none}
+.app.collapsed .sec-head{justify-content:center;padding:10px 0 6px}
+.app.collapsed .bot,.app.collapsed .repo{justify-content:center;padding:8px 0}
+.app.collapsed .rail-toggle{margin:0 auto}
+
+/* ---------- 主区 ---------- */
+.main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid var(--line-soft)}
+.crumb{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);min-width:0}
+.crumb .owner{color:var(--accent);font-weight:500}
+.crumb .repo{color:var(--accent);font-weight:600}
+.crumb .sep{opacity:.5}
+.search{margin-left:auto;display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:var(--r8);padding:5px 10px;min-width:220px}
+.search input{border:none;outline:none;background:transparent;font:inherit;font-size:13px;color:var(--ink);width:100%}
+.search .mi{color:var(--muted);font-size:18px}
+.ico-btn{width:30px;height:30px;border-radius:6px;display:grid;place-items:center;color:var(--muted)}
+.ico-btn:hover{background:var(--line-soft)}
+
+/* 仓库 tabs（仿 GitHub 二级导航） */
+.tabs{display:flex;gap:4px;padding:0 20px;border-bottom:1px solid var(--line);overflow-x:auto}
+.tab{display:flex;align-items:center;gap:7px;padding:11px 10px;font-size:13px;color:var(--on-surface);border-bottom:2px solid transparent;white-space:nowrap}
+.tab .mi{font-size:17px}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);font-weight:600;border-bottom-color:hsl(28,80%,52%)}
+.tab .cnt{font-size:11px;font-weight:600;padding:0 6px;border-radius:var(--pill);background:var(--line-soft);color:var(--muted)}
+
+.content{flex:1;min-height:0;overflow:auto;padding:18px 20px 60px}
+.panel{display:none}
+.panel.on{display:block}
+
+/* ---------- Code 页 ---------- */
+.branchbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:var(--r8);border:1px solid var(--line);font-size:12.5px;font-weight:500}
+.btn:hover{background:var(--line-soft)}
+.btn.primary{background:hsl(140,55%,33%);border-color:hsl(140,55%,30%);color:#fff}
+.btn.primary:hover{background:hsl(140,55%,29%)}
+.btn .mi{font-size:16px}
+.btn .cnt{font-size:11px;padding:0 6px;border-radius:var(--pill);background:rgba(255,255,255,.22);font-weight:700}
+.commit-line{font-size:13px;color:var(--muted);margin-left:auto;display:flex;align-items:center;gap:6px}
+.sha{font-family:var(--mono);font-size:11.5px;padding:1px 6px;border-radius:var(--pill);border:1px solid var(--line)}
+
+.filelist{border:1px solid var(--line);border-radius:var(--r8);overflow:hidden}
+.frow{display:grid;grid-template-columns:220px 1fr 130px;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line-soft);font-size:13px}
+.frow:last-child{border-bottom:none}
+.frow:hover{background:var(--surface)}
+.fname{display:flex;align-items:center;gap:7px;min-width:0}
+.fname .mi{font-size:17px;color:var(--muted);flex:none}
+.fname .p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fname .p b{font-weight:600}
+.fmsg{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fage{color:var(--muted);font-size:12px;text-align:right}
+.empty-note{padding:28px;text-align:center;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:var(--r8);margin-top:16px}
+
+/* ---------- 变更收件箱（本产品的第一视图） ---------- */
+.inbox{display:grid;grid-template-columns:320px 1fr;gap:16px}
+.cands{border:1px solid var(--line);border-radius:var(--r8);overflow:hidden;align-self:start}
+.cand{padding:11px 12px;border-bottom:1px solid var(--line-soft);cursor:pointer}
+.cand:last-child{border-bottom:none}
+.cand:hover{background:var(--surface)}
+.cand.on{background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
+.cand .t{font-size:13px;font-weight:600;margin-bottom:3px}
+.cand .m{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.chip{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:var(--pill)}
+.chip.local{background:hsl(220,20%,92%);color:hsl(220,20%,35%)}
+.chip.pushed{background:hsl(212,100%,94%);color:hsl(212,80%,35%)}
+.chip.pr{background:hsl(270,70%,95%);color:hsl(270,55%,40%)}
+.chip.appr{background:hsl(140,60%,93%);color:hsl(140,50%,28%)}
+.diffbox{border:1px solid var(--line);border-radius:var(--r8);overflow:hidden;min-height:320px}
+.diffhead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap}
+.diffhead .title{font-size:13px;font-weight:600}
+.diffhead .stat{font-size:11.5px;font-family:var(--mono)}
+.diff{padding:0;font-family:var(--mono);font-size:12px;line-height:1.65;max-height:420px;overflow:auto}
+.dl{display:flex;white-space:pre}
+.dl .ln{width:44px;text-align:right;padding-right:10px;color:var(--muted);flex:none;user-select:none}
+.dl .tx{padding-left:6px;flex:1}
+.dl.add{background:var(--add-bg)} .dl.add .tx{color:var(--add-ink)}
+.dl.del{background:var(--del-bg)} .dl.del .tx{color:var(--del-ink)}
+.dl.meta{color:var(--accent);font-weight:600;background:var(--surface)}
+.actions{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line);flex-wrap:wrap}
+.actions .btn.danger{color:hsl(0,60%,45%);border-color:hsl(0,60%,80%)}
+
+/* ---------- Bot 页 ---------- */
+.botgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.card{border:1px solid var(--line);border-radius:var(--r8);overflow:hidden}
+.card h3{margin:0;padding:10px 14px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1px solid var(--line);background:var(--surface);display:flex;align-items:center;gap:6px}
+.card h3 .mi{font-size:16px}
+.card .body{padding:14px}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:8px 12px;font-size:13px}
+.kv dt{color:var(--muted);font-size:12px}
+.kv dd{margin:0}
+.perm{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:var(--pill);background:var(--bot-bg);color:var(--bot-ink)}
+.mem{font-size:12px;color:var(--muted);margin-top:10px}
+.mem code{font-family:var(--mono);font-size:11.5px;background:var(--surface);padding:1px 5px;border-radius:4px}
+.charter{font-size:12.5px;line-height:1.8;color:var(--on-surface);white-space:pre-wrap;font-family:var(--mono)}
+
+/* ---------- 空态 / 底部 ---------- */
+.foot{display:flex;align-items:center;gap:10px;padding:8px 20px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--muted)}
+
+/* 窄屏 */
+@media(max-width:900px){
+  .app{grid-template-columns:var(--rail-collapsed) 1fr}
+  .inbox,.botgrid{grid-template-columns:1fr}
+  .frow{grid-template-columns:1fr}
+  .frow .fage{text-align:left}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============ 左栏：上 Bot、下 仓库 ============ -->
+  <aside class="rail">
+    <div class="rail-head">
+      <div class="brand">
+        <div class="logo">P</div>
+        <div class="brand-name">Postel Studio</div>
+      </div>
+      <button class="rail-toggle" id="collapse" title="收起侧栏"><span class="mi">left_panel_close</span></button>
+    </div>
+
+    <!-- 上：Bot -->
+    <div class="sec bots" id="sec-bots">
+      <button class="sec-head" data-sec="bots">
+        <span class="mi caret">expand_more</span>
+        <span class="mi">smart_toy</span>
+        <span class="tt">Bots</span>
+      </button>
+      <div class="sec-body">
+        <button class="bot active">
+          <div class="avatar">B</div>
+          <div>
+            <div class="nm">Builder</div>
+            <div class="rl">实现功能与修复</div>
+          </div>
+          <span class="dot run" title="运行中"></span>
+        </button>
+        <button class="bot">
+          <div class="avatar">R</div>
+          <div>
+            <div class="nm">Reviewer</div>
+            <div class="rl">只读 · 评审意见</div>
+          </div>
+          <span class="dot idle"></span>
+        </button>
+        <button class="bot">
+          <div class="avatar">M</div>
+          <div>
+            <div class="nm">Maintainer</div>
+            <div class="rl">依赖升级与清理</div>
+          </div>
+          <span class="dot wait" title="等待审批"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 下：仓库（取代传统 Agent 的 session 列表） -->
+    <div class="sec repos" id="sec-repos">
+      <button class="sec-head" data-sec="repos">
+        <span class="mi caret">expand_more</span>
+        <span class="mi">database</span>
+        <span class="tt">仓库</span>
+      </button>
+      <div class="sec-body">
+        <button class="repo active">
+          <span class="mi">folder</span>
+          <div>
+            <div class="nm">postel-studio</div>
+            <div class="grp">postel-studio / postel-studio</div>
+          </div>
+          <span class="badge-n">3</span>
+        </button>
+        <button class="repo">
+          <span class="mi">folder</span>
+          <div>
+            <div class="nm">dsh-web</div>
+            <div class="grp">MaoZhiqin / dsh-web</div>
+          </div>
+        </button>
+        <button class="repo">
+          <span class="mi">folder</span>
+          <div>
+            <div class="nm">LinkStudio</div>
+            <div class="grp">本地仓库</div>
+          </div>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区：仿 GitHub 的仓库界面 ============ -->
+  <div class="main">
+    <div class="topbar">
+      <div class="crumb">
+        <span class="owner">postel-studio</span>
+        <span class="sep">/</span>
+        <span class="repo">postel-studio</span>
+        <span class="chip local" style="margin-left:4px">私有</span>
+      </div>
+      <div class="search"><span class="mi">search</span><input placeholder="在仓库中搜索"></div>
+      <button class="ico-btn" id="theme" title="切换主题"><span class="mi">contrast</span></button>
+    </div>
+
+    <nav class="tabs">
+      <button class="tab on" data-panel="code"><span class="mi">code</span>代码</button>
+      <button class="tab" data-panel="inbox"><span class="mi">inbox</span>变更收件箱 <span class="cnt">3</span></button>
+      <button class="tab" data-panel="bot"><span class="mi">smart_toy</span>Bot 配置</button>
+    </nav>
+
+    <div class="content">
+
+      <!-- ---- 代码 ---- -->
+      <section class="panel on" id="p-code">
+        <div class="branchbar">
+          <button class="btn"><span class="mi">call_split</span>main ▾</button>
+          <button class="btn"><span class="mi">account_tree</span>3 个分支</button>
+          <button class="btn"><span class="mi">swap_horiz</span>对比</button>
+          <button class="btn primary"><span class="mi">add</span>派活给 Bot</button>
+          <div class="commit-line"><span class="mi">commit</span><span class="sha">0b163e0</span>chore(release): 0.1.2</div>
+        </div>
+
+        <div class="filelist">
+          <div class="frow"><div class="fname"><span class="mi">folder</span><span class="p"><b>.github</b></span></div><div class="fmsg">ci: Trusted Publishing 发布工作流</div><div class="fage">昨天</div></div>
+          <div class="frow"><div class="fname"><span class="mi">folder</span><span class="p"><b>src</b> / postel_studio</span></div><div class="fmsg">M0 骨架（讨论中，未提交）</div><div class="fage">3 小时前</div></div>
+          <div class="frow"><div class="fname"><span class="mi">description</span><span class="p">README.md</span></div><div class="fmsg">English readme for PyPI</div><div class="fage">昨天</div></div>
+          <div class="frow"><div class="fname"><span class="mi">description</span><span class="p">README.zh.md</span></div><div class="fmsg">中文说明</div><div class="fage">昨天</div></div>
+          <div class="frow"><div class="fname"><span class="mi">contract</span><span class="p">pyproject.toml</span></div><div class="fmsg">0.1.2：MIT 许可证（PEP 639）</div><div class="fage">昨天</div></div>
+          <div class="frow"><div class="fname"><span class="mi">lock</span><span class="p">uv.lock</span></div><div class="fmsg">锁定依赖</div><div class="fage">昨天</div></div>
+        </div>
+
+        <div class="empty-note">这是一个<b>设计原型</b>：数据是示意，不会真的读写你的仓库。</div>
+      </section>
+
+      <!-- ---- 变更收件箱 ---- -->
+      <section class="panel" id="p-inbox">
+        <div class="inbox">
+          <div class="cands">
+            <div class="cand on">
+              <div class="t">补 PyPI README 英文版</div>
+              <div class="m"><span class="chip local">仅本地</span> Builder · +42 −8 · 5 分钟前</div>
+            </div>
+            <div class="cand">
+              <div class="t">修复 uv build 的 license 元数据</div>
+              <div class="m"><span class="chip pushed">已推远端</span> Maintainer · +6 −3 · 1 小时前</div>
+            </div>
+            <div class="cand">
+              <div class="t">publish.yml 增加 tag 冒烟</div>
+              <div class="m"><span class="chip pr">PR 待审</span> Builder · +18 −0 · 昨天</div>
+            </div>
+          </div>
+
+          <div class="diffbox">
+            <div class="diffhead">
+              <span class="title">补 PyPI README 英文版</span>
+              <span class="stat">+42 −8 · 2 个文件</span>
+              <span class="chip local" style="margin-left:auto">仅本地分支</span>
+            </div>
+            <div class="diff">
+              <div class="dl meta"><span class="ln"></span><span class="tx">diff --git a/README.md b/README.md</span></div>
+              <div class="dl meta"><span class="ln"></span><span class="tx">@@ -1,4 +1,26 @@</span></div>
+              <div class="dl"><span class="ln">1</span><span class="tx"> # Postel Studio</span></div>
+              <div class="dl del"><span class="ln">2</span><span class="tx">-以仓库为第一视图的 Agent 工作台。</span></div>
+              <div class="dl add"><span class="ln"> </span><span class="tx">+**A repository-first Agent workbench.**</span></div>
+              <div class="dl add"><span class="ln"> </span><span class="tx">+</span></div>
+              <div class="dl add"><span class="ln"> </span><span class="tx">+Bots live inside the repository and produce</span></div>
+              <div class="dl add"><span class="ln"> </span><span class="tx">+branches, checks and pull requests.</span></div>
+              <div class="dl"><span class="ln">5</span><span class="tx"> </span></div>
+              <div class="dl meta"><span class="ln"></span><span class="tx">@@ -12,0 +34,7 @@</span></div>
+              <div class="dl add"><span class="ln"> </span><span class="tx">+## License</span></div>
+              <div class="dl add"><span class="ln"> </span><span class="tx">+[MIT](LICENSE) © 2026 MaoZhiqin</span></div>
+            </div>
+            <div class="actions">
+              <button class="btn primary"><span class="mi">check</span>批准</button>
+              <button class="btn"><span class="mi">upload</span>推送到 origin</button>
+              <button class="btn"><span class="mi">rate_review</span>开 PR</button>
+              <button class="btn danger"><span class="mi">close</span>拒绝并说明</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---- Bot 配置 ---- -->
+      <section class="panel" id="p-bot">
+        <div class="botgrid">
+          <div class="card">
+            <h3><span class="mi">badge</span>身份与边界</h3>
+            <div class="body">
+              <dl class="kv">
+                <dt>Bot</dt><dd>Builder</dd>
+                <dt>所属仓库</dt><dd>postel-studio/postel-studio</dd>
+                <dt>权限</dt><dd><span class="perm">L1 改工作区</span> <span class="perm" style="background:transparent;color:var(--muted)">不可推送</span></dd>
+                <dt>适配器</dt><dd>Claude Code CLI（示意）</dd>
+              </dl>
+              <div class="mem">记忆空间（仓库外）<br><code>~/.postel/bots/adec6540/builder/</code></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3><span class="mi">article</span>宪法层 charter.md</h3>
+            <div class="body">
+              <div class="charter"># 职责
+在仓库里实现功能与修复缺陷，
+每次只做一件事，产出候选分支。
+
+# 禁止
+- 不合并到主分支
+- 不修改 .github/ 下的工作流</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3><span class="mi">menu_book</span>规范层（来自仓库，不复制）</h3>
+            <div class="body">
+              <div class="kv">
+                <dt>AGENTS.md</dt><dd>未找到（示例）</dd>
+                <dt>README.md</dt><dd>已注入</dd>
+                <dt>冲突规则</dt><dd>仓库层优先；Bot 级只能加严</dd>
+              </div>
+              <div class="mem">这一层每次任务启动时从仓库实时读取，不写入记忆目录，避免两份真相打架。</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3><span class="mi">history</span>工作日志</h3>
+            <div class="body">
+              <dl class="kv">
+                <dt>当前任务</dt><dd>补 PyPI README 英文版 · 运行中</dd>
+                <dt>工作区</dt><dd><code>~/.postel/worktrees/…/builder</code></dd>
+                <dt>产出</dt><dd>候选分支 <code>bot/builder/readme-en</code></dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <div class="foot">
+      <span class="mi" style="font-size:14px">circle</span>
+      <span>后端已连接</span>
+      <span>·</span>
+      <span>记忆空间在仓库外</span>
+      <span>·</span>
+      <span>原型 v0，仅用于讨论</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// 主题切换
+document.getElementById('theme').onclick = () => {
+  const el = document.documentElement;
+  el.dataset.theme = el.dataset.theme === 'dark' ? 'light' : 'dark';
+};
+
+// 侧栏整体收起
+document.getElementById('collapse').onclick = () => {
+  const app = document.getElementById('app');
+  app.classList.toggle('collapsed');
+  document.querySelector('#collapse .mi').textContent =
+    app.classList.contains('collapsed') ? 'left_panel_open' : 'left_panel_close';
+};
+
+// Bot / 仓库 两个分区各自可收起
+document.querySelectorAll('.sec-head').forEach(btn => {
+  btn.onclick = () => btn.closest('.sec').classList.toggle('closed');
+});
+
+// 主区 tab
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.panel').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    document.getElementById('p-' + t.dataset.panel).classList.add('on');
+  };
+});
+
+// 收件箱里选中的候选
+document.querySelectorAll('.cand').forEach(c => {
+  c.onclick = () => {
+    document.querySelectorAll('.cand').forEach(x => x.classList.remove('on'));
+    c.classList.add('on');
+  };
+});
+
+// 左栏选中态（示意）
+document.querySelectorAll('.bot,.repo').forEach(el => {
+  el.onclick = () => {
+    const same = el.classList.contains('bot') ? '.bot' : '.repo';
+    document.querySelectorAll(same).forEach(x => x.classList.remove('active'));
+    el.classList.add('active');
+  };
+});
+</script>
+</body>
+</html>
