@@ -44,6 +44,20 @@ bash scripts/check.sh    # lint + format + types + tests/coverage + secret scan
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Design
+
+The product is designed before it is built. Everything below lives in [`docs/design/`](docs/design/):
+
+| Doc | Contents |
+|---|---|
+| [01-requirements](docs/design/01-requirements.md) | Positioning, 15 settled decisions, permission model, memory layers, integration facts |
+| [02-architecture](docs/design/02-architecture.md) | Process model, Cordis-style modules, unified Bot runtime interface |
+| [02b-protocol](docs/design/02b-protocol.md) | Frontend↔kernel and kernel↔PI frame contracts |
+| [03-ui-spec](docs/design/03-ui-spec.md) | GitHub-faithful repository UI spec |
+| [04-task-breakdown](docs/design/04-task-breakdown.md) | Milestones M1–M3, 21 vertical slices |
+| [issues/](docs/design/issues/) | One file per slice: background, acceptance, files, tests, prohibitions |
+| [prototype/](docs/design/prototype/) | Clickable HTML prototypes (open in a browser) |
+
 ## Links
 
 - Source: https://github.com/postel-studio/postel-studio (private)

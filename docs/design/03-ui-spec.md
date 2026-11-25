@@ -16,7 +16,27 @@
 - README 渲染在文件表**下方**，右侧是 About 侧栏（描述 / Topics / Releases / Packages / Contributors / Languages 进度条）。
 - Insights 含 11 个子页：Repository insights / Pulse / Contributors / Community standards / Commits / Code frequency / Dependency graph / Network / Forks / Actions usage metrics / Actions performance metrics。
 
-配色取自 Primer 语义 token 的重建（浅色 + 暗色两套），不硬编码单一主题。
+配色取自 Primer 语义 token 的重建（浅色 + 暗色两套），不硬编码单一主题）。
+
+### 效果预览
+
+Code 页（v2）——文件表三列、README 在下方、右侧 About 含 Languages 进度条：
+
+![Code 页](shots/v2/v2-code.png)
+
+Issues 页（v2）——左侧筛选栏、Open/Active/Closed 计数条、issue 列表：
+
+![Issues 页](shots/v2/v2-issues.png)
+
+Insights（v2）——11 个子页，含真实空态：
+
+![Insights](shots/v2/v2-insights.png)
+
+变更收件箱（v1）——产品的第一视图。**v2 中暂无入口**，入口位置见 §6 Q1：
+
+![变更收件箱](shots/v1/v1-inbox.png)
+
+> 更多截图见 [`shots/`](shots/)，原型文件见 [`prototype/README.md`](prototype/README.md)。
 
 ## 2. 布局骨架
 

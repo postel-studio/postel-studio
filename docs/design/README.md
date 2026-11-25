@@ -11,11 +11,18 @@
 
 ## 原型
 
-- [`prototype/postel-studio-proto-v2.html`](prototype/postel-studio-proto-v2.html) — 当前版本，7 个一级 tab + Insights 11 子页
-- [`prototype/postel-studio-proto-v1.html`](prototype/postel-studio-proto-v1.html) — 早期版本
-- [`prototype/v0/postel-studio-proto.html`](prototype/v0/postel-studio-proto.html) — 最初骨架
+**当前基线：v2**，按真实 GitHub 复刻 7 个一级 tab + Insights 11 子页。
 
-直接用浏览器打开即可，无需构建。截图见 `shots/`。
+![Code 页](shots/v2/v2-code.png)
+
+| 版本 | 文件 | 说明 |
+|---|---|---|
+| **v2（当前）** | [`prototype/postel-studio-proto-v2.html`](prototype/postel-studio-proto-v2.html) | 7 个一级 tab，不含 Agents |
+| v1 | [`prototype/postel-studio-proto-v1.html`](prototype/postel-studio-proto-v1.html) | 含变更收件箱与 Agents 页 |
+| v0 | [`prototype/v0/postel-studio-proto.html`](prototype/v0/postel-studio-proto.html) | 最初骨架，仅留档 |
+
+直接用浏览器打开即可，无需构建。版本差异与注意事项见 [`prototype/README.md`](prototype/README.md)。
+截图见 [`shots/`](shots/)（由浏览器实际渲染后抓取）。
 
 ## 事实基线
 
