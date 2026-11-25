@@ -1,6 +1,6 @@
 [project]
 name = "postel-studio"
-version = "0.1.1"
+version = "0.1.2"
 description = "以仓库为第一视图的 Agent 工作台"
 readme = "README.md"
 license = "MIT"
