@@ -78,6 +78,7 @@ INDEX_HTML: Final = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <meta name="postel-ws-path" content="%%WS_PATH%%">
 <meta name="postel-handshake" content="%%HANDSHAKE_TICKET%%">
 <title>Postel Studio · 连接状态</title>
@@ -440,6 +441,7 @@ INDEX_HTML: Final = """<!doctype html>
   var CHARTER_ERROR_FALLBACK = "读取 charter 失败";
   var selectedBotId = null;       // 选中的 Bot 与 repo 强绑定（D8）；切仓库/断连时清
   var selectedBotName = "";
+  var botMemoryPaths = {};        // botId → memoryPath（来自 bot.list；charter.get 不回它）
   var botRequestToken = 0;        // 只认最后一次 bot.list 的回包（快速切仓库）
   var charterRequestToken = 0;    // 只认最后一次 charter 请求的回包
 
@@ -904,6 +906,8 @@ INDEX_HTML: Final = """<!doctype html>
       var summary = document.createElement("span");
       summary.className = "bot-charter-summary";
       summary.textContent = String(bot.charterSummary || "");
+      // D8：记忆目录来自 bot.list 的 memoryPath（memory.charter.get 只回 content/rev）。
+      botMemoryPaths[rowId] = String(bot.memoryPath || "");
       li.appendChild(name);
       li.appendChild(badge);
       li.appendChild(summary);
@@ -988,7 +992,7 @@ INDEX_HTML: Final = """<!doctype html>
       var payload = data || {};
       charterEl.dataset.state = "ready";
       // D9：显示绝对路径原样（状态根可被 POSTEL_HOME 覆盖，伪装 ~ 是假话）。
-      charterMemory.textContent = "记忆目录：" + String(payload.memoryPath || "");
+      charterMemory.textContent = "记忆目录：" + String(botMemoryPaths[botId] || "");
       charterMemory.hidden = false;
       charterContent.textContent = String(payload.content == null ? "" : payload.content);
       charterContent.hidden = false;

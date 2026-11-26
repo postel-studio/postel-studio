@@ -617,7 +617,8 @@ def test_page_renders_bot_rows_and_charter_with_text_content() -> None:
         'summary.className = "bot-charter-summary";',
         'rows[i].dataset.selected = "true";',
         'charterTitle.textContent = "Charter · " + botName;',
-        'charterMemory.textContent = "记忆目录：" + String(payload.memoryPath || "");',
+        'charterMemory.textContent = "记忆目录：" + String(botMemoryPaths[botId] || "");',
+        'botMemoryPaths[rowId] = String(bot.memoryPath || "");',
         'charterContent.textContent = String(payload.content == null ? "" : payload.content);',
     ):
         assert fragment in page, fragment
