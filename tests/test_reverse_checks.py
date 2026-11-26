@@ -270,6 +270,51 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_page_never_uses_inner_html", file="test_diff"),
         "D12 #5：diff 行渲染 textContent 改成 innerHTML（不可信文本进 HTML）",
     ),
+    # ---- S6：Bot 惰性播种 / charter 记忆空间 / 页面渲染（D12 的 5 条）----
+    (
+        "postel_studio/storage/paths.py",
+        "    if not charter.exists():  # D3：已存在就不动，绝不覆盖用户编辑\n"
+        '        atomic_write(charter, CHARTER_TEMPLATE.format(name=name).encode("utf-8"))',
+        '    atomic_write(charter, CHARTER_TEMPLATE.format(name=name).encode("utf-8"))',
+        _target_test(
+            "test_ensure_memory_space_never_overwrites_an_existing_charter",
+            file="test_bot_charter",
+        ),
+        "S6 #1：ensure_memory_space 每次都用模板覆盖 charter.md（D2/D3 幂等被破坏）",
+    ),
+    (
+        "postel_studio/storage/paths.py",
+        '        atomic_write(charter, CHARTER_TEMPLATE.format(name=name).encode("utf-8"))',
+        '        charter.write_text(CHARTER_TEMPLATE.format(name=name), encoding="utf-8")',
+        _target_test("test_ensure_memory_space_layout_and_permissions", file="test_bot_charter"),
+        "S6 #2：charter 写入不用 atomic_write 而用 write_text（0644，非原子；T38）",
+    ),
+    (
+        "postel_studio/storage/paths.py",
+        "        path.mkdir(parents=True, exist_ok=True)\n"
+        "        _chmod(path, DIR_MODE)  # 显式收紧：umask 让 mkdir 的默认 mode 变松（T38）",
+        "        path.mkdir(parents=True, exist_ok=True)",
+        _target_test("test_ensure_memory_space_layout_and_permissions", file="test_bot_charter"),
+        "S6 #3：每层建完不 chmod（umask 022 下父级是 0755；T38）",
+    ),
+    (
+        "postel_studio/storage/paths.py",
+        '    if not bot_name_ok(name):\n        raise ValueError(f"bot 名字不合法：{name!r}")',
+        '    if False:\n        raise ValueError(f"bot 名字不合法：{name!r}")',
+        _target_test(
+            "test_ensure_memory_space_rejects_names_that_escape_bots_root",
+            file="test_bot_charter",
+        ),
+        "S6 #4：进路径前不校验 bot 名字白名单（`..` 恰好 resolve 回 bots 根，越界断言拦不住）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        "      charterContent.textContent ="
+        ' String(payload.content == null ? "" : payload.content);',
+        '      charterContent.innerHTML = String(payload.content == null ? "" : payload.content);',
+        _target_test("test_page_never_uses_inner_html_in_bot_panels", file="test_bot_charter"),
+        "S6 #5：charter 全文从 textContent 改成 innerHTML（用户可编辑文本进 HTML）",
+    ),
 )
 
 

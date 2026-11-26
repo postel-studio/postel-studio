@@ -741,6 +741,32 @@ SyntaxError: Invalid or unexpected token
 ② 文本断言全绿 ≠ 页面能跑——改前端后**必须**跑 `tools/acceptance/*.mjs`（DoD §3.2 同一纪律）；
 ③ 抓到后先把现象记下来：这条坑是 S5 实施时真踩到、真修掉的。
 
+## Bot 与 charter（S6：第一次把用户可编辑文本落进状态根）
+
+### T38 ❌ `mkdir(mode=0o700)` 只管叶子、`write_text` 是 0644 —— 权限必须逐层显式 chmod（S6 已处理）
+
+**现象**：`<状态根>/bots/<repo_id>/<bot>/` 要求目录 `0700`、`charter.md` `0600`（05 §4.1）。
+只写 `Path("a/b/c").mkdir(parents=True, mode=0o700)` + `write_text(...)` 时，`stat` 出来是
+`0755 / 0755 / 0700` 与 `0644`——**父目录与文件都比契约松**。
+
+**实测（umask 022，D3 的原始命令）**：
+
+```text
+$ python -c "from pathlib import Path; import stat; Path('a/b/c').mkdir(parents=True, mode=0o700); print([oct(stat.S_IMODE(p.stat().st_mode)) for p in (Path('a'),Path('a/b'),Path('a/b/c'))])"
+['0o755', '0o755', '0o700']
+$ python -c "from pathlib import Path; Path('a/b/c/f.txt').write_text('x'); import stat; print(oct(stat.S_IMODE(Path('a/b/c/f.txt').stat().st_mode)))"
+0o644
+```
+
+**修法**：每一层建完显式 `_chmod(path, 0o700)`；写 charter 用 `paths.atomic_write`
+（mkstemp `0600` → fsync → rename，顺带保证读到的永远是完整文件，不会读到半截 charter）。
+
+**测试纪律**：权限用例必须断言**真实 `stat` mode**，并且**先把 umask 设成 `0o022` 再跑**——
+本机 umask 恰好是 077 时，去掉 chmod 的反向注入不会变红（那就是假测试）。
+
+**防线**：`tests/test_bot_charter.py::test_ensure_memory_space_layout_and_permissions`
+（D11 #5）+ 反向注入 D12 #2（`write_text` 替 `atomic_write`）/#3（去掉逐层 chmod）。
+
 ## 已知未决问题
 
 **S4.5 起的规则**：每项必须有「到期切片」——到那一刀开工前，要么修掉，要么明确豁免并写清后果。
@@ -767,6 +793,7 @@ SyntaxError: Invalid or unexpected token
 | U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) | **S7 前**（或明确豁免） | 左栏留一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND` |
 | U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。**→ ✅ 结案（S5）**：按 D3.2 的裁决修 —— `run_git` 增加 `decode_errors`（缺省 `strict`），严格模式解码失败抛新异常 `GitOutputUndecodableError`（加进 `GIT_ERRORS`）；`api/repository.py` 把 `repo.branches` / `repo.bind` / `repo.diff` 三条路径一律翻成 `NOT_SUPPORTED` +「仓库含非 UTF-8 的名称，第一版不支持」，不再回 `INTERNAL`。实测触发：`git branch $'bad-\xff'` 之后 `for-each-ref` 原始输出是 `b'bad-\xff\nmain\n'`（严格解码在 position 4 抛 `UnicodeDecodeError`）；JSON 的 lone surrogate 经 `surrogateescape` 会变成真字节、`rev-parse --verify` 真的能解析成功——所以入站也挡（D3.1）。回归：`tests/test_diff.py` D10 第 19/20 行 + 反向注入 D12 #3。 | ✅ **已修（S5）** | — | ref 名回传 git 会变 `BAD_REF`，甚至指向别的 ref——比报错更糟 |
 | U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **S18（空态/错误态与大仓库体检）前** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）；届时裁决：流式读 + 字节上限，或明确豁免并写进 05 安全红线 |
+| U17 | **`bot.list` 惰性播种 + `charter_rev` 未维护**（S6 的两处临时形态）：① `bot.list` 是读方法，却会在该 repo **一个 Bot 都没有**时落一行（D2 的裁决：`bot.create` 是 S8，M1 没有创建入口，而 S6 之前绑定的老仓库只有惰性播种才能自动补上）；② `bots.charter_rev` 列 v3 就建了，但 **M1 不维护**（D5：charter 正文的事实源是 `charter.md`，载荷里的 `charterRev` 现场按内容算；改 charter 的写路径是 S22 的 `charter.set`）。 | **未修（M1 的临时形态，D2/D5 明确记录）** | **到期 S8（创建入口）/ S22（charter 编辑）** | ① `bot.list` 会写盘（落行 + 收紧目录权限）；将来若有并行客户端，重复播种会被 UNIQUE 拒绝，但调用方会看到 `IntegrityError`；② 有人读 `charter_rev` 列会读到过期值——M1 没有任何读路径，S22 必须改由 `charter.set` 维护它。 |
 
 ---
 
