@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Final
 
 from postel_studio.api import frames
-from postel_studio.domain.models import Repo, repo_id
+from postel_studio.domain.models import Repo, origin_hash, repo_id
 from postel_studio.gitops import repo as gitops
 from postel_studio.storage.db import RepoStore
 
@@ -161,11 +161,15 @@ class RepositoryService:
                 raise _fail(NOT_A_REPO, MSG_NOT_A_REPO)  # 不存在/非目录/非仓库统一这个码（D6）
             origin = gitops.origin_url(root)  # 只问一次：两次答案理论上可能不同（用户正在改配置）
             repo = Repo(
-                repo_id=repo_id(str(root), origin),
+                # S3.5 D1：**只**用路径算，origin 不参与——否则用户加个 remote 仓库就换了身份
+                repo_id=repo_id(str(root)),
                 path=str(root),
                 origin_url=origin,
                 default_branch=gitops.default_branch(root),
                 added_at=time.time(),
+                # S3.5 D2：origin 的归一化哈希降级成**识别字段**（"是不是同一个远端"），
+                # 不参与主键；无 origin 时是 None。
+                origin_hash=origin_hash(origin),
             )
         except gitops.GitUnavailableError:
             # D5：git 不存在**不崩内核**，回 503 类码；S19 的 doctor 负责告诉用户怎么装
