@@ -1,0 +1,212 @@
+# 06 · 数据模型
+
+> 状态：定稿 v1 · 2026-11-26
+> 上游：[01-requirements.md](01-requirements.md)、[02-architecture.md](02-architecture.md) §7
+> 实现细节（表名、索引）以本文为准；SQLite 是**索引**，不是事实源——真正的文件在文件系统里。
+
+---
+
+## 1. 实体总览
+
+```
+Repo ──1:N── Bot ──1:N── Task ──0..1── Candidate
+  │
+  └──1:N── WorktreeLease
+```
+
+| 实体 | 落盘位置 | 生命周期 |
+|---|---|---|
+| Repo | `state.db`（绑定关系） | 人手动解绑 |
+| Bot | `state.db`（元数据）+ `~/.postel/bots/`（记忆） | 人手动删除 |
+| Task | `state.db` | 永久保留（可归档） |
+| Candidate | `state.db`（元数据）+ Git 分支（实体） | 人拒绝后保留，不删分支 |
+| WorktreeLease | `state.db`（租约）+ `~/.postel/worktrees/`（目录） | 任务结束回收 |
+
+**核心原则**：数据库只存**能重建的索引**。若 `state.db` 丢失，扫描 `~/.postel/worktrees/` 与 Git 分支应能重建大部分状态。
+
+---
+
+## 2. 实体定义
+
+### 2.1 Repo
+
+| 字段 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `repo_id` | TEXT PK | 12 位十六进制 | `sha256(归一化 origin URL)[:12]`；无 origin 时用绝对路径 |
+| `path` | TEXT UNIQUE | 绝对路径，已 `resolve()` | 本地仓库根 |
+| `origin_url` | TEXT NULL | — | 归一化前的原始值（仅展示用） |
+| `default_branch` | TEXT NULL | — | 探测结果 |
+| `added_at` | REAL | — | Unix 时间戳 |
+
+**不变量**：`repo_id` 对同一仓库的 https / ssh 两种 URL 必须相同（归一化后再哈希）。
+
+### 2.2 Bot
+
+| 字段 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `bot_id` | TEXT PK | `{repo_id}/{name}` | 复合主键，天然按仓库隔离 |
+| `repo_id` | TEXT FK → Repo | ON DELETE CASCADE | |
+| `name` | TEXT | `^[a-z][a-z0-9-]{0,31}$` | 白名单校验（见 05 §3.3） |
+| `permission` | TEXT | L0~L2+ 之一 | **默认 L1**；L3/L4 不可写入（`NOT_SUPPORTED`） |
+| `agent_kind` | TEXT | 注册表中的通道 id | 不含单个 Agent 特判 |
+| `charter_rev` | INTEGER | 单调递增 | charter 内容哈希的版本号，用于注入缓存失效 |
+| `created_at` | REAL | | |
+
+**不变量**：
+
+- 同一 `repo_id` 下 `name` 唯一。
+- `permission` 变更只能由人发起（Agent 无写权限）。
+- Bot 删除时**不删**记忆目录（保留可审计；由显式清理命令处理）。
+
+### 2.3 Task
+
+| 字段 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `task_id` | TEXT PK | ULID | 可排序、无碰撞 |
+| `bot_id` | TEXT FK → Bot | ON DELETE CASCADE | |
+| `trigger` | TEXT | `manual` / `dialogue` / `local_event` | 主动性来源（用于去重与优先级） |
+| `trigger_key` | TEXT NULL | 幂等键 | 同一事件的重复触发在此去重 |
+| `prompt` | TEXT | ≤ 32 KiB | 派活指令 |
+| `base_ref` | TEXT NULL | 分支白名单 | 缺省用 `default_branch` |
+| `state` | TEXT | 状态机（见 §3） | |
+| `candidate_id` | TEXT NULL FK → Candidate | 0..1 | **成功且产生改动**时才有 |
+| `error_code` | TEXT NULL | 稳定错误码 | 失败原因 |
+| `created_at` / `started_at` / `ended_at` | REAL | 单调 | 用于排队时长统计 |
+
+**不变量**：
+
+- `state = succeeded` **不代表**有改动——可能 `candidate_id IS NULL`（无事可做）。
+- `state = failed` 必须有 `error_code`。
+- `trigger_key` 在 `(bot_id, trigger, trigger_key)` 上唯一（同一事件不重复派活）。
+
+### 2.4 Candidate
+
+| 字段 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `candidate_id` | TEXT PK | `cand_` + ULID | |
+| `task_id` | TEXT FK → Task | UNIQUE | 1 Task : 0..1 Candidate |
+| `branch` | TEXT | 白名单，可预测 | `bot/{bot_name}/{task_id 短}` |
+| `base_sha` / `head_sha` | TEXT | 40 位 SHA | |
+| `files_changed` / `insertions` / `deletions` | INTEGER | ≥ 0 | 冗余存一份，便于列表排序 |
+
+> **命名映射**：落盘用 `snake_case`（`files_changed`），帧层用 `camelCase`（`filesChanged`）。
+> 转换只在边界发生（见 [07-api-contract.md](07-api-contract.md) §4.2），内部不混用。
+| `review_state` | TEXT | 状态机（见 §3） | |
+| `remote` | TEXT NULL | `origin` 等 | 仅 `≥ pushed` 时有值 |
+| `target` | TEXT NULL | `owner/repo#base` | `NULL` = 仅本地 |
+
+**不变量**：
+
+- `base_sha` 必须是 `head_sha` 的祖先（否则 diff 无意义）。
+- `branch` 不以人的输入命名（防注入，见 05 §3.3）。
+- 拒绝（`rejected`）**不删分支**，也不删记录。
+
+### 2.5 WorktreeLease
+
+| 字段 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `lease_id` | TEXT PK | ULID | |
+| `bot_id` | TEXT FK → Bot | | 每 Bot 同时最多 1 个有效租约 |
+| `task_id` | TEXT FK → Task | UNIQUE | 一个任务一个租约 |
+| `path` | TEXT | 在 `worktrees_root` 内 | `resolve()` 后断言 |
+| `acquired_at` / `released_at` | REAL | | `released_at IS NULL` 表示活跃 |
+
+**不变量**：同一 `bot_id` 上 `released_at IS NULL` 的记录 ≤ 1（串行队列的实现基础）。
+
+---
+
+## 3. 状态机
+
+### 3.1 Task
+
+```
+queued ──start──> running ──ok────> succeeded
+                      │  └─fail──> failed
+                      └─cancel──-> cancelled
+interrupted  ← 进程重启时，原 running 被标记（不是 succeeded！）
+```
+
+| 迁移 | 允许来源 | 副作用 |
+|---|---|---|
+| `queued → running` | 租约获取成功 | `started_at` |
+| `running → succeeded` | 会话结束且无异常 | 有改动则建 Candidate |
+| `running → failed` | 会话失败 / 越界检查失败 | 必须写 `error_code` |
+| `running → cancelled` | 人取消 | 回收租约 |
+| `running → interrupted` | **内核重启** | 需人工确认是否重跑 |
+
+**禁止**：`queued → succeeded`（跳过执行）；`interrupted → succeeded`（撒谎）。
+
+### 3.2 Candidate
+
+```
+local_only ──push──> pushed ──pr──> pr_open ──approve──> approved
+     │                                  │
+     └──────────reject──────────────────┴──> rejected
+```
+
+| 迁移 | 前置条件 | 说明 |
+|---|---|---|
+| `local_only → pushed` | 权限 ≥ L2，且 remote 可用 | 人的动作 |
+| `pushed → pr_open` | 权限 ≥ L2+（**本仓库** PR） | 跨仓库 PR 不在 MVP |
+| `pr_open → approved` | 人批准 | |
+| 任意 → `rejected` | 人拒绝 | 不删分支 |
+
+**不存在** `→ merged` 的迁移：产品不提供合并。
+
+---
+
+## 4. 关系与约束
+
+| 关系 | 基数 | 级联 |
+|---|---|---|
+| Repo → Bot | 1:N | 删 Repo 级联删 Bot（**不删记忆目录**） |
+| Bot → Task | 1:N | 删 Bot 级联删 Task |
+| Task → Candidate | 1:0..1 | 删 Task 级联删 Candidate（**不删 Git 分支**） |
+| Bot → WorktreeLease | 1:N（同时活跃 ≤1） | 删 Bot 必须释放活跃租约 |
+
+**外键强制**：`PRAGMA foreign_keys=ON`。
+
+---
+
+## 5. 文件系统 ↔ 数据库的一致性
+
+| 场景 | 处理 |
+|---|---|
+| DB 有 Candidate，分支已被人删除 | 启动时检测，标 `orphaned`，不自动重建 |
+| 目录有 worktree，DB 无租约 | 视为孤儿，**报告不删除**（可能是人手工建的） |
+| DB 丢失 | 从 `worktrees/` 与 `git branch --list 'bot/*'` 重建索引，标记为 `reconstructed` |
+
+**原则**：**永不自动删除用户文件**。所有清理都要人确认。
+
+---
+
+## 6. 索引与性能
+
+| 表 | 索引 | 用途 |
+|---|---|---|
+| Task | `(bot_id, state)` | 队列查询 |
+| Task | `(bot_id, trigger, trigger_key)` UNIQUE | 事件去重 |
+| Candidate | `(review_state, created_at DESC)` | 收件箱排序 |
+| WorktreeLease | `(bot_id) WHERE released_at IS NULL` | 活跃租约唯一性 |
+
+数据量预期：单机、百级仓库、千级任务。**不做分页索引优化**，超出再议。
+
+---
+
+## 7. 迁移
+
+- `PRAGMA user_version` 作为 schema 版本。
+- 每个版本一个迁移函数，**只增不减**（不删列，改为停止使用）。
+- 迁移必须可重入：同一版本重复执行不改变状态。
+- 迁移失败时**回滚并保留原库**（先复制备份），不得半迁移。
+
+---
+
+## 8. 明确不存的东西
+
+| 不存 | 原因 |
+|---|---|
+| 凭据、token | 见 05 §4 |
+| diff 全文 | 可由 Git 重建；存了会成为一致性负担 |
+| Agent 的完整对话记录 | 属于 Agent 自己的会话文件；我们只存引用与摘要 |
+| 用户源码副本 | 只在 worktree 里，不在 DB |
