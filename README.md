@@ -25,6 +25,24 @@ pip install postel-studio
 src/postel_studio/__init__.py    # main() -> prints a greeting
 ```
 
+## Code map
+
+To change this code, start at [`docs/codemap/`](docs/codemap/). It is indexed top-down:
+
+| Doc | Answers |
+|---|---|
+| [README](docs/codemap/README.md) | How to read this map; where to jump for a given goal |
+| [01-overview](docs/codemap/01-overview.md) | What exists today, and the path of one request, end to end |
+| [02-layers](docs/codemap/02-layers.md) | Who may import whom (with an executable check) |
+| [03-modules/](docs/codemap/03-modules/README.md) | One page per module: responsibility, decisions, rejected designs |
+| [04-capabilities](docs/codemap/04-capabilities.md) | Find code by what the user can do |
+| [05-change-impact](docs/codemap/05-change-impact.md) | Change X, then also check Y |
+| [06-pitfalls](docs/codemap/06-pitfalls.md) | Everything that looks editable but breaks |
+
+`docs/design/` says what the product *should* be; `docs/codemap/` says what the code *is*
+and why it differs from the plan. When they disagree, source docstrings win — and the
+code map gets fixed.
+
 ## Development
 
 ```bash
@@ -57,6 +75,8 @@ The product is designed before it is built. Everything below lives in [`docs/des
 | [04-task-breakdown](docs/design/04-task-breakdown.md) | Milestones M1–M3, 21 vertical slices |
 | [issues/](docs/design/issues/) | One file per slice: background, acceptance, files, tests, prohibitions |
 | [prototype/](docs/design/prototype/) | Clickable HTML prototypes (open in a browser) |
+
+For the code side of the same picture, see the [code map](docs/codemap/).
 
 ## Links
 

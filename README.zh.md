@@ -20,13 +20,26 @@
 | [issues/](docs/design/issues/) | 每个切片一个文件：背景、验收、涉及文件、测试、禁止事项 |
 | [prototype/](docs/design/prototype/) | 可点击的 HTML 原型（浏览器直接打开） |
 
+改代码之前先看 [**代码地图**](docs/codemap/)（自上而下索引）：设计文档说「应该是什么」，
+代码地图说「现在实际是什么、为什么和当初想的不一样」。
+
+| 文档 | 回答什么 |
+|---|---|
+| [README](docs/codemap/README.md) | 怎么读这份地图；按目的跳转 |
+| [01-overview](docs/codemap/01-overview.md) | 现在有什么、一次请求的完整路径 |
+| [02-layers](docs/codemap/02-layers.md) | 谁能 import 谁（含可执行检查） |
+| [03-modules/](docs/codemap/03-modules/README.md) | 逐模块：职责、关键决策、被推翻的方案 |
+| [04-capabilities](docs/codemap/04-capabilities.md) | 按用户可见能力反查代码位置 |
+| [05-change-impact](docs/codemap/05-change-impact.md) | 改 X 还要连带检查哪些 Y |
+| [06-pitfalls](docs/codemap/06-pitfalls.md) | 看起来能改、改了会坏的地方 |
+
 ## 目录结构
 
 ```text
 postel-studio/
 ├── .env                 # 本地密钥，已被 .gitignore 排除
 ├── .github/workflows/   # ci.yml（质量门禁）、publish.yml（tag 触发发布）
-├── docs/design/         # 设计文档、21 个 Issue、原型、截图
+├── docs/codemap/        # 代码地图：自上而下索引「代码现在是什么、为什么」
 ├── scripts/check.sh     # 统一质量门禁（本地与 CI 同一份）
 ├── src/postel_studio/   # 包源码
 ├── tests/               # 测试
