@@ -556,56 +556,73 @@ S3.5 修完之后两处都被修好，于是单独回退任意一处都不会让
 
 ## 分支列表与 ref 解析（S4 首次出现）
 
-### T33 ❌ `%(HEAD)` 对非当前分支输出**一个空格**，再被 `_stdout()` 整段 `.strip()` 吃掉（S4 已处理）
+### T33 ❌ `%(HEAD)` 的空格是**真值**；整段 strip 只改最后一行的 marker，不改字段数（S4 已处理）
 
 **现象**：用一次 `for-each-ref` 同时取"分支列表"与"当前分支"时（S4 D3 的固定命令），
-`%(HEAD)` 的取值不是"空串 / `*`"两种：
+`%(HEAD)` 有两个反直觉之处：
+
+1. **非当前分支的 marker 是 `" "`（一个空格），不是空串**——它和当前分支的 `"*"` 一样是**真值**。
+   用（未 strip 的）marker 做真值判断（`if marker` / `bool(marker)`）判"当前"，
+   **除最后一条外全部判反**。
+2. `_stdout()` 对**整段** stdout 做 `.strip()`，只会把**最后一条记录**的 marker 从 `" "` 变成
+   `""`（**值**变了）——`%00` 分隔符是 NUL、**不是空白**，行尾的 NUL 不会被 strip 掉，
+   所以 split 的**字段数恒为 4**（末段是空串）。**字段不会消失**，"整段 strip 会改变段数"是错的。
+   实测单分支 / 多分支 / 游离 HEAD / 最后一条有 upstream 等布局，段数全是 4。
+
+**怎么复现**（真跑过；输出就是下面这三行）：
 
 ```bash
-$ git for-each-ref refs/heads/ \
-    --format='%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)' | od -c
-feature\0<sha>\0\0 \n     ← 非当前分支的 marker 是**一个空格**
-main\0<sha>\0origin/main\0*\n
-```
-
-**两个连招**：
-
-1. 非当前分支的 marker 字段是 `" "`。所以判定必须写 `marker.strip() == "*"`，
-   **不能**写 `if not marker` / `marker == ""`（那样除最后一行外全部判反）。
-2. `_stdout()` 会对**整段** stdout `.strip()`（`gitops/repo.py`，所有探测函数共用），
-   于是**最后一条记录**末尾的空格被吃掉：
-   - 最后一条**没有** upstream → 行尾 `…\x00\x00`，split 后仍是 4 段（末段空串）；
-   - 最后一条**有** upstream → 行尾 `…\x00origin/x\x00 `，整段 strip 后变
-     `…\x00origin/x`，split 只有 **3 段**：marker 字段整个消失。
-
-**怎么复现**（10 秒）：
-
-```bash
-tmp=$(mktemp -d) && git -c init.defaultBranch=main -C "$tmp" init -q
+tmp=$(mktemp -d)
+git -c init.defaultBranch=main -C "$tmp" init -q
 git -C "$tmp" -c user.email=a@b -c user.name=a commit -q --allow-empty -m init
-git -C "$tmp" branch zz                       # zz 是字典序最后
-git -C "$tmp" init -q --bare "$tmp/r.git"
-git -C "$tmp" remote add origin "$tmp/r.git"
-git -C "$tmp" push -q -u origin main && git -C "$tmp" push -q -u origin zz
-git -C "$tmp" for-each-ref refs/heads/ \
-  --format='%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)' | tail -1 | od -c
-# 整段 .strip() 之后最后一行只剩 3 段（marker 被吞）
+git -C "$tmp" branch feature
+git -C "$tmp" branch zz
+fmt='%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)'
+git -C "$tmp" for-each-ref refs/heads/ --format="$fmt" | od -c
+# feature 行末尾: \0 \0 空格 \n    ← 非当前 = 空格（不是空串）
+# main    行末尾: \0 \0 * \n       ← 当前 = *
+# zz      行末尾: \0 \0 空格 \n
+
+python3 - "$tmp" <<'PY'
+import subprocess, sys
+tmp = sys.argv[1]
+fmt = "%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)"
+out = subprocess.run(
+    ["git", "-C", tmp, "for-each-ref", "refs/heads/", "--format=" + fmt],
+    capture_output=True, text=True,
+).stdout
+for line in out.strip().splitlines():
+    fields = line.split("\x00")
+    print(f"字段数={len(fields)} 名字={fields[0]!r} marker={fields[3]!r} 真值判当前={bool(fields[3])}")
+PY
+# 真实输出：
+# 字段数=4 名字='feature' marker=' ' 真值判当前=True   ← 判反（非当前被当成当前）
+# 字段数=4 名字='main'    marker='*' 真值判当前=True
+# 字段数=4 名字='zz'      marker=''  真值判当前=False  ← 最后一条，碰巧对
 ```
+
+**为什么这个坑特别阴**：真值判断下，**最后一条**非当前分支因为被整段 strip 成 `""`，
+反而**碰巧判对**。于是：
+
+- 只测单分支仓库（当前分支在最后一条）→ 通过；
+- 只断言最后一行的用例 → 通过；
+- 只有"多分支里非最后一条的非当前分支"才会露馅。
 
 **怎么防**（`gitops/repo.py:list_branches`，S4 的写法）：
 
-- marker 字段单独 `.strip()` 后写 `marker == "*"`；
-- `len(fields) == 3` 时补第 4 段空串（"缺 = 非当前"），**不要**当格式错误整体返回 `None`
-  ——那会把正常仓库报成 `REPO_NOT_BOUND`；
-- 每个字段各自 `.strip()`，不要只依赖整段的 strip；
-- 回归测试：`tests/test_branches.py` 的 **D7 第 3 行**（`main` 恰好是最后一条**且**有 upstream，
-  走的正是 3 段路径）与 **第 7 行**（`color.ui always` + 非 ASCII 分支名）。
-  ⚠️ 只断言"列表里有一条 `*` 是当前分支"的测试抓不到——必须断言**每一条**的
-  `is_current`，并覆盖"最后一条有 upstream"的布局。
+- 字段逐个 `.strip()`，当前判定写 `marker == "*"`，**不要**用真值判断；
+- `len(fields) != 4` 只可能意味着 `--format` 被改写 / git 换了实现：**不猜**（猜成"非当前"
+  等于把坏数据当正常结果），整体返回 `None` —— "问不出来"是 D4 已经定义好的诚实答案
+  （帧层翻成 `REPO_NOT_BOUND`）；
+- 回归测试：`tests/test_branches.py` 的 **D7 第 2 行**（断言**每一条**分支的 `isCurrent`，
+  且 `feature` 是非最后一条的非当前分支）、**第 3 行**（当前分支恰是最后一条且有 upstream）、
+  **第 7 行**（`color.ui always` + 非 ASCII 名）；
+- 反向验证：`tests/test_reverse_checks.py` 里把 `marker == "*"` 注入成 `bool(fields[3])`
+  → 上述用例**真的变红**（已固化；T32 的纪律：注入必须真的红，且红在断言上）。
 
-**教训**：分隔符解析要盯"**段数**"而不是"内容看起来对"；整段 strip 会改变最后一段的段数。
-这也是 S4 禁止解析 `git branch` 人类可读输出的同一条理由：机器可读格式只保证字段是机器可读的，
-**不保证调用方的 strip 不改变它**。
+**教训**：① 布尔"标记字段"的空值可能是**真值**（空格），永远用显式比较，别用真值；
+② 整段 strip 改变的是**值**，不一定是**段数**——解析器和它的"怎么复现"都要盯实测字节；
+③ 只测边界（单分支 / 最后一条）的用例会给 bug 开后门，**列表类断言要遍历每一条**。
 
 ## 已知未决问题
 

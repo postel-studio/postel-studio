@@ -2,8 +2,10 @@
 
 一条用例对应 `docs/design/issues/S4-branch-list.md` 的「D7 测试矩阵」第 1–10 行
 （行号写在每个用例的 docstring 里）。解析层的陷阱见 06-pitfalls T33：`%(HEAD)` 对非当前
-分支输出**一个空格**、而 `_stdout()` 会把整段输出 `.strip()`，所以**最后一条记录**的
-marker 字段可能整个消失——第 3 行（最后一条带 upstream）与第 7 行（color.ui）是这条的回归。
+分支输出**一个空格**（真值！），而 `_stdout()` 的整段 `.strip()` 只会把**最后一条**的
+marker 变成空串（**字段数恒为 4**，NUL 不是空白）。所以当前判定不能用真值；测试也必须
+断言**每一条**分支——只测单分支或只看最后一条会碰巧通过。第 2 行（断言每一条）、第 3 行
+（当前分支恰是最后一条且带 upstream）与第 7 行（color.ui）是这条的回归。
 
 夹具的边界：
 - `store` / `service`：**真 SQLite 文件**（`tmp_path` 下），不碰状态根。
@@ -195,9 +197,9 @@ def test_branch_upstream_is_short_name_and_none_when_missing(
 ) -> None:
     """**D7 第 3 行**（D1）：有 upstream 给 `origin/main`，没有给 `None`（不是 `""`）。
 
-    这条同时是 **T33** 的回归：`main` 的 refname 在 `feature` 之后（最后一条记录）且
-    **有** upstream——整段 `.strip()` 会把它的 marker 空格连同字段分隔吃掉，解析必须能
-    把"缺第 4 字段"读成"不是当前分支"而不是整体失败。
+    这条同时覆盖 **T33** 里"最后一条记录"的布局：`main` 是最后一条**且**有 upstream，
+    整段 `.strip()` 会把它的 marker 从 `" "`/`"*"` 变成 `""`/`"*"`（字段数仍是 4）——
+    当前判定若用真值就会在这里露馅（见 `test_branch_current_flag_is_only_on_the_head_branch`）。
     """
     repo = repo_factory("with-upstream")
     _git("branch", "feature", cwd=repo)

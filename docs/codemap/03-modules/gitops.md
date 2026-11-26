@@ -1,6 +1,6 @@
 # 03 · gitops — `src/postel_studio/gitops/`
 
-> 层 L0（**起子进程、碰磁盘**）· 286 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md)
+> 层 L0（**起子进程、碰磁盘**）· 287 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md)
 
 ## 职责
 
@@ -17,7 +17,7 @@
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 6 | 包标记（三条硬约束的一句话摘要 + S4 的 `list_branches`） |
-| `repo.py` | 280 | 子进程外壳 + 五个探测函数（含 S4 的分支列表） |
+| `repo.py` | 287 | 子进程外壳 + 五个探测函数（含 S4 的分支列表） |
 
 ## 符号表（`gitops/repo.py`）
 
@@ -32,15 +32,15 @@
 | `_environment()` | 78 | 子进程环境：`GIT_TERMINAL_PROMPT=0` + `GIT_CONFIG_NOSYSTEM=1` + `GIT_OPTIONAL_LOCKS=0` | `run_git`、测试 |
 | `git_executable()` | 88 | `shutil.which("git")`，找不到抛 `GitUnavailableError` | `run_git` |
 | `run_git(args, *, root)` | 100 | **字面数组 + `shell=False` + timeout** 跑一条只读命令 | 全部探测函数 |
-| `_stdout(result)` | 128 | 成功取**整段去空白**的 stdout，否则 `None`（T33 的陷阱源头） | 全部探测函数 |
-| `repo_root(path)` | 135 | `git rev-parse --show-toplevel`（会 discover） | `_bindable_root` 之外的用途小心，见下 |
-| `bare_root(path)` | 150 | 自己就是裸仓库根时返回它 | `_bindable_root` |
-| `is_worktree_root(path)` | 158 | `path/.git` 存在（**不碰 git**，filesystem 检查） | `_bindable_root`、测试 |
-| `is_repo(path)` | 166 | `repo_root or bare_root`（**同上，别单独当判据**） | 暂无生产调用方；给将来的 doctor |
-| `origin_url(root)` | 176 | `git config --get remote.origin.url` → `str \| None` | `api/repository.py:bind` |
-| `default_branch(root)` | 190 | `git symbolic-ref --short HEAD` → `str \| None` | 同上 |
-| `list_branches(root)` | 209 | `for-each-ref refs/heads/` → `list[BranchInfo] \| None`（S4 D3；三态见下） | `api/repository.py:branches` |
-| `GIT_ERRORS` | 262 | 两个异常类的元组（"能抛什么"的显式清单） | 文档用 |
+| `_stdout(result)` | 132 | 成功取**整段去空白**的 stdout，否则 `None`（T33 的陷阱源头） | 全部探测函数 |
+| `repo_root(path)` | 139 | `git rev-parse --show-toplevel`（会 discover） | `_bindable_root` 之外的用途小心，见下 |
+| `bare_root(path)` | 154 | 自己就是裸仓库根时返回它 | `_bindable_root` |
+| `is_worktree_root(path)` | 162 | `path/.git` 存在（**不碰 git**，filesystem 检查） | `_bindable_root`、测试 |
+| `is_repo(path)` | 170 | `repo_root or bare_root`（**同上，别单独当判据**） | 暂无生产调用方；给将来的 doctor |
+| `origin_url(root)` | 180 | `git config --get remote.origin.url` → `str \| None` | `api/repository.py:bind` |
+| `default_branch(root)` | 194 | `git symbolic-ref --short HEAD` → `str \| None` | 同上 |
+| `list_branches(root)` | 213 | `for-each-ref refs/heads/` → `list[BranchInfo] \| None`（S4 D3；三态见下） | `api/repository.py:branches` |
+| `GIT_ERRORS` | 269 | 两个异常类的元组（"能抛什么"的显式清单） | 文档用 |
 
 ## 关键决策与理由
 
@@ -155,20 +155,20 @@ git -C <root> for-each-ref refs/heads/ \
 三态（D4/D5 的基础）：`list`（可能空，空仓库 = 成功）/ `None`（git 非零退出 = 不是仓库或路径没了）/
 抛 `GitUnavailableError`·`GitTimeoutError`（起不来 / 卡住）。**任何两个都不许合并**。
 
-#### T33：`%(HEAD)` 的"空格"与 `_stdout()` 的整段 strip（详见 [06 T33](../06-pitfalls.md)）
+#### T33：`%(HEAD)` 的空格是**真值**，整段 strip 只改最后一行的 marker（详见 [06 T33](../06-pitfalls.md)）
 
-`%(HEAD)` 对**非当前**分支输出的是**一个空格**，不是空串；而 `_stdout()` 对**整段** stdout
-`.strip()`，于是**最后一条记录末尾的空格被吃掉**：
+`%(HEAD)` 对**非当前**分支输出的是**一个空格**（不是空串，而且**是真值**），当前分支是 `"*"`；
+而 `_stdout()` 对**整段** stdout `.strip()`，只会把**最后一条记录**的 marker 从 `" "` 变成 `""`
+——**字段数恒为 4**（`%00` 是 NUL、不是空白，行尾 NUL 不会被 strip）。所以"字段会消失 / 只剩
+3 段"是**错的**，别按那个写解析器，也别按那个写复现命令。
 
-```text
-# 最后一条记录有 upstream 且非当前时，整段 strip 后只剩 3 个字段
-'zz\x00<sha>\x00origin/zz'          # marker 字段被吞掉
-```
-
-解析必须：① 当前判定写 `marker.strip() == "*"`，**不能** `if not marker`（除最后一行外全判反）；
-② 缺第 4 字段时补空（= 非当前），**不要**当成格式错误整体返回 `None`；③ 字段各自 `.strip()`。
-回归测试：`tests/test_branches.py` 的 D7 第 7 行（`color.ui always` + 非 ASCII 名）与第 3 行
-（最后一条记录带 upstream——正是 3 字段那条路径）。
+解析必须：① 字段各自 `.strip()`，当前判定写 `marker == "*"`，**不要**用真值判断
+（未 strip 的 `" "` 是真值 → 除最后一条外全判反；而最后一条被 strip 成 `""` 反而碰巧判对）；
+② `len(fields) != 4` 只可能是 format 被改写：返回 `None`（"问不出来"），别猜；
+③ 测试断言**每一条**分支的 `is_current`，并覆盖"当前分支不是最后一条"与"最后一条带
+upstream"两种布局（前者露 bug、后者覆盖整段 strip 的路径）。
+回归测试：`tests/test_branches.py` 的 D7 第 2/3/7 行；反向验证：把 `marker == "*"` 注入成
+`bool(fields[3])` → 第 2 行真的变红（`tests/test_reverse_checks.py`）。
 
 ### 被推翻的方案
 
@@ -219,7 +219,7 @@ S3 的探测在 `tests/test_bind.py`，S4 的分支列表在 `tests/test_branche
 |---|---|
 | `test_branches_returns_names_in_refname_order_with_short_shas` | D7 第 1 行 / D1 / D4：名称集合、字典序、gitops 层 `sha` 是完整 40 位（帧层截 8 位在 `api/repository.py`） |
 | `test_branch_current_flag_is_only_on_the_head_branch` | D7 第 2 行 / D1：只有 HEAD 指向的那条 `is_current=True` |
-| `test_branch_upstream_is_short_name_and_none_when_missing` | D7 第 3 行 / D1：`upstream` 有则短名、无则 `None`（不是 `""`）；含"最后一条记录带 upstream"的 3 字段路径 |
+| `test_branch_upstream_is_short_name_and_none_when_missing` | D7 第 3 行 / D1：`upstream` 有则短名、无则 `None`（不是 `""`）；同时覆盖"当前分支恰是最后一条且有 upstream"的布局（整段 strip 只改最后一行的 marker，字段数恒为 4） |
 | `test_empty_repo_returns_empty_list_as_success` | D7 第 4 行 / D4：空列表是成功 |
 | `test_detached_head_still_lists_all_branches_with_none_current` | D7 第 5 行 / D1 |
 | `test_only_local_branches_are_listed_after_push` | D7 第 6 行 / D2 |

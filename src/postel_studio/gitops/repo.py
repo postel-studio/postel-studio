@@ -221,17 +221,23 @@ def list_branches(root: Path) -> list[BranchInfo] | None:
     只列 `refs/heads/`：不带它的话 `refs/remotes/origin/main` 也会出现在结果里，
     "共几个分支"与"当前分支"会同时失真（D2 的实测）。
 
-    ⚠️ **T33：`%(HEAD)` 空格 + `_stdout()` 整段 `.strip()` 的连招**（06-pitfalls T33）：
+    ⚠️ **T33：`%(HEAD)` 的空格 + `_stdout()` 的整段 `.strip()`**（06-pitfalls T33）：
 
-    1. `%(HEAD)` 对**非当前**分支输出的不是空串，而是**一个空格**；
-    2. `_stdout()` 会对**整段** stdout `.strip()`，于是**最后一条记录末尾的空格被吃掉**
-       ——若该记录有 upstream，整行就只剩 3 个字段（第 4 个字段被吞掉了）。
+    1. `%(HEAD)` 对**非当前**分支输出的不是空串，而是**一个空格**——它是真值；
+       当前分支输出 `"*"`，也是真值。所以**不能用真值判断**（`if marker` / `bool(marker)`）
+       来判"当前"：那样**除最后一条外全部判反**。
+    2. `_stdout()` 对**整段** stdout `.strip()`，只会把**最后一条记录**的 marker 从 `" "`
+       变成 `""`（值变了）——`%00` 分隔符是 NUL、**不是空白**，行尾的 NUL 不会被 strip，
+       所以 split 后**字段数恒为 4**（末段是空串）。**不要**指望"字段会消失"：实测
+       单分支 / 多分支 / 游离 HEAD / 最后一条有 upstream 等布局，段数全是 4。
 
-    所以：当前判定必须写 `field == "*"`，**不能**写 `if not field` / `field == ""`
-    （那样除最后一行外全部判反）；整行缺第 4 字段时按"不是 `*`"补空，**不要**把它当成
-    "格式不对"而整体返回 `None`。字段本身再逐字段 `.strip()`（marker 字段在非末行时是
-    " "，不 strip 就永远无法与 `"*"` 比较）。写反的表现是：当前分支标记只有**最后一行**
-    可能对，其它全反——那条测试如果只断言"最后一行是当前分支"就抓不到。
+    因此：字段逐个 `.strip()`，当前判定写 `marker == "*"`。**测试必须断言每一条分支**的
+    `is_current`：只测单分支仓库、或只断言最后一条的用例，在"真值判断"的 bug 下会**碰巧
+    通过**——最后一条的 marker 恰好被整段 strip 成了空串。
+
+    `len(fields) != 4` 只可能意味着 `--format` 被改写 / git 换了实现：此时**不猜**（把缺字段
+    猜成"非当前"等于把坏数据当正常结果），返回 `None`——"问不出来"是 D4 已经定义好的诚实
+    答案（帧层翻成 `REPO_NOT_BOUND`）。
     """
     result = run_git(["for-each-ref", "refs/heads/", f"--format={BRANCH_FORMAT}"], root=root)
     output = _stdout(result)
@@ -240,12 +246,9 @@ def list_branches(root: Path) -> list[BranchInfo] | None:
     branches: list[BranchInfo] = []
     for line in output.splitlines():
         fields = line.split("\x00")
-        if len(fields) == 3:
-            # T33：最后一条记录若"非当前且**有** upstream"，末尾的空格被整段 strip 吃掉，
-            # 导致 marker 字段整个消失（有 upstream 时行尾不再有 NUL）。补空 = 非当前。
-            fields.append("")
-        elif len(fields) != 4:
-            # git 被换成别的实现 / format 被改写：宁可"问不出来"也不猜（None → REPO_NOT_BOUND）
+        if len(fields) != 4:
+            # 段数不对只可能是 format 被改写 / git 换了实现：**不猜**（猜成"非当前"会把
+            # 坏数据当正常结果），返回 None —— 帧层会翻成 REPO_NOT_BOUND（D4 的诚实答案）。
             return None
         name, sha, upstream, marker = (field.strip() for field in fields)
         branches.append(
