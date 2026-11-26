@@ -19,7 +19,7 @@
 | `MSG_*`（14 个） | 48-63 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
 | `DEFAULT_MAX_CHARS` / `MIN_MAX_CHARS` / `MAX_MAX_CHARS` | 67-69 | 截断契约值：100k / 1000 / 200k（S5 D6，**不许改**） | `_require_max_chars`、测试 |
 | ~~`MAX_REF_LENGTH`~~ | — | **S7 搬到 `domain/models.REF_NAME_MAX_LENGTH`**（同层模块不互相 import，见 02-layers §3） | `_require_ref` |
-| `BranchPayloads` | 75 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
+| `BranchPayloads` | 73 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
 | `_fail(code, message)` | 76 | 造 `frames.FrameError`（网关原样转发） | 内部 |
 | `_require_path(params)` | 81 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
 | ~~`ref_name_is_valid`~~ | — | **S7 搬到 `domain/models.ref_name_ok`**：`repo.diff` 的 base/head 与 `worktree.acquire` 的 baseRef 共用一份，而 L3 之间不互相 import | `_require_ref`、`api/worktrees.py` |
