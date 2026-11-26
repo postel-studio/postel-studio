@@ -90,12 +90,16 @@ LAYERS: dict[str, tuple[str, ...]] = {
     ),
     # S6：Bot 业务编排。只是 L3 的又一个 handler 模块：不许反向碰页面（D7）。
     "api/bots.py": ("postel_studio.web",),
-    # S7：工作区业务编排。与 repository.py 同为 L3；它**允许** import 同层的 repository
-    # （共用 baseRef 的形状判定与"仓库路径还在吗"的探测，别再抄一份），但同样不许碰页面/框架。
+    # S7：工作区业务编排。与 repository.py / bots.py 同为 L3 的 handler 模块：只能向下依赖
+    # （storage / gitops / domain / frames），**不许 import 同层的其它 handler**——`02-layers §3`
+    # 的唯一例外是 `app → gateway` 的装配，不是"handler 之间互相复用"。S7 想复用的两个判定
+    # （baseRef 形状、仓库路径还能不能用）已经下沉到 `domain` / `gitops`，所以这里没有例外。
     "api/worktrees.py": (
         "postel_studio.api.app",
         "postel_studio.api.gateway",
         "postel_studio.api.server",
+        "postel_studio.api.repository",
+        "postel_studio.api.bots",
         "postel_studio.web",
         "fastapi",
         "starlette",
