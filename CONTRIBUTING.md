@@ -37,6 +37,27 @@ bash scripts/check.sh lint     # 单项：lint | format | types | test | secrets
 - **不得**提交 `.env` 或任何凭据；已有门禁与钩子拦截。
 - 一个 Issue 一个提交，提交信息引用 Issue 编号。
 
+## 分支与 PR 流程
+
+**不直接推 `main`。** 每个改动走特性分支 + PR：
+
+```bash
+git checkout -b <type>/<short-slug>     # docs/security-data-api, feat/i01-kernel, fix/...
+# ... 改动 ...
+bash scripts/check.sh                   # 本地门禁
+git commit -m "<type>: <summary>"
+git push -u origin <branch>             # 推分支，不推 main
+# 用 GitHub API 或网页创建 PR 到 main
+```
+
+- PR 必须等 `ci` 工作流通过（`pull_request` 触发，与本地同一份门禁）。
+- 合并前自查 `docs/design/05-security.md` §7 的验收清单。
+- 分支命名：`type/slug`，`type` ∈ `docs` / `feat` / `fix` / `ci` / `chore`。
+
+> **为什么不用直推**：私有仓库当前**不支持分支保护**（需 GitHub Pro 或转公开）。
+> 也就是说 `main` 在服务端没有任何强制约束，唯一能防住误操作的就是这个流程约定本身。
+> 转公开或升级计划后应补上分支保护：要求 PR + CI 通过才能合并。
+
 ## 开发顺序
 
 见 [docs/design/04-task-breakdown.md](docs/design/04-task-breakdown.md)。按 Issue 编号顺序推进，不做横切。
