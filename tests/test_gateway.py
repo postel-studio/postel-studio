@@ -229,14 +229,25 @@ def test_seq_restarts_for_a_new_connection(kernel: Kernel):
 
 
 def test_unknown_method_is_unknown_method_not_subscribe(kernel: Kernel):
-    """只实现 `system.echo` / `system.health`：其它（含 `system.subscribe`）一律 UNKNOWN_METHOD。"""
+    """只实现已登记的方法：其它（含 `system.subscribe`）一律 UNKNOWN_METHOD。
+
+    S3 起 `repo.bind` **已实现**，不再是反例（它收到空 params 时正确回 `INVALID_PARAMS`），
+    反例换成仍未实现的 `bot.list` / `task.dispatch` / `repo.branches`（S4）。
+    """
     ticket, _ = kernel.fetch_page()
 
     async def calls() -> list[dict[str, object]]:
         out = []
         async with websockets.connect(kernel.ws_url(ticket)) as ws:
             for i, method in enumerate(
-                ["repo.bind", "bot.list", "task.dispatch", "system.subscribe", "system.echo.x"]
+                [
+                    "bot.list",
+                    "task.dispatch",
+                    "agent.list",
+                    "repo.branches",
+                    "system.subscribe",
+                    "system.echo.x",
+                ]
             ):
                 await ws.send(json.dumps({"type": "req", "id": f"m{i}", "method": method}))
                 out.append(decode_frame(await ws.recv()))
@@ -253,7 +264,7 @@ def test_unknown_method_does_not_close_connection(kernel: Kernel):
 
     async def mixed() -> list[dict[str, object]]:
         async with websockets.connect(kernel.ws_url(ticket)) as ws:
-            await ws.send(json.dumps({"type": "req", "id": "bad", "method": "repo.bind"}))
+            await ws.send(json.dumps({"type": "req", "id": "bad", "method": "bot.list"}))
             bad = decode_frame(await ws.recv())
             await ws.send(json.dumps({"type": "req", "id": "good", "method": "system.echo"}))
             good = decode_frame(await ws.recv())

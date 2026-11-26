@@ -1,6 +1,6 @@
 # 03 · assets — `src/postel_studio/web/assets.py`
 
-> 层 L4 · 267 行 · 上游：[模块索引](README.md)
+> 层 L4 · 465 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
 > ⚠️ **本模块是 Code Map 里覆盖最薄的一块**：JS 的 DOM 行为没有自动化测试。见 §测试。
 
 ## 职责
@@ -12,11 +12,28 @@
 
 | 符号 | 行 | 做什么 |
 |---|---|---|
-| `HEARTBEAT_INTERVAL_MS` | 19 | `1000`，心跳间隔 |
-| `RECONNECT_DELAY_MS` | 20 | `500`，点重连到发起的延迟 |
-| `REQUIRED_PARAMS` | 23 | 全部占位符元组（7 个） |
-| `INDEX_HTML` | 33 | 页面本体 |
-| `render_index(version, api_version, state_root, handshake_ticket, ws_path)` | 242 | 填占位符 |
+| `HEARTBEAT_INTERVAL_MS` | 29 | `1000`，心跳间隔 |
+| `RECONNECT_DELAY_MS` | 30 | `500`，点重连到发起的延迟 |
+| `REQUIRED_PARAMS` | 33 | 全部占位符元组（9 个） |
+| `ERROR_TEXT` | 47 | 07 §1.3 错误码 → 用户可读中文（S3 左栏用） |
+| `ERROR_TEXT_FALLBACK` | 54 | 表外的码走这句通用文案 |
+| `INDEX_HTML` | 56 | 页面本体 |
+| `error_text_json()` | 428 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
+| `render_index(...)` | 437 | 填占位符 |
+
+页面内新增的 DOM / JS（S3 左栏仓库区）：
+
+| 元素/函数 | 行 | 做什么 |
+|---|---|---|
+| `<section id="repos" data-state="loading">` | 157 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
+| `#bind-form` / `#bind-path` / `#bind-button` | 159-162 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
+| `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 164-167 | 错误 / 连接状态 / 列表 / 空态 |
+| `setRepoState(state, text)` | 217 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**） |
+| `errorText(code)` | 231 | 错误码 → 文案（**不看 message**） |
+| `renderRepos(list)` | 237 | 一行 = 名称 + 「默认分支 X」 |
+| `loadRepos()` | 257 | 连上后发 `repo.list` |
+| `submitBind()` | 266 | 发 `repo.bind`，成功/失败各自收口 |
+| `request(method, params, done)` | 314 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
 
 页面里 JS 用的常量（`assets.py:95-97`）：
 
@@ -24,7 +41,8 @@
 |---|---|---|
 | `HEARTBEAT_INTERVAL_MS` | 1000 | Python 常量注入 |
 | `RECONNECT_DELAY_MS` | 500 | Python 常量注入 |
-| `CONNECT_TIMEOUT_MS` | 2000 | **JS 内硬编码**（`assets.py:97`） |
+| `CONNECT_TIMEOUT_MS` | 2000 | **JS 内硬编码**（JS 里 `var CONNECT_TIMEOUT_MS`） |
+| `ERROR_TEXT` | 07 §1.3 的码 → 中文 | **Python 常量注入**（`error_text_json()`） |
 
 ## 关键决策与理由
 
@@ -95,6 +113,31 @@ S2 初版有一个 `location.protocol === "https:"` 的病态分支，**从未�
 
 > 将来做远程访问需要 `wss://` 时，**重新写**，别从 git 历史里捞回那个假分支。
 
+### S3：左栏仓库区 —— 「没连上」与「没有仓库」必须可区分（D1）
+
+```
+连上之前 / 断连时：#repos[data-state="loading"|"reconnecting"|"disconnected"]
+    → #repo-state 显示「正在加载…」/「正在连接内核…」/「已断开：内核没有连着，仓库列表未知」
+    → #repo-list 与 #repo-empty 都隐藏；输入框与按钮禁用
+连上只后：        #repos[data-state="ready"]
+    → 发 repo.list；**拿到一个（可能为空的）数组** 才允许 `#repo-empty` 出现
+```
+
+三条实现细节，改的时候别破坏：
+
+1. **显隐全部由 CSS 的 `#repos[data-state=…]` 规则决定**，JS 只改 `data-state` 这一个属性。
+   T8 的教训（`style.display = ""` 回退到 CSS 的 `none`）在需要显隐的元素上一律不适用：
+   JS 只动 `hidden` 属性（`#repos-error` / `#repo-empty`），或什么都不动。
+   `setState()` 里给重连按钮的那句 `style.display = ... ? "inline-block" : "none"` 是**显式值**，
+   是 S2 的写法，保留（T8 的正解）。
+2. **空态只在拿到数组后才允许出现**：断连时 `#repo-empty` 必须隐藏——否则用户看到
+   「还没有绑定仓库」，那是**撒谎**（D1 的原话：空 与 没连上必须可区分）。
+3. **错误按码映射**（`errorText`）：`NOT_A_REPO → "不是 git 仓库"`。不把服务端 `message`
+   直接贴到页面上（05 §4.2 的同一精神），表外的码给 `ERROR_TEXT_FALLBACK`。
+
+`repo.bind` 成功后**重读** `repo.list`（而不是把返回值插进列表）：重复绑定靠这条路自然去重，
+顺序也由服务端决定（`added_at`）。
+
 ## 修改须知
 
 | 如果你要… | 还必须 |
@@ -104,6 +147,9 @@ S2 初版有一个 `location.protocol === "https:"` 的病态分支，**从未�
 | 加 DOM 元素 | 在真实浏览器里验证（见 §测试）；Web 页面无构建链，无法用 JS 单测 |
 | 让页面调新的 HTTP 路由 | 注意 `/api/*` 返回**裸对象**，不套 `{data,seq}` 帧包络 |
 | 在页面里放凭据 | **禁止**。只有一次性 ticket，且 60 秒失效 |
+| 加左栏分区（Bot 在上 / 仓库在下，03-ui-spec §2） | 现在**只有仓库区**，没有 Bot 区（S3 不做 Bot）；加 Bot 区时 `#repos` 的 `data-state` 机制可以复用 |
+| 改 `ERROR_TEXT` | `render_index` 会重新序列化；真实浏览器里验一遍（T9） |
+| 让前端直接读 git / 开新 HTTP 路由 | **禁止**（S3 D1）：数据一律走 WS 帧 |
 
 ## 测试
 
@@ -121,6 +167,11 @@ S2 初版有一个 `location.protocol === "https:"` 的病态分支，**从未�
 | `test_render_does_not_confuse_braces_with_placeholders` | 花括号不被误换 |
 | `test_parse_page_round_trip` | 渲染往返 |
 | `test_page_does_not_carry_the_long_term_token` | 令牌不进页面 |
+| `test_unknown_method_is_unknown_method_not_subscribe` | `repo.bind` 不再是"未实现"的反例（S3 已实现） |
+
+S3 的页面行为**没有**进 pytest（T9 的老问题，S3 也没解决）；验收 1–4 与 D1 的断连可区分
+是用 puppeteer + 本机 Chrome 跑真实内核读 DOM 验的（见交付说明，脚本不在仓库里）。
+pytest 里只有两条文本断言护着结构：`#repos` 的初始 `data-state` 与 `ERROR_TEXT` 的注入。
 
 ### ⚠️ 这些断言证明的是「意图存在」，不是「行为正确」
 

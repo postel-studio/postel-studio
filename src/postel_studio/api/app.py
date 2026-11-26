@@ -16,6 +16,8 @@ from fastapi.responses import HTMLResponse
 
 from postel_studio import __version__
 from postel_studio.api import gateway
+from postel_studio.api.repository import RepositoryService
+from postel_studio.storage.db import RepoStore
 from postel_studio.storage.paths import state_root
 from postel_studio.web.assets import render_index
 
@@ -45,6 +47,10 @@ def create_app(
     app = FastAPI(title="Postel Studio Kernel", docs_url=None, redoc_url=None, openapi_url=None)
     tickets = gateway.TicketRegistry()
     root = str(state_root())
+    # S3：内核第一次持有用户数据。store 与 gitops 在这里构造、**作为能力注入**给网关；
+    # 网关因此不需要 import 任何业务/存储模块（06-pitfalls T14 的修法，别改回反向 import）。
+    store = RepoStore()
+    repositories = RepositoryService(store)
 
     def index() -> HTMLResponse:
         page = render_index(
@@ -75,5 +81,14 @@ def create_app(
         return {"host": host, "port": port, "wsPath": ws_path, "pid": os.getpid()}
 
     # health() 在这里定义、注入给网关：网关不反向 import 本模块，环被消掉而不是被绕开。
-    gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
+    gateway.install(
+        app,
+        ws_path,
+        tickets,
+        gateway.Providers(
+            health=health,
+            repo_bind=repositories.bind,
+            repo_list=repositories.list,
+        ),
+    )
     return app

@@ -1,6 +1,6 @@
 # 03 · gateway — `src/postel_studio/api/gateway.py`
 
-> 层 L3 · 150 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md)
+> 层 L3 · 165 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
 
 ## 职责
 
@@ -15,9 +15,9 @@ WebSocket 网关：**认证 → 接受 → 分派 → 回帧**。
 | `CLOSE_FRAME_INVALID` | 35 | `4002` 关闭码 | `handler` |
 | `TicketRegistry` | 38 | 一次性 ticket 签发/消费 | `app.create_app` |
 | `ConnectionState` | 71 | 每连接的 `seq` 计数器（D4） | `handler` |
-| `Providers` | 80 | frozen dataclass，注入依赖（`health`） | `app.create_app` |
+| `Providers` | 84 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list`） | `app.create_app` |
 | `active_connection_count()` | 86 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
-| `dispatch(method, params, providers)` | 92 | 方法表 | `handler` |
+| `dispatch(method, params, providers)` | 103 | 方法表（4 个分支） | `handler` |
 | `install(app, path, tickets, providers)` | 101 | 把 WS 路由挂到 app | `app.create_app` |
 | `_ACTIVE` / `_ACTIVE_LOCK` | 64-65 | 活动连接表（模块级） | 内部 |
 
@@ -120,21 +120,33 @@ finally:
 
 `system.health` 与 `system.echo` **共用同一个计数器**，不另造。
 
-### `dispatch()` 目前只有两个分支
+### `dispatch()` 现在有四个分支（S2 两个 + S3 两个）
 
 ```python
+# api/gateway.py:103-113（真实代码的形状，别把业务写进来）
 if method == "system.echo":
     return params  # 通道自检
 if method == "system.health":
     return providers.health()
+if method == "repo.bind":  # S3
+    return providers.repo_bind(params)
+if method == "repo.list":  # S3
+    return providers.repo_list()
 raise FrameError(UNKNOWN_METHOD, ...)
 ```
 
 **故意不实现** `system.subscribe` —— 订阅机制属后续切片。
 未实现的方法返回 `UNKNOWN_METHOD`，**不要返回空成功**（客户端会以为订阅生效了）。
 
+S3 的两个业务分支是**转手**：真正的实现在 `api/repository.py`（`RepositoryService`），
+由 `app.create_app()` 构造后经 `Providers` 注入。网关不认识"仓库/数据库/git"任何一个词。
+
 > **后续切片注意**：方法多到 6~8 个时，`if` 链应该改成注册表（dict）。
-> 现在两个分支还不需要，**不要提前抽象**。
+> 现在四个分支还不需要，**不要提前抽象**（第 5、6 个方法来了再说）。
+
+> ⚠️ `test_unknown_method_is_unknown_method_not_subscribe` 曾把 `repo.bind` 当"未实现"的反例。
+> S3 实现它之后那条测试改成了 `bot.list` / `task.dispatch` / `agent.list` / `repo.branches` 等。
+> **每实现一个方法，都要把它从那条反例清单里拿掉**，否则测试红得莫名其妙。
 
 ### `Providers` 注入消掉循环依赖
 
@@ -153,7 +165,8 @@ raise FrameError(UNKNOWN_METHOD, ...)
 | 改 ticket 有效期 | `TICKET_TTL_SECONDS` + 05 §1.1.1 的文字 |
 | 改错误码 | `frames.py` 常量 + `07-api-contract §1.3` 表 |
 | 给网关加状态 | 想清楚是**全局**还是**每连接**；`seq` 是每连接，`_ACTIVE` 是全局 |
-| 让网关调用更多业务 | 新增 handler 模块，**别把业务写进 dispatch** |
+| 让网关调用更多业务 | 新增 handler 模块（如 `api/repository.py`），**别把业务写进 dispatch**；在 `Providers` 加一个字段 + `app.create_app()` 里注入 |
+| 给 `Providers` 加字段 | `app.create_app()` 的 `gateway.Providers(...)` 是**唯一**构造点；`test_gateway_inprocess.py` 若自己构造 `Providers` 也要同步 |
 
 ## 测试
 

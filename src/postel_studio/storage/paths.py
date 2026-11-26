@@ -21,6 +21,9 @@ from typing import Final
 ENV_HOME: Final = "POSTEL_HOME"
 SERVER_FILE: Final = "server.json"
 LOCK_FILE: Final = "kernel.lock"
+# S3 起内核持有用户数据（绑定关系）。**只**放在状态根里，绝不写进用户仓库；
+# 文件名的事实源在这里（db.py 只是消费者），免得两处各拼一次路径。
+STATE_DB_FILE: Final = "state.db"
 
 DIR_MODE: Final = 0o700
 FILE_MODE: Final = 0o600
@@ -51,6 +54,11 @@ def ensure_state_root() -> Path:
 def server_file() -> Path:
     """`server.json`：客户端据此发现端口（02b §2.1）。"""
     return state_root() / SERVER_FILE
+
+
+def state_db_file() -> Path:
+    """`state.db`：仓库绑定关系等内核状态（S3 起，06-data-model §1）。**不创建**。"""
+    return state_root() / STATE_DB_FILE
 
 
 def lock_file() -> Path:

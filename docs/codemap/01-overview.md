@@ -6,8 +6,9 @@
 
 ## 1. 现在系统里有什么
 
-截至 S2（`v0.1.2`），Postel Studio 只有一个进程、一个页面、一条 WebSocket。**没有数据库、
-没有 Agent、没有 git 操作。** 这是最小的「内核存活 + 连接诚实」骨架。
+截至 S3（`v0.1.2`），Postel Studio 只有一个进程、一个页面、一条 WebSocket，
+外加**一个 SQLite 文件（`state.db`）**与**只读的 git 子进程**。仍然**没有 Agent、没有任务调度**。
+S3 的主题是「用户绑一个本地仓库，左栏认得它」。
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -25,6 +26,8 @@
 │             ├─ HTTP: GET /api/health  → 版本/状态根                │
 │             ├─ HTTP: GET /api/where   → 本进程真实绑定             │
 │             └─ WS  : /gateway/<sha16> → 帧往返                   │
+│                   ├─ repo.bind → git 子进程（只读探测）           │
+│                   └─ repo.list → state.db（SQLite）               │
 │   ⑥ finally：删 server.json、删 token、关 socket、删自己的锁      │
 └──────────────────────────────────────────────────────────────────┘
                               ▲
@@ -36,6 +39,7 @@
               │  · new WebSocket(...?ticket=)  │
               │  · 心跳 system.echo 判活       │
               │  · 断开 → 变红 + 灰化 + 按钮   │
+              │  · 左栏仓库区：绑定 / 列表    │
               └────────────────────────────────┘
 ```
 
@@ -74,9 +78,11 @@ gateway.handler
    ├─ frames.decode_incoming(text)       → ReqFrame 或 FrameError    frames.py:56
    │     · FrameError 且 reply_id is None → 记日志 + 忽略，不断连
    │     · FrameError 且有 reply_id      → 回 ok:false 帧
-   ├─ gateway.dispatch(method, params, providers)                     gateway.py:92
+   ├─ gateway.dispatch(method, params, providers)                     gateway.py:103
    │     · "system.echo"   → 原样返回 params
    │     · "system.health" → providers.health()（由 app 注入）
+   │     · "repo.bind"     → providers.repo_bind(params)
+   │     · "repo.list"     → providers.repo_list()      ← 这两个也由 app 注入
    │     · 其它            → raise FrameError(UNKNOWN_METHOD)
    └─ state.take_seq()  → frames.encode_response(id, seq, data)
    ▼
@@ -97,6 +103,41 @@ gateway.handler
        → connect(ticket) → ws.onopen → setState("connected")
 ```
 
+### 2.5 `repo.bind` 的完整路径（S3）
+
+```
+浏览器 左栏「绑定」按钮 → request("repo.bind", {path})           assets.py:266
+   │
+   ▼
+gateway.dispatch → providers.repo_bind = RepositoryService.bind   repository.py:115
+   ├─ _require_path(params)              非字符串/空 → INVALID_PARAMS
+   ├─ Path(raw).is_absolute()            相对 / ~ → BAD_CWD
+   ├─ Path(raw).resolve()                消 .. 与符号链接（D4）
+   ├─ _bindable_root(target)             目标/.git? 裸仓库? 逐级向上找根? 否则 NOT_A_REPO
+   │     └─ 子目录校正：/x/proj/src → /x/proj（D2）
+   ├─ gitops.origin_url(root)            git config --get（无 origin → None）
+   ├─ gitops.default_branch(root)        git symbolic-ref --short HEAD
+   ├─ domain.repo_id(path, origin_url)   sha256(归一化 URL | 绝对路径)[:12]（D3）
+   └─ RepoStore.upsert(repo)             同路径不产生第二行（验收 4）
+   ▼
+浏览器  重读 repo.list → renderRepos() → 左栏一行「名称 / 默认分支」  assets.py:237
+```
+
+**这条路径上有三处"看起来对"**：git 的 discover（T25）、`ON CONFLICT` 的次级唯一键（T26）、
+断连时的空列表（T27）——都记在 06，都是实测踩出来的。
+
+### 2.6 断连时左栏怎么变（D1 的可观测后果）
+
+```
+fail()（唯一向下出口）→ setState("disconnected","已断开")
+   ├─ 右上角灯变红、#content 灰化（S2）
+   └─ #repos[data-state="disconnected"]
+         ├─ #repo-state：「已断开：内核没有连着，仓库列表未知」
+         ├─ #repo-list 与 #repo-empty 都 **隐藏**（空 ≠ 没连上）
+         └─ 输入框与按钮禁用
+重连成功 → setState("connected") → #repos[data-state="ready"] → loadRepos()
+```
+
 ## 3. 关键数字（改这些要连带看别处）
 
 | 常量 | 值 | 位置 | 为什么 |
@@ -111,7 +152,10 @@ gateway.handler
 | `HEARTBEAT_INTERVAL_MS` | 1000 | `assets.py:19` | 心跳间隔 |
 | `RECONNECT_DELAY_MS` | 500 | `assets.py:20` | 点重连后取票的延迟 |
 | `CONNECT_TIMEOUT_MS` | 2000 | `assets.py:97`（JS 内硬编码） | 见 [03/assets](03-modules/assets.md) |
-| `DIR_MODE` / `FILE_MODE` | `0700` / `0600` | `paths.py:25-26` | 05 §4.1 |
+| `DIR_MODE` / `FILE_MODE` | `0700` / `0600` | `paths.py:28-29` | 05 §4.1 |
+| `GIT_TIMEOUT_SECONDS` | 5.0 | `gitops/repo.py:31` | D5：git 卡住不能拖住网关 |
+| `SCHEMA_VERSION` | 1 | `storage/db.py:30` | 06 §7：`PRAGMA user_version` |
+| `REPO_ID_LENGTH` | 12 | `domain/models.py:19` | 06 §2.1 / 07 §4.1 |
 
 > `HEARTBEAT_INTERVAL_MS + RECONNECT_DELAY_MS < 3000` 是被测试断言的关系
 > （S2 验收：断连 ≤3 秒可见）。改心跳间隔会连带打破这个预算。
@@ -123,6 +167,7 @@ gateway.handler
 | 文件 | 所有者 | 生命周期 | 权限 | 内容 |
 |---|---|---|---|---|
 | `kernel.lock` | 内核 | 进程存活期间 | 0600 | `{pid, version}` |
+| `state.db` | 内核 | **长期**（用户数据，进程退出不删） | 0600 | SQLite：`repos` 表（另有 WAL 的 `state.db-wal` / `state.db-shm`） |
 | `server.json` | 内核 | 进程存活期间 | 0600 | 见下 |
 | `token` | 内核 | 进程存活期间 | 0600 | 32 字节 hex 明文 |
 
@@ -141,16 +186,21 @@ gateway.handler
 }
 ```
 
-**三个文件在正常退出时全部删除。** SIGKILL 时全部残留，下次启动会覆盖锁与 server.json。
+**S1/S2 的三个文件在正常退出时全部删除。** SIGKILL 时全部残留，下次启动会覆盖锁与 server.json。
+
+**`state.db` 例外：它不删。** 它装的是用户数据（"我绑过哪些仓库"），删掉等于清空用户的绑定。
+S3 也没有退出收场（连接不显式 close，靠进程退出回收；WAL 已 fsync，不丢数据），见
+[06 §已知未决 U10](06-pitfalls.md#已知未决问题)。
 
 ## 5. 现在还没有的东西（别去猜）
 
 | 没有 | 出现的切片 | 届时影响 |
 |---|---|---|
-| 任何业务方法（repo/bot/task/candidate/memory/agent） | S3~S13 | `dispatch()` 会从 2 个分支长到十几个 → 应考虑改注册表 |
+| 其余业务方法（bot/task/candidate/memory/agent、`repo.unbind/branches/diff`） | S4~S13 | `dispatch()` 会从 4 个分支长到十几个 → 应考虑改注册表 |
+| Bot / Task / Candidate / WorktreeLease 表 | 后续切片 | 现在只有 `repos` 一张表；新表 append 一版迁移 |
 | 订阅/topic 机制 | S10 前后 | `encode_event` 已存在但**从未被调用** |
 | `seq` 的跨连接语义 | — | 现在每连接独立从 1 开始（D4） |
-| 数据库 | S8 前后 | |
+| ~~数据库~~ | **S3 已有**（`state.db`，只有 `repos`） | 后续加表要 append 一版迁移 |
 | Agent 子进程/ACP | S9/S10 | 会引入第二个进程模型，本页的「单进程」图将失效 |
 | 权限判定 | S16 | |
 | 前端构建链 | 明确**不做** | `assets.py` 会持续变长，见 06 §前端 |
@@ -165,5 +215,10 @@ gateway.handler
 4. `src/postel_studio/api/app.py` — 79 行，路由表
 5. `src/postel_studio/api/frames.py` — 121 行，纯函数，最好读
 6. `src/postel_studio/api/gateway.py` — 150 行，网关
-7. `src/postel_studio/web/assets.py` — 267 行，页面 + 内联 JS（JS 从 `<script>` 开始看）
-8. `tests/test_gateway_inprocess.py` — 看一个「真端口真连接」的测试怎么写
+7. `src/postel_studio/domain/models.py` — 104 行，纯函数，S3 的 id 规则
+8. `src/postel_studio/gitops/repo.py` — 197 行，**先读模块 docstring 的三条硬约束**
+9. `src/postel_studio/storage/db.py` — 226 行，schema v1 + upsert
+10. `src/postel_studio/api/repository.py` — 164 行，S3 的业务编排
+11. `src/postel_studio/web/assets.py` — 465 行，页面 + 内联 JS（JS 从 `<script>` 开始看）
+12. `tests/test_bind.py` — 一条真实的端到端：真实 git + 真实 SQLite + 真实 WebSocket
+13. `tests/test_gateway_inprocess.py` — 看一个「真端口真连接」的测试怎么写

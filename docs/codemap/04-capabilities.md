@@ -104,6 +104,42 @@
 | token 不进 server.json | `api/server.py:213-216`（只放 `tokenFingerprint`） |
 | 由谁守住 | `test_gateway.py::test_ticket_never_reaches_kernel_logs`、`::test_page_does_not_carry_the_long_term_token`、`test_server_boot.py::test_server_json_does_not_carry_secrets_or_token` |
 
+### C11 · 绑定本地仓库（`repo.bind`）—— S3
+
+| 项 | 位置 |
+|---|---|
+| 用户路径 | 左栏输入框粘绝对路径 → 点「绑定」→ 左栏出现「名称 / 默认分支」 |
+| 前端入口 | `web/assets.py:266` `submitBind()`（真 `<form>`，回车也可） |
+| 方法表 | `api/gateway.py:109` `dispatch()` 的 `repo.bind` 分支 |
+| 业务编排 | `api/repository.py:115` `RepositoryService.bind()` |
+| 路径校验 | 相对 → `BAD_CWD`（`repository.py:124`）；`resolve()` 见 `repository.py:128` |
+| **子目录校正** | `api/repository.py:61` `_bindable_root()`（D2，见 06 T25） |
+| 探测 | `gitops/repo.py:149` `origin_url()`、`:163` `default_branch()` |
+| id | `domain/models.py:100` `repo_id()` |
+| 落库 | `storage/db.py:151` `RepoStore.upsert()` |
+| 由谁守住 | `test_bind.py`（38 例，真实 git + 真 SQLite），端到端 `test_websocket_bind_then_list_returns_the_repo` |
+| ⚠️ UI 行为 | 同上：**pytest 里只有文本断言**，验收 1–4 靠人工浏览器（T9） |
+
+### C12 · 左栏仓库列表（`repo.list`）
+
+| 项 | 位置 |
+|---|---|
+| 用户路径 | 页面加载 / 重连成功后自动拉一次 |
+| 前端 | `web/assets.py:257` `loadRepos()` → `:237` `renderRepos()` |
+| 方法表 | `api/gateway.py:111` |
+| 业务 | `api/repository.py:111` `RepositoryService.list()` |
+| 读库 | `storage/db.py:131` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
+| 由谁守住 | `test_bind.py::test_list_returns_array_payload_with_camel_case_keys`、`::test_data_survives_reopening_the_store` |
+
+### C13 · 「没连上」与「没有仓库」可区分（D1）
+
+| 项 | 位置 |
+|---|---|
+| 用户路径 | 内核不在 / 断连时，左栏仓库区显示「已断开：内核没有连着，仓库列表未知」，**不显示**空态 |
+| 状态源 | `web/assets.py:217` `setRepoState()` → `#repos[data-state]` |
+| 显隐规则 | `web/assets.py:95-135` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
+| 由谁守住 | **没有 pytest**。人工浏览器：CDP 断网 → 读 DOM → 恢复 → 点重连（见 06 T27） |
+
 ---
 
 ## 2. 常见任务 → 文件
@@ -112,10 +148,12 @@
 
 ```
 ① api/frames.py            不一定要动（帧形状已够用）
-② api/gateway.py:92        dispatch() 加一个分支
+② api/gateway.py:103       dispatch() 加一个分支（**别把业务写进来**，转手给 handler 模块）
 ③ docs/design/07-api-contract.md §2   登记方法签名
 ④ tests/test_gateway.py    加一个往返用例 + 一个反例（坏参数 → INVALID_PARAMS）
-⑤ 若错误码是新的          frames.py 常量 + 07 §1.3 表
+⑤ 若错误码是新的          frames.py 常量 + 07 §1.3 表（**S3 D6：不许新造码**，先改表）
+⑥ 把该方法的 matcher 从 tests/test_gateway.py::test_unknown_method_is_unknown_method_not_subscribe
+                           的反例清单里**拿掉**（S3 实现 repo.bind 时踩过）
 ```
 
 **注意**：方法多到 6~8 个时 `dispatch()` 的 `if` 链该改注册表，但现在别提前抽象。
@@ -141,10 +179,29 @@
 ### 加一个状态文件
 
 ```
-① storage/paths.py        路径函数 + 写/读/删
+① storage/paths.py        路径函数 + 写/读/删 + 模块级文件名常量（唯一事实源）
 ② 05-security §4.1        权限表登记
 ③ tests/                  权限断言（0600）
-④ api/server.py           在 _run 的 finally 里清理
+④ api/server.py           在 _run 的 finally 里清理（用户数据不清理，见 state.db）
+⑤ docs/codemap/01-overview.md §4 的状态根表
+```
+
+### 加一张表 / 加一列（S3 起）
+
+```
+① storage/db.py           _MIGRATIONS **append** 一段 DDL + SCHEMA_VERSION +1（不改历史条目）
+② _row_to_repo / 新映射    类型收敛只在这里，别让 sqlite3.Row 漏出去
+③ 06-data-model §2 的表   snake_case 落盘、camelCase 帧层，转换只在 api/* 的边界
+④ 写入语义                先写 Clear 的 SQL（UPDATE / INSERT 三步），别用 ON CONFLICT 猜（T26）
+```
+
+### 加一个 git 探测
+
+```
+① gitops/repo.py          用 run_git()（字面数组/无 shell/超时/显式 root=）
+② **不要**自己 subprocess.run —— 允许根（D4）只有一处实现
+③ 用 `rev-parse --show-toplevel` 判"是不是仓库"？**别**，读 06 T25
+④ tests/test_bind.py      真实 git init 的临时仓库，不 mock
 ```
 
 ### 改启动顺序 / 信号处理
@@ -161,12 +218,13 @@
 
 | Issue | 用户看到什么 | 会新增的东西 | 影响本目录 |
 |---|---|---|---|
-| S3 | 填仓库路径 → 左栏出现仓库 | `git/`、路径校验、`PATH_OUTSIDE_ROOT` | 新增 `03-modules/git.md`；**L0 第一次碰子进程** |
-| S4 | 分支列表 | 同上 | |
+| ~~S3~~ | **已完成**：填仓库路径 → 左栏出现仓库 | `gitops/`、`storage/db.py`、`domain/`、`api/repository.py` | 新增 4 页模块页；**L0 第一次碰子进程与 SQLite** |
+| S3 遗留 | `repo.unbind` / `REPO_NOT_BOUND` 的帧方法入口 / S4 的 `repo.branches` | — | 见 06 U9（`repo_id` 会变）、U10（store 不关） |
+| S4 | 分支列表 | `gitops` 复用 `run_git(root=已绑定 path)` | 分支名白名单（05 §3.3）首次出现 |
 | S5 | diff 视图 | patch 生成 + 截断 | |
 | S6 | Bot 与 charter | `memory/`、`store/` | 新增两页 |
 | S7 | worktree 路径 | `git/worktree` | |
-| S8 | 创建 Bot | SQLite 首次出现 | **新增持久化层，01-overview 的「单进程无库」图失效** |
+| S8 | 创建 Bot | `storage/db.py` 加 `bots` 表（第二次迁移） | 01-overview 已是"单进程 + 一个库"，再改一张表图 |
 | S9 | 检测 Agent | `agent/`（ACP 握手） | **第二个进程模型出现，01-overview 重画** |
 | S10 | 派活跑起来 | 任务状态机、流式输出 | `dispatch()` 会明显变长 |
 | S11 | 收件箱出现候选 | diff → candidate | |

@@ -7,11 +7,21 @@ S2 起页面里有内联 JS 与一次 WebSocket：`server.json` 里的 `wsPath` 
 前端「断线判定」只靠两种信号：socket 的 `close`/`error` 事件，以及 `HEARTBEAT_INTERVAL_MS`
 到点还没收到回包（内核被 SIGKILL 时对端不会发 close 帧，只有心跳能发现）。两个参数都是
 具名常量，且都远小于验收要求的 3 秒上限。
+
+S3 起左栏出现「仓库」区（03-ui-spec §2：左栏上 Bot / 下 仓库；本刀只有仓库）。三条约束：
+
+- 数据只从 WS 帧拿（`repo.list` / `repo.bind`），前端**不**直接读 git、也不开新 HTTP 路由
+  （S3 D1）。
+- **「没连上」与「没有仓库」必须可区分**：连上之前仓库区显示「正在加载」/「已断开」，
+  只有在连接就绪且 `repo.list` 真的返回空数组时才显示「还没有绑定仓库」（D1 的可观测后果）。
+- 错误是**可读中文**（`NOT_A_REPO` → 「不是 git 仓库」），由错误**码**映射，不看 `message`。
+  错误码不在表里时显示通用文案 —— 不把服务端 `message` 直接塞进页面（05 §4.2 的同一精神）。
 """
 
 from __future__ import annotations
 
 import html
+import json
 from typing import Final
 
 # 前端行为参数：测试断言 `HEARTBEAT_INTERVAL_MS + RECONNECT_DELAY_MS < 3000`。
@@ -28,7 +38,20 @@ REQUIRED_PARAMS: Final = (
     "%%WS_PATH%%",
     "%%HEARTBEAT_INTERVAL_MS%%",
     "%%RECONNECT_DELAY_MS%%",
+    "%%ERROR_TEXT%%",
+    "%%ERROR_TEXT_FALLBACK%%",
 )
+
+# 07 §1.3 的错误码 → 用户可读文案。**按码映射，不读 `message`**（07 §1.3：文案可改，码不能改）。
+# 本刀会遇到的四个码各有一句人话；表外的码走通用文案，不把服务端原文贴到页面上。
+ERROR_TEXT: Final = {
+    "NOT_A_REPO": "不是 git 仓库",
+    "BAD_CWD": "请输入绝对路径（不能是相对路径或 ~ 开头的路径）",
+    "INVALID_PARAMS": "路径参数不合法",
+    "ADAPTER_UNAVAILABLE": "内核找不到 git 命令",
+    "INTERNAL": "内核处理失败，请查看启动它的终端",
+}
+ERROR_TEXT_FALLBACK: Final = "绑定失败"
 
 INDEX_HTML: Final = """<!doctype html>
 <html lang="zh-CN">
@@ -69,6 +92,47 @@ INDEX_HTML: Final = """<!doctype html>
   #content.stale::after { content: "数据已过期"; position: absolute; top: -14px; right: 0;
     padding: 1px 8px; font-size: 12px; color: #0f1115; background: #d29922;
     border-radius: 999px; }
+  /* 左栏仓库区（03-ui-spec §2）。判定一律走 `data-state`：**不用 JS 逐个开关 display**
+     （06-pitfalls T8：`style.display = ""` 会回退到 CSS 的 `none`）。 */
+  #repos { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #repos h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .08em;
+    color: #8b95a7; text-transform: uppercase; }
+  #bind-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  #bind-path { min-width: 0; padding: 6px 9px; font: inherit; font-size: 13px; color: #e6e9ef;
+    background: #0f1115; border: 1px solid #39404f; border-radius: 6px; }
+  #bind-path:focus { outline: none; border-color: #58627a; }
+  #bind-path:disabled { opacity: .45; cursor: not-allowed; }
+  #bind-button { padding: 6px 12px; font: inherit; font-size: 13px; color: #0f1115;
+    background: #3fb950; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+  #bind-button:disabled { opacity: .45; cursor: progress; }
+  #repos[data-state="disconnected"] #bind-form,
+  #repos[data-state="loading"] #bind-form { pointer-events: none; }
+  #repos[data-state="disconnected"] #bind-path,
+  #repos[data-state="disconnected"] #bind-button,
+  #repos[data-state="loading"] #bind-path,
+  #repos[data-state="loading"] #bind-button { opacity: .45; }
+  #repos-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px;
+    color: #ffb4ab; background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
+    border-radius: 6px; }
+  /* 列表与状态栏各管一件事：data-state 决定谁在场，`display` 在 CSS 里写死 */
+  #repo-list { list-style: none; margin: 12px 0 0; padding: 0; }
+  #repo-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid #1f2430; }
+  #repo-list li:first-child { border-top: none; }
+  .repo-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .repo-meta { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
+  #repo-empty { margin: 12px 0 0; font-size: 13px; color: #8b95a7; }
+  #repo-state { margin: 12px 0 0; font-size: 13px; color: #d29922; }
+  #repos[data-state="disconnected"] #repo-state,
+  #repos[data-state="loading"] #repo-state { display: block; }
+  #repos[data-state="disconnected"] #repo-list,
+  #repos[data-state="loading"] #repo-list { display: none; }
+  #repos[data-state="disconnected"] #repo-empty,
+  #repos[data-state="loading"] #repo-empty { display: none; }
+  #repos[data-state="ready"] #repo-state { display: none; }
+  /* 空列表是"连接着且真的没有仓库"才能说的话：`#repo-empty` 只在 ready 且无行时由 JS 打开 */
+  #repos[data-state="disconnected"] #repos-error,
+  #repos[data-state="disconnected"] #note-repos { display: none; }
+  #note-repos { margin: 10px 0 0; font-size: 12px; color: #8b95a7; }
 </style>
 </head>
 <body>
@@ -88,6 +152,21 @@ INDEX_HTML: Final = """<!doctype html>
       <dt>stateRoot</dt><dd>%%STATE_ROOT%%</dd>
     </dl>
   </div>
+  <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
+       「还没有仓库」（S3 D1：空 与 没连上 必须可区分）。 -->
+  <section id="repos" data-state="loading" aria-live="polite">
+    <h2>仓库</h2>
+    <form id="bind-form" autocomplete="off">
+      <input id="bind-path" type="text" spellcheck="false" placeholder="/绝对路径/到/仓库"
+             aria-label="仓库路径">
+      <button id="bind-button" type="submit">绑定</button>
+    </form>
+    <p id="repos-error" role="alert" hidden></p>
+    <p id="repo-state">正在加载…</p>
+    <ul id="repo-list"></ul>
+    <p id="repo-empty" hidden>还没有绑定仓库，在上面的输入框里粘贴仓库路径。</p>
+    <p id="note-repos">同一路径重复绑定不会产生第二行；粘贴子目录会绑定到仓库根。</p>
+  </section>
 </main>
 <script>
 (function () {
@@ -95,6 +174,9 @@ INDEX_HTML: Final = """<!doctype html>
   var HEARTBEAT_INTERVAL_MS = %%HEARTBEAT_INTERVAL_MS%%;  // 到点没回包就判死
   var RECONNECT_DELAY_MS = %%RECONNECT_DELAY_MS%%;        // 点「重连」到发起的间隔
   var CONNECT_TIMEOUT_MS = 2000;                         // 握手超时，也算失败
+  // 错误码 → 可读中文（07 §1.3；由 render_index 从 ERROR_TEXT 注入，只含静态文案）
+  var ERROR_TEXT = %%ERROR_TEXT%%;
+  var ERROR_TEXT_FALLBACK = "%%ERROR_TEXT_FALLBACK%%";  // 静态常量，不来自服务端
 
   var metaPath = document.querySelector('meta[name="postel-ws-path"]');
   var metaTicket = document.querySelector('meta[name="postel-handshake"]');
@@ -108,6 +190,18 @@ INDEX_HTML: Final = """<!doctype html>
   var beatTimer = null;   // 心跳定时器
   var connectTimer = null;
   var awaitingBeatId = null;
+  var pending = {};       // 请求 id → 回调（仓库区要拿 res 里的数据 / 错误码）
+  var bindPending = false;
+
+  // 仓库区元素
+  var reposEl = document.getElementById("repos");
+  var bindForm = document.getElementById("bind-form");
+  var bindInput = document.getElementById("bind-path");
+  var bindButton = document.getElementById("bind-button");
+  var reposError = document.getElementById("repos-error");
+  var repoState = document.getElementById("repo-state");
+  var repoList = document.getElementById("repo-list");
+  var repoEmpty = document.getElementById("repo-empty");
 
   function setState(state, text) {
     statusEl.dataset.state = state;
@@ -115,6 +209,80 @@ INDEX_HTML: Final = """<!doctype html>
     button.style.display = state === "disconnected" ? "inline-block" : "none";
     button.disabled = false;
     content.classList.toggle("stale", state !== "connected");
+    setRepoState(state, text);
+  }
+
+  // 「没连上」≠「没有仓库」（D1）：连接没就绪时只显示状态文案，**不**显示空列表提示。
+  // 具体的显隐由 CSS 的 `#repos[data-state=…]` 决定；这里只改一个属性（T8：别逐个 style.display）。
+  function setRepoState(state, text) {
+    if (state === "loading") { repoState.textContent = "正在加载…"; }
+    else if (state === "reconnecting") { repoState.textContent = "正在连接内核…"; }
+    else if (state === "connected") { repoState.textContent = "已连接"; }
+    else { repoState.textContent = "已断开：内核没有连着，仓库列表未知"; }
+    reposEl.dataset.state = state === "connected" ? "ready" : state;
+    if (state === "connected") { loadRepos(); return; }
+    repoEmpty.hidden = true;
+    reposError.hidden = true;
+    bindInput.disabled = true;
+    bindButton.disabled = true;
+  }
+
+  // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
+  function errorText(code) { return ERROR_TEXT[code] || ERROR_TEXT_FALLBACK; }
+
+  function showRepoError(text) { reposError.textContent = text; reposError.hidden = false; }
+  function clearRepoError() { reposError.textContent = ""; reposError.hidden = true; }
+
+  // 一行仓库：名称 + 默认分支（验收 1 要求两个都要显示）
+  function renderRepos(list) {
+    repoList.textContent = "";               // 先清空再重建，避免旧行残留
+    for (var i = 0; i < list.length; i++) {
+      var repo = list[i] || {};
+      var li = document.createElement("li");
+      li.dataset.repoId = String(repo.repoId || "");
+      var name = document.createElement("span");
+      name.className = "repo-name";
+      name.textContent = String(repo.name || "（未命名）");
+      var meta = document.createElement("span");
+      meta.className = "repo-meta";
+      meta.textContent = "默认分支 " + (repo.defaultBranch || "（未知）");
+      li.appendChild(name);
+      li.appendChild(meta);
+      repoList.appendChild(li);
+    }
+    // 只有「真的拿到了一个（可能为空的）列表」时才能说「还没有仓库」
+    repoEmpty.hidden = list.length !== 0;
+  }
+
+  function loadRepos() {
+    bindInput.disabled = false;
+    bindButton.disabled = false;
+    if (!request("repo.list", {}, function (err, data) {
+      if (err) { showRepoError("读取仓库列表失败（" + err + "）"); return; }
+      renderRepos(Array.isArray(data) ? data : []);
+    })) { showRepoError("连接尚未就绪"); }
+  }
+
+  function submitBind() {
+    var path = bindInput.value.trim();
+    clearRepoError();
+    if (!path) { showRepoError("请输入仓库路径"); return; }
+    if (bindPending) { return; }
+    bindPending = true;
+    bindButton.disabled = true;
+    var id = request("repo.bind", { path: path }, function (err, data) {
+      bindPending = false;
+      bindButton.disabled = reposEl.dataset.state !== "ready";
+      if (err) { showRepoError(errorText(err)); return; }   // 可读中文，不是 console.warn
+      bindInput.value = "";
+      if (data && typeof data.name === "string") { repoEmpty.hidden = true; }
+      loadRepos();                                          // 重读列表：重复绑定靠它去重
+    });
+    if (id === null) {
+      bindPending = false;
+      bindButton.disabled = false;
+      showRepoError("连接尚未就绪");
+    }
   }
 
   // 「怎么办」提示：只在需要人工介入时出现（端口变了 / 内核没起来），连上就清掉。
@@ -129,6 +297,8 @@ INDEX_HTML: Final = """<!doctype html>
   function fail() {          // 唯一的「向下」出口：三态里只有已断开是终态
     clearTimers();
     socket = null;
+    pending = {};            // 断连后没人会回这些包了，别让回调永远挂着
+    bindPending = false;
     setState("disconnected", "已断开");
   }
 
@@ -137,6 +307,14 @@ INDEX_HTML: Final = """<!doctype html>
     var id = "c" + (++seq);
     try { socket.send(JSON.stringify({ type: "req", id: id, method: method, params: params })); }
     catch (e) { return null; }
+    return id;
+  }
+
+  // 一次带回调的请求：成功回调拿 `data`，失败回调拿**错误码**（不拿 message → 07 §1.3）
+  function request(method, params, done) {
+    var id = send(method, params);
+    if (id === null) { return null; }
+    pending[id] = done;
     return id;
   }
 
@@ -149,8 +327,15 @@ INDEX_HTML: Final = """<!doctype html>
       if (statusEl.dataset.state !== "connected") { setState("connected", "已连接"); }
       return;
     }
-    if (frame && frame.type === "res" && !frame.ok && frame.error) {
-      console.warn("网关返回错误", frame.error.code);
+    if (!frame || frame.type !== "res" || !frame.id || !pending[frame.id]) { return; }
+    var done = pending[frame.id];
+    delete pending[frame.id];
+    if (frame.ok) {
+      var result = frame.result || {};
+      done(null, result.data);
+    } else {
+      var code = (frame.error && frame.error.code) || "INTERNAL";
+      done(String(code), null);
     }
   }
 
@@ -230,6 +415,7 @@ INDEX_HTML: Final = """<!doctype html>
   }
 
   button.addEventListener("click", reconnect);
+  bindForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitBind(); });
   // 断连期间**不自动重连**（禁止事项：不得静默重试而不改 UI 状态），只如实显示「已断开」。
   connect(metaTicket ? metaTicket.content : "");
 }());
@@ -237,6 +423,15 @@ INDEX_HTML: Final = """<!doctype html>
 </body>
 </html>
 """
+
+
+def error_text_json() -> str:
+    """把 `ERROR_TEXT` 序列化成 **JS 字面量**（`json.dumps` 的输出就是合法 JS 对象）。
+
+    走占位符而不是把文案硬写在 JS 里：错误码与文案的对照只有一处（Python 侧可被测试读到），
+    页面不必在两种语言里各维护一份映射。`ensure_ascii=False` 让中文在源码里可读。
+    """
+    return json.dumps(ERROR_TEXT, ensure_ascii=False)
 
 
 def render_index(
@@ -259,6 +454,9 @@ def render_index(
         "%%WS_PATH%%": html.escape(ws_path),
         "%%HEARTBEAT_INTERVAL_MS%%": str(HEARTBEAT_INTERVAL_MS),
         "%%RECONNECT_DELAY_MS%%": str(RECONNECT_DELAY_MS),
+        "%%ERROR_TEXT%%": error_text_json(),
+        # 静态文案（本模块常量），不来自服务端；仍按「外部输入一律转义」的习惯转义
+        "%%ERROR_TEXT_FALLBACK%%": html.escape(ERROR_TEXT_FALLBACK),
     }
     assert set(values) == set(REQUIRED_PARAMS), "占位符清单与替换表不一致"
     page = INDEX_HTML

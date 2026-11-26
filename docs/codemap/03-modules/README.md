@@ -7,12 +7,16 @@
 | 层 | 模块页 | 源文件 | 行数 | 一句话 |
 |---|---|---|---|---|
 | L0 | [entry](entry.md) | `src/postel_studio/__init__.py` | 55 | CLI 入口，解析 `serve` / `version` |
-| L0 | [paths](paths.md) | `src/postel_studio/storage/paths.py` | 195 | 状态根、锁、原子写、权限 |
+| L0 | [paths](paths.md) | `src/postel_studio/storage/paths.py` | 203 | 状态根、锁、原子写、权限 |
+| L0 | [domain](domain.md) | `src/postel_studio/domain/models.py` | 104 | `Repo` 实体、origin 归一化、`repo_id`（**无 IO**） |
+| L0 | [gitops](gitops.md) | `src/postel_studio/gitops/repo.py` | 197 | git 只读探测（子进程）——**唯一起 git 的地方** |
+| L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 226 | `state.db`、schema 迁移、`RepoStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 256 | 进程生命周期、信号、日志 |
-| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 79 | 路由表（3 个 HTTP 路由 + 网关挂载） |
-| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 150 | WS 认证与帧分派 |
+| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 94 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store 并注入 |
+| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 165 | WS 认证与帧分派（4 个方法） |
+| L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 164 | `repo.bind` / `repo.list` 的业务编排（**不碰 fastapi**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 121 | 帧编解码，纯函数 |
-| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 267 | 页面 HTML + 内联 JS |
+| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 465 | 页面 HTML + 内联 JS（含 S3 的左栏仓库区） |
 
 **必须有但我还没单列的**（内容已在别处）：
 

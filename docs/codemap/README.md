@@ -30,9 +30,13 @@ README.md            ← 你在读的索引页；先看这一页决定往下看�
    ├─ 03-modules/         逐模块：职责、关键决策、被推翻的方案
    │     ├─ entry.md          └ __init__.py（CLI 入口）
    │     ├─ server.md         └ api/server.py（生命周期/信号/日志）
-   │     ├─ app.md            └ api/app.py（路由表）
+   │     ├─ app.md            └ api/app.py（路由表 + 装配）
    │     ├─ gateway.md        └ api/gateway.py（WS 网关）
+   │     ├─ repository.md     └ api/repository.py（repo.* 业务编排）
    │     ├─ frames.md         └ api/frames.py（帧编解码）
+   │     ├─ domain.md         └ domain/models.py（Repo 实体/repo_id）
+   │     ├─ gitops.md         └ gitops/repo.py（git 子进程）
+   │     ├─ storage-db.md     └ storage/db.py（state.db）
    │     ├─ paths.md          └ storage/paths.py（状态根/文件 IO）
    │     └─ assets.md         └ web/assets.py（页面与前端逻辑）
    ├─ 04-capabilities.md  按用户可见能力反查代码位置
@@ -59,11 +63,15 @@ README.md            ← 你在读的索引页；先看这一页决定往下看�
 | `api/server.py` | ✅ 完整 | 含信号竞态、日志可见性两处非显然逻辑 |
 | `api/app.py` / `api/gateway.py` / `api/frames.py` | ✅ 完整 | |
 | `storage/paths.py` | ✅ 完整 | |
-| `web/assets.py` | ⚠️ 部分 | JS 状态机有注释索引；**DOM 行为无自动化测试**，见 06 §前端 |
+| `storage/db.py` | ✅ 完整 | S3 新增；只有一张表，迁移机制已立 |
+| `gitops/` | ✅ 完整 | S3 新增；只读探测 + 子进程外壳 |
+| `domain/` | ✅ 完整 | S3 新增；无 IO，纯函数 |
+| `api/repository.py` | ✅ 完整 | S3 新增；两个方法 |
+| `web/assets.py` | ⚠️ 部分 | JS 状态机有注释索引；**DOM 行为无自动化测试**，见 06 §前端（S3 的左栏同样只靠文本断言 + 人工浏览器） |
 | `tests/` | ⚠️ 部分 | 只索引「哪个测试守哪条约束」，不复述用例 |
 | `scripts/check.sh` | ✅ 简短 | 门禁入口，规则见 [05 §门禁](05-change-impact.md#门禁) |
 | `scripts/gate-codemap.sh` + `scripts/hooks/pre-commit` | ✅ 简短 | 本目录的**强制执行者**；改它必须同时跑 `tests/test_gate_codemap.py` |
-| **尚未存在**：调度、ACP、worktree、权限判定、SQLite、记忆注入 | ⛔ 无 | S3 起逐步出现；**新模块必须同时新增本目录对应条目** |
+| **尚未存在**：调度、ACP、worktree、权限判定、记忆注入、订阅 | ⛔ 无 | SQLite / git 已在 S3 出现；**新模块必须同时新增本目录对应条目** |
 
 ## 维护规则（合并前的硬要求）
 

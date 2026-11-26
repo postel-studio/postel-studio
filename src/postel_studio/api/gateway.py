@@ -1,7 +1,11 @@
 """网关：一次性 handshake ticket → WebSocket → 帧分派（S2 D1/D3/D4/D5）。
 
-**只实现两个方法**（D3）：`system.echo` 与 `system.health`，其余一律 `UNKNOWN_METHOD`；
-订阅 / topic 机制在 S2 **故意不存在**，不要在这里提前长出来。
+方法表（`dispatch()`）：S2 的 `system.echo` / `system.health`，S3 加了 `repo.bind` / `repo.list`
+（S3 D1：**只走 WS 帧**，不新开 HTTP 路由）。其余一律 `UNKNOWN_METHOD`；订阅 / topic 机制
+在 S2 **故意不存在**，S3 也没有加——不要在这里提前长出来。
+
+业务处理函数**不在本模块实现**：它们由 `app` 侧构造后经 `Providers` 注入（S2 R3 的教训，
+06-pitfalls T14：网关不反向 import `app`，也不要为了绕环写函数内 import）。
 
 认证走一次性 ticket（05 §1.1 的 S2 修订）：浏览器 `new WebSocket()` 设不了
 `Authorization` 头，故浏览器侧不能用 Bearer。ticket 由 `/` 页面注入、60 秒过期、
@@ -78,9 +82,16 @@ class ConnectionState:
 
 @dataclass(frozen=True)
 class Providers:
-    """从 `app` 侧注入的能力（消环用：`app` import 本模块，本模块不得反向 import `app`）。"""
+    """从 `app` 侧注入的能力（消环用：`app` import 本模块，本模块不得反向 import `app`）。
+
+    `repo_bind` / `repo_list` 是 S3 加的两个业务入口，签名刻意用 `dict → dict`：闸门只认
+    「帧的参数对象进、载荷对象出」，网关不知道仓库、数据库、git 的存在。
+    抛 `frames.FrameError` 时网关原样转发它的 `code` / `message`（D6 的稳定码）。
+    """
 
     health: Callable[[], dict[str, object]]
+    repo_bind: Callable[[dict[str, object]], dict[str, object]]
+    repo_list: Callable[[], list[dict[str, object]]]
 
 
 def active_connection_count() -> int:
@@ -95,6 +106,10 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return params
     if method == "system.health":
         return providers.health()
+    if method == "repo.bind":  # 07 §2.2 / 07 §4.1；S3 D1：走帧，不开 HTTP 路由
+        return providers.repo_bind(params)
+    if method == "repo.list":  # 07 §2.2：无参数，返回 repo[]（载荷是**数组**，不是 {data:[...]}）
+        return providers.repo_list()
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 
