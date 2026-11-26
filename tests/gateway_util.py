@@ -167,3 +167,87 @@ def frame_seq(frame: dict[str, object]) -> int:
     seq = frame_result(frame)["seq"]
     assert isinstance(seq, int) and not isinstance(seq, bool), seq
     return seq
+
+
+# ---------------------------------------------------------------------------
+# 进程内内核（S3 加）：真 uvicorn + 真端口 + 真 WebSocket，但在**当前进程**里跑
+#
+# 为什么需要：`Kernel`（上面的子进程版）用的是 `.venv/bin/postel-studio`，装载的是**已安装**
+# 的包、并且 `env.pop("PYTHONPATH")`，所以任何"改源码再跑测试"的注入都改不到它。
+# `tests/test_reverse_checks.py` 要验证"改 gateway 后某条测试会红"，就需要一个在**被改过的
+# 源码**下运行、但又真的走网络的内核。做法抄自 `test_gateway_inprocess.py:InProcessKernel`。
+# ---------------------------------------------------------------------------
+
+
+class InProcessKernel:
+    """后台线程里跑一个真 uvicorn（真 socket、真端口），`with` 退出时收摊。"""
+
+    def __init__(self, ws_path: str) -> None:
+        import socket
+        import threading
+        import time
+
+        import uvicorn
+
+        from postel_studio.api.app import create_app
+        from postel_studio.api.server import log_config
+
+        # socket 的所有权交给 uvicorn（它负责关）；不能用 closing()，否则会在它拿走之前关掉
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(2048)
+        self.host = "127.0.0.1"
+        self.port = int(sock.getsockname()[1])
+        self.ws_path = ws_path
+        config = uvicorn.Config(
+            create_app(ws_path, host=self.host, port=self.port),
+            log_config=log_config(),
+            log_level="warning",
+            access_log=False,
+            lifespan="off",
+            timeout_graceful_shutdown=5,
+        )
+        self.server = uvicorn.Server(config)
+        self._thread = threading.Thread(target=lambda: self.server.run(sockets=[sock]), daemon=True)
+        self._thread.start()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if getattr(self.server, "started", False):
+                break
+            time.sleep(0.02)
+        else:  # pragma: no cover - 端口/uvicorn 出问题才会走到
+            raise AssertionError("进程内内核 10s 内没起来")
+
+    def http(self) -> httpx.Client:
+        return httpx.Client(base_url=f"http://{self.host}:{self.port}", timeout=5.0)
+
+    def fetch_page(self) -> tuple[str, str]:
+        """取 `/`，抠出 `(ticket, ws_path)`（与 `Kernel.fetch_page` 同义）。"""
+        with self.http() as client:
+            response = client.get("/")
+        assert response.status_code == 200, response.status_code
+        return parse_page(response.text)
+
+    def ws_url(self, ticket: str, *, path: str | None = None) -> str:
+        return f"ws://{self.host}:{self.port}{path or self.ws_path}?ticket={ticket}"
+
+    def stop(self) -> None:
+        self.server.should_exit = True
+        self._thread.join(timeout=EXIT_TIMEOUT)
+        assert not self._thread.is_alive(), "进程内内核没在超时内退出"
+
+    def __enter__(self) -> InProcessKernel:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.stop()
+
+
+def in_process_kernel(ws_path: str) -> InProcessKernel:
+    """`with in_process_kernel("/gateway/x") as k: ...`（与 `Kernel(home)` 的用法对齐）。"""
+    return InProcessKernel(ws_path)

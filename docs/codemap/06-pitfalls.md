@@ -131,6 +131,22 @@ INFO: 127.0.0.1:51234 - "WebSocket /gateway/xxx?ticket=d9f3b91abf...8ad" [accept
 **正解**：显式给值 —— `button.style.display = state === "disconnected" ? "inline-block" : "none"`。
 `test_page_has_reconnect_button` 断言的就是这一整句。
 
+**S3 的写法（左栏仓库区）**：需要"按状态显隐一整组元素"时，**不要**在 JS 里逐个赋
+`style.display`，只改父容器的一个 `data-state` 属性，显隐规则全部写在 CSS 里：
+
+```css
+#repos[data-state="loading"] #repo-list { display: none; }   /* CSS 说了算 */
+#repos[data-state="ready"]   #repo-state { display: none; }
+```
+
+```js
+reposEl.dataset.state = state === "connected" ? "ready" : state;   // ✅ 只改这一个属性
+```
+
+这样不会有"某一路忘了恢复 display"的半开状态，也不会踩 T8（CSS 里的 `display:none`
+被内联的 `""` 回退继承）。`hidden` 属性（`#repos-error` / `#repo-empty`）也只由 JS 切
+`true/false`，不从 `""` 开始。
+
 ### T9 ⚠️ 前端 DOM 行为没有自动化测试
 
 **现状**：所有前端测试都是**文本断言**（`'classList.toggle(...)' in page`）。
@@ -306,6 +322,200 @@ CI 默认 `actions/checkout` 是 `fetch-depth: 1`，没有 `origin/main`，门�
 
 ---
 
+---
+
+## 用户数据与子进程（S3 首次出现）
+
+### T25 ❌ `git -C <dir> rev-parse --show-toplevel` 会 discover 到父目录 → 普通目录被"绑定成功"（已修）
+
+**现象**：粘 `/tmp`（一个普通目录）点「绑定」→ 成功，左栏出现 `demo`。
+
+**原因**：`rev-parse --show-toplevel` **不是**"这里是不是仓库"的判据，它是"这里**属于**哪个
+工作区"。git 会从 `-C` 给的目录一路向上找 `.git`：
+
+```bash
+$ mkdir -p /tmp/ps/outer && git -C /tmp/ps/outer init -q
+$ mkdir -p /tmp/ps/plain
+$ git -C /tmp/ps/plain rev-parse --show-toplevel
+/tmp/ps/plain          # 普通目录自带 .git → 是根
+$ mkdir -p /tmp/ps/outer/sub
+$ git -C /tmp/ps/outer/sub rev-parse --show-toplevel
+/tmp/ps/outer          # 子目录 → 父仓库根（这是 D2 要的正确行为）
+```
+
+两条行为共用一个命令，但语义不同。测试里更糟：`tmp_path` 下必然有一堆平级仓库，
+于是**每个**普通目录都会被答"是"。终态修法试了三版：
+
+| 版本 | 做法 | 结果 |
+|---|---|---|
+| v1 | `repo_root()` 返回非 `None` 就算仓库 | ❌ 普通目录、`/tmp` 都过了 |
+| v2 | 再要求 `root == target` | ❌ 子目录校正（D2）全断，粘 `proj/src` 变 `NOT_A_REPO` |
+| v3 | 要求 `target.is_relative_to(root.parent)`（"根在目标祖先链的紧邻一级"） | ❌ `deep` 的祖先链就含 `root.parent`，恒真 |
+| **v4（现行）** | **`target/.git` 存在 → 是根；否则逐级向上找第一个带 `.git` 的祖先；都不是 → `NOT_A_REPO`** | ✅ |
+
+**已修**：`api/repository.py:_bindable_root()` —— 只看**文件系统**（`path/.git` 是否存在），
+**不拿 git 的 discover 当判据**；裸仓库才问 git（`rev-parse --is-bare-repository`）。
+
+**别再踩**：
+- `gitops.repo_root()` / `is_repo()` 的 docstring 里都写了"别单独当判据"，不是客套话。
+- 回归锁：`test_bind.py::test_root_level_plain_directory_that_contains_a_repo_is_not_a_repo`，
+  它专门在一个普通目录下面建一个真仓库来制造歧义。
+- **接受的近似**：`outer/proj/plain/deep` 与 `outer/proj/src` 在路径上无法区分，前者会被
+  校到 `outer/proj`（见 U11）。这条如实记着，别假装解决了。
+
+### T26 ❌ SQLite 的 `ON CONFLICT` 只更新**命中那条约束**的列 → `repo_id` 静默不更新（已修）
+
+**现象**：仓库先无 origin 绑定，再 `git remote add origin` 重绑 → 返回值是新的 URL 哈希
+`89473a01e438`，但库里那一行的 `repo_id` 还是旧的路径哈希。**同一条记录，契约是两个 id。**
+
+**原因**（最小复现，不经过本项目代码）：
+
+```python
+SQL = (
+    "INSERT INTO repos VALUES (?,?,?,?,?) "
+    "ON CONFLICT(repo_id) DO UPDATE SET path=excluded.path "
+    "ON CONFLICT(path) DO UPDATE SET origin_url=excluded.origin_url"
+)
+c.execute(SQL, ("aaa", "/p", None, "main", 1.0))
+# 第二次命中的是 path 约束；repo_id 不在那个分支的 SET 里
+c.execute(SQL, ("bbb", "/p", "https://u", "main", 2.0))
+# 结果：[('aaa', '/p', 'https://u', 'main', 1.0)]   ← repo_id 仍是 aaa
+```
+
+`ON CONFLICT(path)` 分支只执行它自己 `DO UPDATE SET` 里列的列；`repo_id` 不在里面就不更新。
+（而且这条语句只允许"一个冲突目标命中"，两条 `ON CONFLICT` 是 SQLite 的扩展写法，
+真正的 upsert 想把 "id 冲突" 与 "path 冲突" 两件事都办掉，可读性也很差。）
+
+**已修**：`storage/db.py:RepoStore.upsert()` 换成**一个事务里的三步**——
+按 `path` 命中 → `UPDATE`（含 `repo_id`）；否则按 `repo_id` 命中 → `UPDATE`（含 `path`）；
+都没有 → `INSERT`。三行 SQL，每步都能单独读懂。
+
+**别再踩**：把 `upsert` 改回单条 `INSERT … ON CONFLICT` 之前，先跑
+`test_rebinding_after_origin_added_updates_the_row`。如果将来改了 D3 的 id 算法（U9），
+这条测试也要跟着改——因为它断言的是**当前 id 会变**，不是"id 永远不变"。
+
+### T27 ❌ 断连时的空列表会撒谎（已修）
+
+**现象（S3 初版设计时会踩）**：仓库区只在"连上"时渲染；断连时 `repo-list` 为空、`repo-empty`
+也不显示——看起来像"没有仓库"。
+
+**D1 的原话**：「若内核不在（连接断了），左栏就没有仓库列表。UI 必须显示「已断开」而不是空列表」。
+
+**已修**：`#repos` 有四个 `data-state`（`loading` / `reconnecting` / `ready` / `disconnected`），
+**初始值就是 `loading`**；只有 `ready` 时才显示列表与空态，其它三种状态显示一句状态文案
+（「已断开：内核没有连着，仓库列表未知」）并隐藏 `#repo-list` 与 `#repo-empty`
+（`assets.py:217` 的 `setRepoState()`）。
+
+**别再踩**：
+- 空态（「还没有绑定仓库」）**只能**在"真的拿到了一个数组"之后出现。
+- 浏览器验收时专门做了这一步：CDP 断网 → 读 DOM（`listVisible:false`、
+  `emptyVisible:false`、`stateText:"已断开：…"`）→ 恢复网络 → 点「重连」→ 列表回来。
+- pytest 里**没有**这个行为的自动化测试（T9 的老问题）。
+
+### T28 ⚠️ 测试环境的 `tmp_path` 下必然有别的仓库 —— 别拿它当"普通目录"
+
+这是 T25 的推论，单独列出来因为它坑人不只一次：**测试里构造"非 git 目录"时，
+不能只 `mkdir` 一个 `tmp_path/xxx`**，因为 `tmp_path` 的其他兄弟目录可能已经是仓库。
+S3 的 `repo_factory` 把仓库统一建在 `tmp_path/repos/` 下，而"非仓库"用例显式
+`shutil.rmtree(x / ".git")`，就是为了让意图（"这确实不是仓库"）不依赖运气。
+
+---
+
+## 审核退回（S3 复审）
+
+### T29 ❌ 粘 `.git` 内部路径会被**静默改绑到外层仓库**（审核发现，已修）
+
+**现象**（审核者构造，实测复现）：
+
+```
+粘 <repo>/.git          → 成功，落库 path = <repo>
+粘 <repo>/.git/objects  → 成功，落库 path = <repo>
+```
+
+**原因**：T25 的修法里那条"逐级向上找第一个带 `.git` 的祖先"——`.git/objects` 的祖先链上
+正好有 `<repo>/.git`，于是它被当成"`<repo>` 的子目录"校上去了。**D2 那个坑（用户以为绑了 A
+其实绑了 B）换了入口重现**：用户明确粘的是 `.git` 内部，系统不报错，还绑了别的东西。
+我自己的 U 清单里没有它，因为我的对照表只想到"普通目录"，没想到"仓库自己的实现细节"。
+
+**已修（第一版，有缺陷）**：`_inside_git_dir()` —— "目标自身或任何祖先的名字是 `.git`"
+→ `NOT_A_REPO`。**这一版本身是坏的，见 T31。** 判据最终落成"相对已确认的 `root`"：
+
+```python
+relative = target.relative_to(root)
+if any(part == ".git" for part in relative.parts):
+    return True
+```
+
+即：**从仓库根走到目标的那一段路里有没有 `.git`**。root 由 `_bindable_root()` 先求出，
+`_inside_git_dir(root, target)` 再判——判据必须拿到 root，不能只看绝对路径。
+
+| 路径 | root | 相对路径 | 判定 |
+|---|---|---|---|
+| `outer`（工作区根） | 它自己 | `""` | 能绑 |
+| `outer/src`（真子目录） | `outer` | `src` | 能绑（校到 `outer`） |
+| `outer/.git` / `outer/.git/objects` | `outer` | `.git` / `.git/objects` | **`NOT_A_REPO`** |
+| worktree 根（`.git` 是**文件**） | 它自己 | `""` | 能绑（**别把它一起打死**） |
+| `/tmp/edge/.git/workspace`（父目录叫 `.git` 的合法仓库） | 它自己 | `""` | **能绑（T31）** |
+
+**别再踩**：
+- 回归锁三条：`test_bind_git_directory_itself_is_not_a_repo`、
+  `test_bind_path_inside_the_git_directory_is_not_a_repo`、
+  `test_bind_refuses_any_path_with_a_dot_git_segment`；防误伤三条：
+  `test_worktree_root_with_git_file_still_binds`、
+  `test_worktree_subdirectory_still_corrects_to_the_worktree_root`、
+  `test_repo_root_whose_parent_is_named_dot_git_still_binds`（+ 它的子目录版）。
+- 反向验证（三条，都在 `test_reverse_checks.py` 里固化了）：删掉判定 → 3 条红；只判尾段
+  → `.git/objects` 逃逸；**改成"整条绝对路径任意段 = `.git`" → 误杀合法仓库（T31 那条红）**。
+- **教训**：判定"用户粘的是不是仓库入口"时，要连同"这个路径在仓库内部扮演什么角色"一起想
+  （`.git`、`.git/objects`、`.git/index` 都是实现细节，不是入口）。只想到"目录 vs 仓库"
+  会漏掉一整类。
+
+### T31 ❌ 拒绝得太多：父目录恰好叫 `.git` 的**合法仓库**被误杀（复审核回，已修）
+
+**现象**（复审核退时实测）：
+
+```
+/tmp/edge/.git/workspace     ← 一个合法仓库：自己有 .git、有提交、能 git status
+  → NOT_A_REPO               ❌ 它只是"父目录正好叫 .git"
+```
+
+**原因**：T29 的第一版写成 `any(part == ".git" for part in target.parts)`，判的是**整条绝对
+路径**的每一段。于是只要 `/tmp` · `/home/u/proj` 之上任何一层目录叫 `.git`，下面就全被拒。
+**这是修 T29 时自己引进的新缺陷**：我把"用户粘了 `.git` 内部"和"路径里恰好有 `.git` 这个名字"
+混成一件事——前者相对于**仓库根**有意义，后者相对于**文件系统根**没有意义。
+
+**已修**：先求 `root`，再判 `target.relative_to(root)` 里有没有 `.git` 段（见 T29 的代码块）。
+`root == target` 时相对路径为空，若 `target.name == ".git"` 仍拒绝（直接粘 `.git` 的兜底）。
+
+**别再踩**：
+- 两条回归锁：`test_repo_root_whose_parent_is_named_dot_git_still_binds`、
+  `test_subdirectory_of_a_repo_whos_parent_is_named_dot_git_still_corrects`。
+- 反向验证：把判据换回"整条绝对路径任意段 = `.git`" → 上述两条红（已固化在
+  `test_reverse_checks.py` 的 `T31：...` 那一条）。
+- **通用教训（比缺陷本身值钱）**：**"拒绝得太少"和"拒绝得太多"要有一对反向锁**。
+  任何"不许 X"的判定，都要同时写一条"合法的 X' 必须仍然能通过"——否则修完泄漏很容易
+  顺手改出一个误杀，而误杀在测试里**看起来是绿的**（原来的用例只测"该拒的拒了"）。
+  S3 两次退回都是这个形状：第一次退"漏了 `.git`"，第二次退"补得太狠"。
+
+### T30 ❌ 反向验证里的"变绿假象"：注入跑了，但被测测试读的**不是被注入的代码**（已修）
+
+固化 `tests/test_reverse_checks.py` 时踩到三次，每一次都表现为"注入缺陷了，测试还是绿的"：
+
+| # | 假象 | 根因 |
+|---|---|---|
+| 1 | `Kernel`（真内核子进程）看到的是**已安装的包**，不是 `PYTHONPATH` 指的副本 | `gateway_util.Kernel` 用 `.venv/bin/postel-studio` 且 `env.pop("PYTHONPATH")`。要让内核读副本得用 `python -m pytest`（`-m` 把 cwd 放进 `sys.path[0]`） |
+| 2 | 静态 AST 守卫从**测试文件**反推 `src/`（`__file__.parents[1]/"src"`），在副本里运行时它还是读仓库里的原文件 | 被测文件在 `/tmp/.../src`、测试文件还在仓库里，两者不在同一棵树。**从已 import 的包反推**：`Path(repository_mod.__file__).parents[2]` |
+| 3 | 守卫里"全项目只有 `gitops/repo.py` 起子进程"那段从测试文件反推 `src`，副本里该路径不存在 → `rglob` 空 → **断言空过** | 同上；改成从**被测文件**反推包目录（`repo.py` → `gitops` → `postel_studio`），并加一句"包目录必须存在"的断言 |
+
+**已修**：三处都改成"从被 import 的对象反推真实位置"；`test_reverse_checks.py` 里还有一条
+`test_sanity_the_copy_is_really_what_runs` 专门钉住前提——副本不生效就当场红，而不是让
+15 条注入一起"看起来对"。
+
+**别再踩**：写任何"改代码再看结果"的机制，**先写一条证明机制真的生效的用例**。
+没这条用例，反向验证本身就是最容易被镀金的东西（和 06 顶部的通用教训是同一件事）。
+
+---
+
 ## 已知未决问题
 
 | # | 问题 | 状态 |
@@ -318,6 +528,11 @@ CI 默认 `actions/checkout` 是 `fetch-depth: 1`，没有 `origin/main`，门�
 | U6 | 版本号有 `pyproject.toml` 与 `__init__.py` 两个副本 | S20 自动化 |
 | U7 | `encode_event()` 从未被调用 | 形状已定，无调用方测试 |
 | U8 | codemap 门禁只判「动没动地图」，不判「动得对不对」 | 内容质量靠 review；一点办法没有之前如实承认 |
+| U9 | **仓库加了 origin 之后 `repo_id` 会变**（D3 的已知让步）：界面/后续切片挂在 id 上会"丢失"这个仓库 | **S4 之前必须解决**（D3 原文）。方案未定：迁移旧 id？还是把 id 拆成"稳定 id + 展示 id"？本刀只保证**不产生第二行** |
+| U10 | `state.db` 的连接**没地方关**（`create_app()` 构造 `RepoStore`，进程退出时由 OS 回收） | 不丢数据（WAL 已 fsync），但"有开必有关"的纪律是破的。将来 `server.serve()` 的 `finally` 应该关它 |
+| U11 | **普通目录放在别人工作区里会被校到那个仓库**（`proj/plain/deep` 与 `proj/src` 路径上不可区分） | 按 D2 的字面语义处理的**近似**。真要解决需要"区分子目录与普通目录"的判据（例如要求子目录里有被跟踪的文件），代价大且会引入误判，本刀不做 |
+| U12 | `tmp_path` 属于测试夹具，`repo.bind` 允许绑系统临时目录下的仓库 | 行为正确（用户没理由这么做），但测试里必须注意 T28 |
+| U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（id 退化成路径哈希）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** |
 
 ---
 
@@ -328,6 +543,10 @@ CI 默认 `actions/checkout` 是 `fetch-depth: 1`，没有 `origin/main`，门�
 > S1 退回的两处（硬编码版本号 + 引用不存在的属性）与 S2 退回的三处
 > （端口/路径设计与契约冲突、ticket 泄进日志、函数内 import 绕环），
 > **全都是"看起来是对的"**：注释说得通、代码能跑、测试能过。
+>
+> S3 的三条（T25/T26/T27）同一类：git 的 discover "看起来像在问是不是仓库"、
+> `ON CONFLICT` "看起来像 upsert"、断连时的空列表 "看起来像没有仓库"。
+> **三条都是先写对、后由测试或真浏览器抓出来的**——不是靠读代码发现的。
 >
 > 区分二者的唯一办法是**独立验证**：跑真实输出、读依赖源码、删掉前提再看行为。
 > 这也是审核者不能采信实现者自检报告的原因。

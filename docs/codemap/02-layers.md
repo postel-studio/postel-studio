@@ -11,16 +11,23 @@
   │ L4  web/assets.py     页面 + 内联 JS          │  唯一允许「面向用户」的字符串
   ├─────────────────────────────────────────────┤
   │ L3  api/gateway.py    协议与认证              │
-  │     api/app.py        路由表                  │
+  │     api/app.py        路由表 + 装配           │
+  │     api/repository.py 仓库业务编排（S3）      │  不碰 fastapi
   ├─────────────────────────────────────────────┤
   │ L2  api/server.py     进程生命周期            │  唯一拥有 socket / 信号
   ├─────────────────────────────────────────────┤
   │ L1  api/frames.py     纯数据变换              │  无 IO、无 async、无框架
   ├─────────────────────────────────────────────┤
-  │ L0  storage/paths.py  文件系统                │  唯一碰磁盘的地方
+  │ L0  gitops/repo.py    git 子进程（S3）        │  唯一起 git 的地方
+  │     storage/db.py     state.db（S3）          │  唯一碰 SQLite 的地方
+  │     storage/paths.py  文件系统                │  状态根/锁/原子写
+  │     domain/models.py  实体与纯派生（S3）      │  无 IO
   │     __init__.py       CLI 入口                │
   └─────────────────────────────────────────────┘
 ```
+
+**S3 新增三块**：`gitops/`（子进程）、`storage/db.py`（SQLite）、`domain/`（纯模型），
+以及 L3 的 `api/repository.py`（业务编排）。它们都是**新层，遵守同一张表**。
 
 **规则一句话：只能向下 import，不能向上；同层之间尽量不 import（唯一例外见 §3）。**
 
@@ -30,11 +37,15 @@
 graph TD
     CLI["__init__.py<br/>CLI 入口"]
     SRV["api/server.py<br/>生命周期"]
-    APP["api/app.py<br/>路由表"]
+    APP["api/app.py<br/>路由表 + 装配"]
     GW["api/gateway.py<br/>网关"]
     FR["api/frames.py<br/>帧编解码"]
+    RS["api/repository.py<br/>仓库业务编排"]
     AS["web/assets.py<br/>页面"]
-    PA["storage/paths.py<br/>文件 IO"]
+    DB["storage/db.py<br/>state.db"]
+    PA["storage/paths.py<br/>状态根/文件 IO"]
+    GO["gitops/repo.py<br/>git 子进程"]
+    DM["domain/models.py<br/>实体与纯派生"]
 
     CLI -->|"函数内 import<br/>(懒加载)"| SRV
     CLI -->|"函数内 import"| PA
@@ -44,7 +55,15 @@ graph TD
     APP --> GW
     APP --> PA
     APP --> AS
+    APP -->|"构造 store/service<br/>并注入 Providers"| RS
+    APP -->|"构造 RepoStore"| DB
     GW --> FR
+    RS -->|"API 侧向下到 L1"| FR
+    RS --> DB
+    RS --> GO
+    RS --> DM
+    DB --> PA
+    DB --> DM
     PA -.->|"函数内 import<br/>(版本号)"| CLI
 ```
 
@@ -60,6 +79,22 @@ graph TD
 | `app → assets` | 渲染页面 | 否 |
 | `gateway → frames` | 帧编解码 | 否 |
 | `paths → __version__`（函数内） | 锁文件要写版本号 | **别删**：版本号只允许一个事实源（包根） |
+| `app → repository`（S3） | 构造 `RepositoryService` 注入网关 | 否 |
+| `app → db`（S3） | 构造 `RepoStore`（`state.db` 在状态根） | 否 |
+| `repository → db`（S3） | 落库 | 否 |
+| `repository → gitops`（S3） | 探测仓库 | 否 |
+| `repository → domain`（S3） | `Repo` 与 `repo_id` | 否 |
+| `repository → frames`（S3） | 抛 `FrameError`（纯数据错误类型） | 否 |
+| `db → paths`（S3） | 取 `state.db` 路径（唯一事实源） | 否 |
+| `db → domain`（S3） | 行 ↔ `Repo` | 否 |
+| **`gateway → repository`** | **不存在，也不许有**：网关只收到 `Providers` 里的两个函数 | — |
+
+### 2.0 S3 的分层要点：`repository` 在 L3，但它不认识 fastapi
+
+`api/repository.py` 与 `gateway` / `app` 同层（L3），但**只向下**依赖 `frames` / `db` /
+`gitops` / `domain`，**不 import fastapi**。它连"帧"也只用 `frames.FrameError` 这个纯数据类型。
+方向是：`app → repository`（装配），`gateway → Providers → repository.bind`（注入的函数）。
+**`gateway` 不 import `repository`**，与 S2 那条 `gateway ∦ app` 是同一套理由。
 
 ### 2.1 两处「函数内 import」的理由**不同**，不要混为一谈
 
@@ -92,13 +127,18 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 规则不落成检查就会腐烂。下面的代码片段用于人工或 CI 复核**向上依赖**：
 
 ```bash
-# 检查是否出现「向上 import」（L0/L1 不应 import L2+）
+# 检查是否出现「向上 import」（L0/L1 不应 import L2+；S3 的新模块也在表里）
 uv run python - <<'PY'
 import ast, pathlib, sys
 UP = {
-    "storage/paths.py": ("api/", "web/"),
-    "api/frames.py":    ("app", "gateway", "server", "web/"),
-    "api/server.py":    ("web/",),
+    "storage/paths.py":      ("api/", "web/", "gitops"),
+    "api/frames.py":         ("app", "gateway", "server", "web/", "repository"),
+    "api/server.py":         ("web/",),
+    "domain/models.py":      ("api/", "gitops", "storage", "web/"),
+    "gitops/repo.py":        ("api/", "web/", "storage/", "domain/"),
+    "storage/db.py":         ("api/", "web/", "gitops"),
+    # L3 的 repository 只许向下；它尤其不许 import fastapi（S3 涉及文件表的要求）
+    "api/repository.py":     ("app", "gateway", "server", "web/", "fastapi", "starlette", "uvicorn"),
 }
 bad = []
 for rel, forbidden in UP.items():
@@ -126,8 +166,9 @@ PY
 
 | 未来模块 | 归属层 | 会被谁调用 |
 |---|---|---|
-| `git/`（仓库、分支、diff、worktree） | L0（碰磁盘/子进程） | gateway 的 handler |
-| `store/`（SQLite：bot、task、candidate） | L0 | |
+| ~~`git/`~~ → **已出现**：`gitops/`（S3） | L0（碰磁盘/子进程） | `api/repository.py` |
+| ~~`store/`~~ → **已出现**：`storage/db.py`（S3，**有意不叫 `store/`**：`RepoStore` 是类名，包名会让"store 模块"和"store 对象"混淆） | L0 | `api/app.py`、`api/repository.py` |
+| 后续 bot/task/candidate 表 | 加到 `storage/db.py` 的 `_MIGRATIONS` | |
 | `agent/`（ACP 客户端、子进程） | L0 | |
 | `permission/`（纯函数判定） | L1（**无 IO**） | 执行前 |
 | `memory/`（charter 与上下文注入） | L0 | |
@@ -145,3 +186,6 @@ PY
   这条是为了让 paths 的所有函数都能被安全地单元测试。
 - **禁止**在 `gateway.dispatch()` 里写 `if agent == "opencode"` 这类具体 Agent 分支
   （04-task-breakdown §6 全局禁令）。
+- **禁止** `api/repository.py` import fastapi / starlette / uvicorn（S3 涉及文件表的要求）。
+- **禁止** `domain/` 碰 IO（不 `open`、不 `subprocess`、不 `sqlite3`）：它无依赖才能被一行断言。
+- **禁止** 在 `gitops/` 之外再写 `subprocess.run([... "git" ...])`：允许根（D4）只有一处实现。

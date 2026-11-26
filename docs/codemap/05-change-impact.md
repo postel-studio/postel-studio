@@ -34,6 +34,21 @@
 | 新增依赖 | `pyproject.toml` + `uv.lock` + **CI 的 `uv sync --frozen`** | CI 装不上 |
 | `scripts/check.sh` 的门禁项 | `CONTRIBUTING.md` 门禁表、`.github/workflows/ci.yml` | 本地与 CI 分叉 |
 | `scripts/gate-codemap.sh` 的判定范围 | 它自己的 `tests/test_gate_codemap.py`、CONTRIBUTING 门禁表 | 门禁悄悄放行（见 06 §门禁） |
+| `gitops/repo.py:run_git()` | `GIT_TERMINAL_PROMPT=0` / 超时 / `shell=False`、`test_bind.py::test_bind_uses_git_in_a_way_that_cannot_prompt` | **05 §3.3 违规 / 网关被 git 挂住** |
+| `gitops/repo.py` 的 `root` 参数 | 变成可选 = 放弃 D4 的允许根 | 子进程会跑在 cwd 上 |
+| `api/repository.py:_bindable_root()` | 06 T25 的回归锁、D2 的验收、`test_plain_directory_inside_another_working_tree_*` | **普通目录被"绑定成功"** 或 **子目录校正失效** |
+| `api/repository.py` 的错误文案（`MSG_*`） | 05 §4.2、`test_not_a_repo_message_does_not_echo_any_user_path` | **错误回显用户路径** |
+| `api/repository.py` 的错误码 | 07 §1.3 表（**不许新造**，S3 D6） | 客户端按码分支失配 |
+| `storage/db.py:RepoStore.upsert()` | 06 T26、验收 4、`test_rebinding_*` | 重复绑定出现两行 / `repo_id` 不更新 |
+| `storage/db.py:_MIGRATIONS` / `SCHEMA_VERSION` | 06 §7（只增不减、可重入）、升级路径 | 老用户的库迁移失败 / 历史版本被改写 |
+| `paths.py:STATE_DB_FILE` / `state_db_file()` | `storage/db.py`、`01-overview §4` 的状态根表 | 库落到别处（甚至仓库里） |
+| `domain/models.py:normalize_origin/repo_id` | D3、`test_https_and_ssh_origins_share_the_same_repo_id`、**已存在的 repo_id** | 同一仓库算出两个 id（见 06 U9） |
+| `api/app.py` 里 `RepoStore()` 的构造位置 | 决定 `state.db` 落在哪个状态根；测试靠 `POSTEL_HOME` | 测试写真实 `~/.postel`（06 T18） |
+| `gateway.Providers` 的字段 | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` | 启动即崩 |
+| `assets.py` 的 `#repos[data-state]` 机制 | 06 T8/T27、D1 的验收 | 断连时显示空列表 = 撒谎 |
+| `assets.py` 的 `ERROR_TEXT` | 07 §1.3 的码、`error_text_json()` | 错误显示成「绑定失败」或码本身 |
+| `assets.py` 左栏的 DOM 结构 / 数据来源 | **`node tools/acceptance/s3_bind.mjs`**（真实浏览器） | pytest 看不出来（T9） |
+| `tests/test_reverse_checks.py` 的注入锚点 | 被改的那段源码一旦变形，锚点就找不到（会红，不是静默） | 反向验证失效——但**是响的** |
 
 ---
 
@@ -51,6 +66,9 @@
 | 6 | 是否新增了**不需要认证**的 HTTP 路由？ | 本地无认证是**有意的**（05 §1.3），但确认不回显敏感值 |
 | 7 | 是否把绑定面从 `127.0.0.1` 放开？ | **禁止**，05 §1.1 |
 | 8 | 是否把 ticket / 长期令牌塞进 URL 或页面源码？ | **禁止**；05 §1.1.1 |
+| 9 | 新子进程是否**有超时**、环境是否含 `GIT_TERMINAL_PROMPT=0`？ | 05 §3.3 + S3 D5；`test_bind_uses_git_in_a_way_that_cannot_prompt` |
+| 10 | 错误 `message` 是否回显了用户输入（路径/分支名）？ | 05 §4.2；`test_not_a_repo_message_does_not_echo_any_user_path` |
+| 11 | 新用户数据是否**只**写在状态根？ | S3 禁止事项；`test_bind_writes_nothing_into_the_user_repository` |
 
 **这 8 条不过，PR 不该合并**——即使测试全绿。
 

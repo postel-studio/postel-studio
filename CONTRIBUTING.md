@@ -33,6 +33,21 @@ bash scripts/check.sh build    # 打包冒烟（不在 all 里：慢，且需要
 - 需要真实 Agent（opencode / dsh / pi）的用例用 `@pytest.mark.real_agent`，缺失时 skip 而非失败。
 - 慢集成测试用 `@pytest.mark.slow`。
 - 断言要精确：禁止 `assert a or b` 这类等价于没断言的写法。
+- **反向验证**：给一条安全/契约约束加测试时，顺手在 `tests/test_reverse_checks.py` 的
+  `INJECTIONS` 里加一行"注入这个缺陷 → 这条测试必须红"。原因见
+  [06-pitfalls T23/T30](docs/codemap/06-pitfalls.md)：**没被反向验证过的测试可能只是装饰品**
+  （S3 就抓到一条：把超时改成 0 也还是绿的）。
+
+## 浏览器验收（不在门禁里，改了前端就得手动跑）
+
+前端 DOM 行为是 pytest 覆盖不到的那一块（[06 T9](docs/codemap/06-pitfalls.md)）。改动页面后：
+
+```bash
+node tools/acceptance/s3_bind.mjs      # 真 Chrome + 真内核 + 读真 DOM
+```
+
+它**不进依赖、不跑 CI**，缺 Chrome / puppeteer-core 时会打印 `SKIP …` 并以 0 退出。
+用法与覆盖范围见 [`tools/acceptance/README.md`](tools/acceptance/README.md)。
 
 ## 代码地图（改代码前先看，改完代码必须更新）
 
