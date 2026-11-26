@@ -90,6 +90,7 @@ def create_app(
             repo_bind=repositories.bind,
             repo_list=repositories.list,
             repo_branches=repositories.branches,  # S4
+            repo_diff=repositories.diff,  # S5
         ),
     )
     return app

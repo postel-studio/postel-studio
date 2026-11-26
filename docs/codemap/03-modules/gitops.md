@@ -1,15 +1,16 @@
 # 03 · gitops — `src/postel_studio/gitops/`
 
-> 层 L0（**起子进程、碰磁盘**）· 313 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md)
+> 层 L0（**起子进程、碰磁盘**）· 468 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md) / [T34](../06-pitfalls.md) / [T36](../06-pitfalls.md)
 
 ## 职责
 
 **唯一起 `git` 子进程的地方。** 只读探测：这是不是仓库 / 根在哪 / origin 是什么 / 默认分支是谁 /
-本地分支有哪些（S4）。
+本地分支有哪些（S4）/ 两个 commit 之间有什么差异（S5）。
 
 - **不做写操作**（不 commit / 不 checkout / 不 fetch）：S3 的禁止事项，也是 05 §2「判定在执行之前」的前提。
-- **不接受引用名参数**（分支 / 提交）：S4 的 `list_branches` 是"枚举全部本地分支"的整体询问，
-  没有 ref 参数（`repo.branches` 只收 `repoId`，不切分支）；`repo.diff` 的 `base/head` 属 S5。
+- **唯一**把用户给的 ref 字符串送进 git 的入口是 `resolve_commit`（S5 D2）：它先解析成
+  object id，之后的 `diff_stat` / `diff_patch` 只用 `<a>...<b>` 两个 id。`repo.branches` 仍只收
+  `repoId`（没有 ref 参数）。
 - **不判断"用户能不能绑这个目录"**：那是 `api/repository.py:_bindable_root()` 的事，见下。
 
 ## 文件
@@ -17,7 +18,7 @@
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 6 | 包标记（三条硬约束的一句话摘要 + S4 的 `list_branches`） |
-| `repo.py` | 313 | 子进程外壳 + 五个探测函数（含 S4 的分支列表）+ **严格解码**（S5 结 U15） |
+| `repo.py` | 468 | 子进程外壳 + 八个探测函数（S3 的四个、S4 的分支列表、S5 的 ref 解析 / stat / patch）+ **严格解码**（S5 结 U15） |
 
 ## 符号表（`gitops/repo.py`）
 
@@ -26,35 +27,45 @@
 | `GIT_TIMEOUT_SECONDS` | 35 | `5.0`：**每个** git 调用的上限（D5） | `run_git`、测试 |
 | `BRANCH_FORMAT` | 40 | `for-each-ref` 的 `--format`：`%00` 分隔四字段（S4 D3） | `list_branches` |
 | `_DROPPED_ENV` | 42 | 不继承的 `GIT_DIR` / `GIT_WORK_TREE` 等 | `_environment` |
-| `GitUnavailableError` | 52 | git 不存在 / 起不来 → 帧层 `ADAPTER_UNAVAILABLE` | `api/repository.py` |
+| `DIFF_FLAGS` | 52 | diff 输出的**确定性 flag**：`--no-color` / `--no-ext-diff` / `--no-textconv` / `--no-renames` / `--unified=3`（S5 D4，T34） | `diff_patch` |
+| `STAT_FLAGS` | 62 | 同一组减去 `--unified`（`--numstat` 与它同给会连 patch 一起输出，S5 实测，T36） | `diff_stat` |
+| `_DIFF_CONFIG` | 66 | `-c core.quotePath=false`（必须在 `diff` **子命令之前**） | `diff_stat` / `diff_patch` |
+| `_OBJECT_ID` | 69 | 40/64 位小写 hex 的形状校验（不信 rev-parse 的回显，S5 D2） | `resolve_commit` |
+| `GitUnavailableError` | 81 | git 不存在 / 起不来 → 帧层 `ADAPTER_UNAVAILABLE` | `api/repository.py` |
 | `GitTimeoutError` | 85 | 超时 → 帧层 `INTERNAL`（D6 裁决，S19 再细化） | 同上 |
 | `GitOutputUndecodableError` | 89 | 输出不是合法 UTF-8（strict 解码）→ 帧层 `NOT_SUPPORTED`（**S5 结 U15**，D3.2） | `api/repository.py` |
-| `BranchInfo` | 61 | frozen dataclass：`name` / `sha`（完整 40 位）/ `upstream` / `is_current`（S4 D1/D4） | `list_branches`、`api/repository.py` |
-| `_environment()` | 78 | 子进程环境：`GIT_TERMINAL_PROMPT=0` + `GIT_CONFIG_NOSYSTEM=1` + `GIT_OPTIONAL_LOCKS=0` | `run_git`、测试 |
-| `git_executable()` | 88 | `shutil.which("git")`，找不到抛 `GitUnavailableError` | `run_git` |
+| `BranchInfo` | 100 | frozen dataclass：`name` / `sha`（完整 40 位）/ `upstream` / `is_current`（S4 D1/D4） | `list_branches`、`api/repository.py` |
+| `DiffStat` | 118 | frozen dataclass：`files_changed` / `insertions` / `deletions`（S5 D5；纯事实、snake_case） | `diff_stat`、`api/repository.py` |
+| `_environment()` | 131 | 子进程环境：`GIT_TERMINAL_PROMPT=0` + `GIT_CONFIG_NOSYSTEM=1` + `GIT_OPTIONAL_LOCKS=0` | `run_git`、测试 |
+| `git_executable()` | 141 | `shutil.which("git")`，找不到抛 `GitUnavailableError` | `run_git` |
 | `run_git(args, *, root, decode_errors="strict")` | 153 | **字面数组 + `shell=False` + timeout**；`decode_errors` 原样给 `subprocess.errors`（S5 D3.2） | 全部探测函数 |
-| `_stdout(result)` | 132 | 成功取**整段去空白**的 stdout，否则 `None`（T33 的陷阱源头） | 全部探测函数 |
-| `repo_root(path)` | 139 | `git rev-parse --show-toplevel`（会 discover） | `_bindable_root` 之外的用途小心，见下 |
-| `bare_root(path)` | 154 | 自己就是裸仓库根时返回它 | `_bindable_root` |
-| `is_worktree_root(path)` | 162 | `path/.git` 存在（**不碰 git**，filesystem 检查） | `_bindable_root`、测试 |
-| `is_repo(path)` | 170 | `repo_root or bare_root`（**同上，别单独当判据**） | 暂无生产调用方；给将来的 doctor |
-| `origin_url(root)` | 180 | `git config --get remote.origin.url` → `str \| None` | `api/repository.py:bind` |
-| `default_branch(root)` | 194 | `git symbolic-ref --short HEAD` → `str \| None` | 同上 |
-| `list_branches(root)` | 213 | `for-each-ref refs/heads/` → `list[BranchInfo] \| None`（S4 D3；三态见下） | `api/repository.py:branches` |
-| `GIT_ERRORS` | 300 | 三个异常类的元组（"能抛什么"的显式清单，S5 加了 `GitOutputUndecodableError`） | `api/repository.py`、测试 |
+| `_stdout(result)` | 198 | 成功取**整段去空白**的 stdout，否则 `None`（T33 的陷阱源头） | 单值询问（`resolve_commit` 也用它校验形状） |
+| `repo_root(path)` | 205 | `git rev-parse --show-toplevel`（会 discover） | `_bindable_root` 之外的用途小心，见下 |
+| `bare_root(path)` | 220 | 自己就是裸仓库根时返回它 | `_bindable_root`、`_repo_path_is_gone` |
+| `is_worktree_root(path)` | 228 | `path/.git` 存在（**不碰 git**，filesystem 检查） | `_bindable_root`、测试 |
+| `is_repo(path)` | 236 | `repo_root or bare_root`（**同上，别单独当判据**） | 暂无生产调用方；给将来的 doctor |
+| `origin_url(root)` | 246 | `git config --get remote.origin.url` → `str \| None` | `api/repository.py:bind` |
+| `default_branch(root)` | 260 | `git symbolic-ref --short HEAD` → `str \| None` | 同上 |
+| `list_branches(root)` | 279 | `for-each-ref refs/heads/` → `list[BranchInfo] \| None`（S4 D3；三态见下） | `api/repository.py:branches` |
+| `resolve_commit(root, ref)` | 333 | ref → **commit** object id；`rev-parse --verify --end-of-options <ref>^{commit}` + 形状校验（S5 D2） | `api/repository.py:diff` |
+| `_git_output(result)` | 364 | 成功返回**原样** stdout（不 strip；diff 是内容）否则 `None` | `diff_patch` |
+| `diff_stat(root, base, head)` | 373 | `git -c core.quotePath=false diff --numstat -z <a>...<b>` → `DiffStat \| None`（S5 D5，T36） | `api/repository.py:diff` |
+| `diff_patch(root, base, head)` | 414 | `git … diff <DIFF_FLAGS> <a>...<b>` → 完整 patch → `str \| None`（S5 D1/D4） | 同上 |
+| `GIT_ERRORS` | 439 | 三个异常类的元组（"能抛什么"的显式清单） | `api/repository.py`、测试 |
 
 ## 关键决策与理由
 
 ### 五条硬约束（05 §3.3 / S3 D5），改这个文件时是红线
 
 ```python
-# gitops/repo.py:83-92 —— 四项：字面数组 / 独立路径参数 / 无 shell / 超时
+# gitops/repo.py:178-192 —— 字面数组 / 独立路径参数 / 无 shell / 超时 / 严格解码
 command = [git_executable(), "-C", str(root), *args]
 subprocess.run(
     command,
     shell=False,
     capture_output=True,
     text=True,
+    errors=decode_errors,  # S5 D3.2：缺省 strict（U15 结案）
     timeout=GIT_TIMEOUT_SECONDS,
     env=_environment(),
     stdin=subprocess.DEVNULL,
@@ -93,6 +104,30 @@ S3/S4 的 `run_git(text=True)` 是严格 UTF-8 解码、但**不捕获** `Unicod
 为什么出站标识符必须严格：mangled 的名字回传 git 会变成 `BAD_REF`，**甚至指向别的 ref**——
 比报错更糟。`repo.branches` / `repo.bind` 两条路径的码映射在 `api/repository.py`；
 回归测试是 `tests/test_diff.py` 的 D10 第 19/20 行。
+
+### S5：diff 的三条命令与「影响输出的用户配置全部用 flag 钉死」（D1/D2/D4/D5）
+
+```bash
+# ① 解析：每个 ref 各调一次（--verify 只能收一个 rev），用户字符串只在这里出现
+git -C <root> rev-parse --verify --end-of-options <ref>^{commit}
+# ② 统计：三点语义 + 确定性 flag；-z 必须（路径可含 tab/换行，T36）
+git -C <root> -c core.quotePath=false diff --numstat -z <STAT_FLAGS> <a>...<b>
+# ③ patch：同一对 object id，%DIFF_FLAGS% 全部钉死
+git -C <root> -c core.quotePath=false diff <DIFF_FLAGS> <a>...<b>
+```
+
+| 决策 | 理由（都有实测，见 06 T34/T36） |
+|---|---|
+| 先解析成 object id，再用两个 id 跑 stat/patch | ① 注入面收敛到一条带 `--end-of-options` 的命令；② base/head 解析后不再"移动"，统计与 patch 描述同一对 commit |
+| `^{commit}` 强制类型 | tree id 拿来问会回 `expected commit type` + exit 128 → `BAD_REF`；没有它，tree id 会被当 commit 用 |
+| 形状自己校验（`_OBJECT_ID`） | 没有 `--verify` 时 rev-parse 会把有歧义的参数**原样回显**到 stdout 且 exit 128——"回显"不是"解析结果" |
+| `--numstat` 后再补 `--unified` = 灾难 | 实测 git 2.53：`--unified` 隐含 `--patch`，把 `--numstat` 隐含的 `--no-patch` 覆盖回来，输出「numstat 记录 + 空行 + 完整 patch」——按 NUL 切会把 patch 当记录（所以有独立的 `STAT_FLAGS`，T36） |
+| `-z` 而不是按行解析 | 路径可含 tab 甚至换行（实测 `new\nline.txt` 原样进 NUL 分隔记录）；`-z` 之后每条记录只取前两段（`add\tdel\tpath`），路径怎么脏都不影响 |
+| patch / 文件名用 `decode_errors="replace"` | 内容只进 DOM、永不回传 git；仓库里有非 UTF-8 内容是常态。**ref 名**仍 strict（D3.2） |
+
+`diff_stat` / `diff_patch` 的三态与 `list_branches` 同构：`DiffStat`/`str`（可能是空）=
+git 答了；`None` = 非零退出（无共同祖先等）；`GitUnavailableError` / `GitTimeoutError` 由
+调用方翻码。**空差异不是错误**（`DiffStat(0,0,0)` / `""`）。
 
 ### `repo_root` / `is_repo` **不要**单独当"能不能绑"的判据（T25）
 
@@ -202,6 +237,9 @@ upstream"两种布局（前者露 bug、后者覆盖整段 strip 的路径）。
 | 加一个新的 git 探测 | 用 `run_git`；**不要**自己 `subprocess.run`。要 `test_bind.py` / `test_branches.py` 里有一条真实仓库用例 |
 | 改 `BRANCH_FORMAT` 或它的解析 | T33（`%(HEAD)` 空格 + 整段 strip）、D7 第 1/2/3/5/7 行；`test_branches.py` 全部解析用例 |
 | 改 `_environment()` | 05 §3.3 / S3 D5；`test_bind_uses_git_in_a_way_that_cannot_prompt` 会红 |
+| 改 `DIFF_FLAGS` / `STAT_FLAGS` | S5 D4 + 06 T34/T36；反向注入 D12 #1/#2（删 `--no-color` / `--no-ext-diff` → `test_patch_has_no_ansi_*` / `test_patch_ignores_external_diff_driver` 必须红）；**不要**把 `--unified` 加进 `STAT_FLAGS` |
+| 改 `resolve_commit` 的命令形状 | S5 D2 + 反向注入 D12 #4（去掉 `^{commit}` → `test_bad_refs_are_bad_ref` 必须红）；**不要**合并成一次 `--verify` 多 rev（git 会报「需要一个单独的版本」） |
+| 改 diff 的解析 | S5 D5/D6、06 T36；`tests/test_diff.py` 的 stat/截断/重命名/二进制/mode 用例 |
 | 把 `shell=` 改成 `True` 或拼接命令字符串 | **禁止**，05 §3.3 |
 | 让 `root` 变成可选（缺省 cwd） | **禁止**：等于放弃 D4 的允许根 |
 | 在本层 import `api/` | **禁止**：L0 不许向上 import（[02-layers §1](../02-layers.md#1-五层自下而上)） |
@@ -228,6 +266,18 @@ S3 的探测在 `tests/test_bind.py`，S4 的分支列表在 `tests/test_branche
 > **机制的守护者**：`tests/test_reverse_checks.py` 把上面若干条**注入缺陷后必须红**钉成可执行
 > 用例（`GIT_TERMINAL_PROMPT` / `GIT_CONFIG_NOSYSTEM` / 超时 / shell / 子目录校正 / `.git` 判定 …）。
 > 加一条新约束时，顺手在里面加一行注入——那是最省事的"这条测试真的守得住"的证明。
+
+`tests/test_diff.py` 里与 gitops 层直接相关的用例（S5）：
+
+| 测试 | 守什么 |
+|---|---|
+| `test_stat_exact_numbers` / `test_three_dot_ignores_later_base_commits` | 三点语义与 numstat 解析（D1/D5） |
+| `test_stat_counts_binary_file_without_line_counts` / `test_stat_counts_mode_only_change` / `test_rename_counts_as_delete_plus_add` | `-` 记 0 / mode-only / `--no-renames` 的一删一增（D4/D5） |
+| `test_patch_has_no_ansi_when_color_ui_always` / `test_patch_ignores_external_diff_driver` | 确定性 flag（D4，反向注入 D12 #1/#2） |
+| `test_non_utf8_content_is_replaced_not_fatal` | 内容宽松解码（D3.3） |
+| `test_non_ascii_path_is_readable_not_escaped` | `core.quotePath=false`（D4） |
+| `test_bad_refs_are_bad_ref` | `^{commit}` + 形状校验（D2，反向注入 D12 #4） |
+| `test_unrelated_histories_are_bad_ref` | 三点无 merge base → `BAD_REF`（D1/T35） |
 
 `tests/test_branches.py` 里与 gitops 层直接相关的用例：
 

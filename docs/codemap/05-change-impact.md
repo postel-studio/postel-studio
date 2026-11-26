@@ -49,7 +49,12 @@
 | `paths.py:STATE_DB_FILE` / `state_db_file()` | `storage/db.py`、`01-overview §4` 的状态根表 | 库落到别处（甚至仓库里） |
 | `domain/models.py:normalize_origin` / `repo_id` / `origin_hash` | S3.5 D1/D2、`test_https_and_ssh_origins_share_the_same_repo_id`、**已存在的 repo_id 与 origin_hash** | `repo_id` 一旦依赖 origin 就复发 U9（06 T32）；改 `normalize_origin` 会改 `origin_hash` 但**不该**改 `repo_id` |
 | `api/app.py` 里 `RepoStore()` 的构造位置 | 决定 `state.db` 落在哪个状态根；测试靠 `POSTEL_HOME` | 测试写真实 `~/.postel`（06 T18） |
-| `gateway.Providers` 的字段（S4 加了 `repo_branches`） | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` + 07 §2.2/§4.5 | 启动即崩 / `repo.branches` 回 `UNKNOWN_METHOD` |
+| `gitops/repo.py` 的 `DIFF_FLAGS` / `STAT_FLAGS` / `-c core.quotePath=false` | S5 D4、06 T34（用户配置会改输出）、T36（`--numstat` 不能与 `--unified` 同给）；反向注入 D12 #1/#2；`test_patch_has_no_ansi_*` / `test_patch_ignores_external_diff_driver` | 用户 `color.ui` / `diff.external` / `diff.renames` / `diff.context` 改掉内核输出；`--unified` 混进 numstat 会把 patch 当记录解析 |
+| `gitops/repo.py:resolve_commit` 的命令形状（`--verify --end-of-options …^{commit}`） | S5 D2、D3.1；反向注入 D12 #4；`test_bad_refs_are_bad_ref`、`test_ref_*` | tree id 被当 commit 用；`-` 开头的 ref 被 git 当选项；多 rev 喂 `--verify` 直接报错 |
+| `api/repository.py:diff` 的错误码 / 顺序 / 文案 | 07 §4.6（**不许新增码**）、S5 D7；`test_diff.py` 的错误码用例 | 仓库被删报成 `BAD_REF`（用户去改 ref）；或码表被悄悄扩 |
+| `api/repository.py` 的 `DEFAULT/MIN/MAX_MAX_CHARS` | 07 §4.6（契约值）、S5 D6；`test_max_chars_rejects_*` / `test_truncation_boundary_both_sides` | 截断边界与契约脱节；调用方以为拿到了它要的长度 |
+| `api/repository.py:diff` 的 `stat`/`patch` 组装 | S5 D5/D6/D8；`test_stat_exact_numbers`、`test_patch_contains_expected_line_kinds` | 字段名漏 camelCase / `stat` 跟着截断变形（等于撒谎） |
+| `gateway.Providers` 的字段（S4 加了 `repo_branches`，S5 加了 `repo_diff`） | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` + 07 §2.2/§4.5 | 启动即崩 / `repo.branches` 回 `UNKNOWN_METHOD` |
 | `assets.py` 的 `#repos[data-state]` 机制 | 06 T8/T27、D1 的验收 | 断连时显示空列表 = 撒谎 |
 | `assets.py` 的 `ERROR_TEXT` | 07 §1.3 的码、`error_text_json()`；S4 补了 `REPO_NOT_BOUND`、分支面板另用 `BRANCH_ERROR_FALLBACK` | 错误显示成「绑定失败」或码本身；分支面板答「绑定失败」 |
 | `assets.py` 左栏的 DOM 结构 / 数据来源 | **`node tools/acceptance/s3_bind.mjs`**（真实浏览器） | pytest 看不出来（T9） |

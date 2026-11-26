@@ -1,11 +1,13 @@
-"""`repo.bind` / `repo.list` / `repo.branches` 的业务编排（S3；S4 加分支列表；S5 结 U15）。
+"""`repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的业务编排（S3；S4 分支；S5 diff）。
 
 **这一层不碰 fastapi**（S3 涉及文件表的要求）：它只接收 `dict` 参数、返回 `dict`，
 把"路径 → 校验 → 探测 → 落库"串起来，并把下游异常翻成 07 §1.3 的**稳定错误码**。
 框架怎么把这些接上 WebSocket，是 `api/gateway.py` 的事。
 
 S4 的 `branches` 是 `repo.bind` 的**只读反向**：`repoId` → 库里那条记录 → 已绑定的 `path`
-当允许根 → `gitops.list_branches` → 帧载荷。它不落库、不缓存（06-data-model §8）。
+当允许根 → `gitops.list_branches` → 帧载荷。S5 的 `diff` 同一形状：两个 ref 各解析成
+object id（`gitops.resolve_commit`）→ `diff_stat` / `diff_patch` → 截断 + camelCase 载荷。
+两条都不落库、不缓存（06-data-model §8）。
 
 为什么校验要在这里而不是在网关：网关只该知道"方法名 → 处理函数"（02-layers 的
 `gateway` 里那条"禁止 Agent 特判"是同一精神），字段语义属于业务。D6 的错误码表也在这里
@@ -38,7 +40,8 @@ NOT_A_REPO: Final = "NOT_A_REPO"
 BAD_CWD: Final = "BAD_CWD"
 ADAPTER_UNAVAILABLE: Final = "ADAPTER_UNAVAILABLE"
 REPO_NOT_BOUND: Final = "REPO_NOT_BOUND"
-# S5：07 §1.3 里**本来就有**的码，只是本模块第一次用到（不是新增码）。
+# S5：07 §1.3 里**本来就有**的两个码，只是本模块第一次用到（不是新增码）。
+BAD_REF: Final = "BAD_REF"
 NOT_SUPPORTED: Final = "NOT_SUPPORTED"
 
 # 错误文案：**可读、面向人、不含任何用户输入**（05 §4.2）。改文案不需要改码。
@@ -52,8 +55,20 @@ MSG_REPO_ID_INVALID: Final = "repoId 参数缺失或不是字符串"
 # S4 D5：绑定的路径已不是仓库（目录被删 / .git 被删）用 REPO_NOT_BOUND + 这句文案。
 # 不夸大字眼：这不是"未预期错误"（INTERNAL），而是用户自己删了仓库——正常处境。
 MSG_REPO_PATH_MISSING: Final = "仓库路径已不存在"
-# S5 D3.2 / U15 结案：非 UTF-8 refname 的文案（不暴露内部细节、不说"内部错误"）。
+# S5 D3.1 / D7：ref 参数形状、ref 解析、三点没有 merge base、非 UTF-8 ref 名各自的文案。
+MSG_INVALID_REF: Final = "base / head 参数不合法"
+MSG_BAD_REF: Final = "分支或提交不存在"
+MSG_NO_MERGE_BASE: Final = "两个 ref 没有共同祖先，无法比较"
 MSG_NOT_SUPPORTED_REFNAME: Final = "仓库含非 UTF-8 的名称，第一版不支持"
+MSG_MAX_CHARS_INVALID: Final = "maxChars 必须是 1000 到 200000 之间的整数"
+
+# S5 D6：截断上限。缺省 100k 字符；合法区间 **越界报错、不夹紧**——夹紧会让调用方以为
+# 拿到了它要的长度。`maxChars` 必须是 `int` 且**不是 `bool`**（`True` 是 `int` 子类）。
+DEFAULT_MAX_CHARS: Final = 100_000
+MIN_MAX_CHARS: Final = 1_000
+MAX_MAX_CHARS: Final = 200_000
+# D3.1：ref 名长度上限（git 的 refname 本身远短于这个数；这是入站形状检查的一部分）。
+MAX_REF_LENGTH: Final = 200
 
 # `RepositoryService` 里有个方法叫 `list`，**类作用域**里的 `list[...]` 注解会被 mypy 解析成
 # 那个方法（`valid-type`）。所以分支载荷的列表类型用模块级别名，别在类体里直接写 `list[...]`。
@@ -70,6 +85,48 @@ def _require_path(params: dict[str, object]) -> str:
     value = params.get("path")
     if not isinstance(value, str) or not value:
         raise _fail(frames.INVALID_PARAMS, MSG_INVALID_PARAMS)
+    return value
+
+
+def _require_ref(params: dict[str, object], field: str) -> str:
+    """取出并校验一个 **入站 ref 名** 的形状（S5 D3.1）；不合法 → `INVALID_PARAMS`。
+
+    六条同时满足才算合法：`str`、非空、长度 ≤ `MAX_REF_LENGTH`、不含控制字符
+    （`< 0x20` 或 `0x7F`）、`encode("utf-8")` 不抛、`strip()` 后非空、不以 `-` 开头。
+
+    **lone surrogate 必须在这里挡掉**（实测，不是推测）：JSON 允许 `"\\udcff"` 这种转义，
+    `json.loads` 会得到一个 lone surrogate 的 `str`；Python 给子进程编码 argv 时用
+    `surrogateescape`，于是它在**字节层**变成原始 `0xFF`——正好是 git 里那个非 UTF-8
+    ref 名的字节，`rev-parse --verify` 实测**真的解析成功**。不挡的话，`repo.branches`
+    拒绝展示的名字，客户端能用 JSON 转义"洗"回 git：一侧拒绝、另一侧接受 = 漏洞。
+    `encode` 是唯一可靠的判据（`isinstance(s, str)` / `len()` 都看不出 lone surrogate）。
+    """
+    value = params.get(field)
+    if not isinstance(value, str):  # 缺字段（None）/ 数字等：同一句话
+        raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF)
+    if not value or len(value) > MAX_REF_LENGTH or value.startswith("-") or not value.strip():
+        raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF)
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF)
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:  # lone surrogate：只有编码才会炸
+        raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF) from None
+    return value
+
+
+def _require_max_chars(params: dict[str, object]) -> int:
+    """取出并校验 `maxChars`（S5 D6）：缺省 `DEFAULT_MAX_CHARS`，否则必须合法，否则报错。
+
+    **不夹紧**：越界报 `INVALID_PARAMS` 而不是静默夹到边界——夹紧会让调用方以为拿到了
+    它要的长度。类型判据必须先排除 `bool`：`isinstance(True, int)` 为真，`maxChars: true`
+    会被当成 `1`（真值陷阱，S5 D6 点名的边界）。
+    """
+    value = params.get("maxChars", DEFAULT_MAX_CHARS)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _fail(frames.INVALID_PARAMS, MSG_MAX_CHARS_INVALID)
+    if not MIN_MAX_CHARS <= value <= MAX_MAX_CHARS:
+        raise _fail(frames.INVALID_PARAMS, MSG_MAX_CHARS_INVALID)
     return value
 
 
@@ -143,6 +200,25 @@ def _split(repo: Repo) -> dict[str, object]:
         "originUrl": repo.origin_url,
         "defaultBranch": repo.default_branch,
     }
+
+
+def _repo_path_is_gone(repo: Repo) -> bool:
+    """绑定的仓库路径是否已经不能用了（S5 D7 #4）：目录被删，或目录还在但 `.git` 被删。
+
+    **这一步必须先于 ref 解析**：路径没了时 `rev-parse` 同样失败，不先探测就会把
+    "仓库没了"报成"ref 不存在"——用户会去改 ref，但真正的问题是仓库被删 / 搬走了。
+
+    判据沿用 `_bindable_root` 的前两条：目录在 **且**（`.git` 存在 **或** git 说是裸仓库）。
+    - 不用 `git rev-parse` 判定：它会向父目录 discover，父目录恰好是仓库时会误判"还活着"；
+    - `.git` 被删时 `bare_root` 会在非仓库目录里跑一次 git（非零 / `false`）→ 判死；
+    - 裸仓库本来就没有 `.git`，所以必须留 `bare_root` 这一条，否则会误杀已绑定的裸仓库。
+    """
+    path = Path(repo.path)
+    if not path.is_dir():
+        return True
+    if gitops.is_worktree_root(path):
+        return False
+    return gitops.bare_root(path) is None
 
 
 class RepositoryService:
@@ -266,3 +342,64 @@ class RepositoryService:
             }
             for branch in found
         ]
+
+    def diff(self, params: dict[str, object]) -> dict[str, object]:
+        """`repo.diff`：两个 ref 的三点差异（S5 D1–D8），返回 `{stat, patch, truncated}`。
+
+        **参数形状 → 资源存在 → ref → 语义**（D7 的顺序就是契约）：
+
+        | # | 情形 | 码 |
+        |---|---|---|
+        | 1 | `repoId` 缺失 / 非字符串 / 空 | `INVALID_PARAMS` |
+        | 2 | `repoId` 查不到 | `REPO_NOT_BOUND` |
+        | 3 | `base`/`head` 形状不合法（D3.1 六条） | `INVALID_PARAMS` |
+        | 4 | 仓库路径已不存在（目录或 `.git` 被删） | `REPO_NOT_BOUND`（**先于 ref 判**） |
+        | 5 | ref 解析不到（不存在 / 不是 commit） | `BAD_REF` |
+        | 6 | 三点没有共同祖先 | `BAD_REF`（文案不同，码不新增） |
+        | 7 | git 不存在 | `ADAPTER_UNAVAILABLE` |
+        | 8 | git 超时 | `INTERNAL`（同 S3 D6，S19 的 doctor 再细化） |
+        | 9 | 输出含非 UTF-8 的 ref 名 | `NOT_SUPPORTED`（D3.2） |
+        | 10 | 成功（含空差异） | `ok: true` |
+
+        三点 `base...head`（D1）是"这个分支改了什么"的语义：取**共同祖先 → head**，
+        不把 base 在分支点之后自己的提交算成本次差异。解析后只用两个 object id 跑
+        stat / patch（D2），所以统计与 patch 描述的是同一对 commit。
+
+        `stat` **不受截断影响**（D6）：统计描述完整差异；`truncated` 只看 patch，
+        `patch` 按**字符**切到 `maxChars`（允许切在行中间，不做行对齐修正）。
+        空差异（base 与 head 同一 commit）是**成功**：
+        `stat 0/0/0`、`patch: ""`、`truncated: false`。
+        """
+        repo = self._require_repo(params)  # #1 / #2
+        base = _require_ref(params, "base")  # #3
+        head = _require_ref(params, "head")
+        max_chars = _require_max_chars(params)  # D6：越界报错，不夹紧
+        root = Path(repo.path)
+        try:
+            if _repo_path_is_gone(repo):  # #4：不许被 ref 错误盖住
+                raise _fail(REPO_NOT_BOUND, MSG_REPO_PATH_MISSING)
+            base_sha = gitops.resolve_commit(root, base)  # #5
+            head_sha = gitops.resolve_commit(root, head)
+            if base_sha is None or head_sha is None:
+                raise _fail(BAD_REF, MSG_BAD_REF)
+            stat = gitops.diff_stat(root, base_sha, head_sha)  # #6
+            if stat is None:
+                raise _fail(BAD_REF, MSG_NO_MERGE_BASE)
+            patch = gitops.diff_patch(root, base_sha, head_sha)
+        except gitops.GitUnavailableError:  # #7
+            raise _fail(ADAPTER_UNAVAILABLE, MSG_ADAPTER_UNAVAILABLE) from None
+        except gitops.GitTimeoutError:  # #8
+            raise _fail(frames.INTERNAL, MSG_GIT_TIMEOUT) from None
+        except gitops.GitOutputUndecodableError:  # #9
+            raise _fail(NOT_SUPPORTED, MSG_NOT_SUPPORTED_REFNAME) from None
+        if patch is None:  # 同一对 commit：stat 答了 patch 答不出只能是"问不出来"
+            raise _fail(BAD_REF, MSG_NO_MERGE_BASE)
+        return {
+            "stat": {
+                "filesChanged": stat.files_changed,
+                "insertions": stat.insertions,
+                "deletions": stat.deletions,
+            },
+            "patch": patch[:max_chars],
+            "truncated": len(patch) > max_chars,
+        }

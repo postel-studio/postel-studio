@@ -1,11 +1,12 @@
-"""git 只读探测：**起子进程**的那一层（S3 引入，D4/D5；S4 加分支列表）。
+"""git 只读探测：**起子进程**的那一层（S3 引入，D4/D5；S4 加分支列表；S5 加 diff）。
 
-本模块只回答四类问题：这是不是仓库 / 根在哪（`repo_root` / `bare_root` / `is_worktree_root`
+本模块回答五类问题：这是不是仓库 / 根在哪（`repo_root` / `bare_root` / `is_worktree_root`
 / `is_repo`）、origin 是什么（`origin_url`）、默认分支是谁（`default_branch`）、
-本地分支有哪些（`list_branches`，S4）。
-**不做任何写操作**；`list_branches` 是"枚举全部本地分支"的整体询问（S4 D2：只列
-`refs/heads/`），**仍然不接受**任何来自网络的引用名——`repo.branches` 只收 `repoId`，
-没有 ref 参数（切分支/看 diff 是 S4 之后的事，见 07 §2.2 的 `repo.diff`）。
+本地分支有哪些（`list_branches`，S4）、两个 commit 之间的差异是什么（`diff_stat` /
+`diff_patch`，S5）。
+**不做任何写操作**。`list_branches` 是"枚举全部本地分支"的整体询问（S4 D2：只列
+`refs/heads/`），不接受任何来自网络的引用名；S5 的 `resolve_commit` 是**唯一**把用户给的
+ref 字符串送进 git 的入口（D2），它先解析成 object id，之后的 diff 命令只用 id。
 
 ⚠️ 这些函数**都不要**被直接用作"用户输入的这个目录能不能绑"的判据：git 的 `-C` 与
 `--show-toplevel` 会向父目录 discover。总判定在 `api/repository.py:_bindable_root()`
@@ -24,6 +25,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Sequence
@@ -38,6 +40,33 @@ GIT_TIMEOUT_SECONDS: Final = 5.0
 # （S4 禁止事项；D7 第 7 行是这条的回归测试）。
 # 末尾的 `%(HEAD)` 是当前分支标记：当前分支给 `*`，**非**当前分支给**一个空格**（T33）。
 BRANCH_FORMAT: Final = "%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)"
+# S5 D4：把**会改变 diff 输出**的用户配置全部用 flag 钉死。少一个，同一个仓库对同一次
+# diff 就会给出不同答案（每条都在 06-pitfalls T34 里实测过）：
+# - `--no-color`     `color.ui=always` 时 patch 里混入 `\x1b[1m` 等 ANSI；
+# - `--no-ext-diff`  `diff.external` 指向外部命令时 patch 直接失败（git exit 128）；
+# - `--no-textconv`  `.gitattributes` + `diff.<driver>.textconv` 会把内容换成外部命令的输出；
+# - `--no-renames`   `diff.renames` 缺省 **true**：重命名算 1 个文件（`0 0 old => new`），
+#                    用户设 false 就变 2 个文件；开着还依赖 `diff.renameLimit`，大 diff 会
+#                    静默退化。MVP 裁决：重命名 = 一删一增（D4），不引入第三个配置依赖；
+# - `--unified=3`    `diff.context` 会改 hunk 大小（缺省 3，用户可设成 1）。
+DIFF_FLAGS: Final = (
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--unified=3",
+)
+# `--numstat` 的同一组 flag，**去掉** `--unified`：git 2.53 实测，`--numstat` 与
+# `--unified` 同时给会输出「numstat 记录 + 空行 + 完整 patch」——`--unified` 隐含
+# `--patch`，把 `--numstat` 隐含的 `--no-patch` 覆盖回来。D5 的命令本来就没有它。
+STAT_FLAGS: Final = DIFF_FLAGS[:-1]
+# `core.quotePath=false` 必须放在 `diff` 子命令**之前**——它是 `-c` 配置项、不是 diff 的
+# flag（`git -C <root> -c core.quotePath=false diff …` 合法）。关掉后非 ASCII 路径是字面
+# 中文，而不是 `"\344\270\255\346\226\207.txt"`（T34 实测两种输出）。
+_DIFF_CONFIG: Final = ("-c", "core.quotePath=false")
+# object id 的形状：SHA-1 40 位 / SHA-256 64 位，小写十六进制。**自己校验**，不信 rev-parse
+# 的回显（无 `--verify` 时它会把有歧义的参数原样打到 stdout，见 `resolve_commit`）。
+_OBJECT_ID: Final = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 # 不继承调用方环境里可能存在的 GIT_DIR / GIT_WORK_TREE：它们会把 `git -C <path>` 指到别处
 _DROPPED_ENV: Final = (
     "GIT_DIR",
@@ -83,6 +112,20 @@ class BranchInfo:
     sha: str
     upstream: str | None
     is_current: bool
+
+
+@dataclass(frozen=True)
+class DiffStat:
+    """一次 diff 的**事实**统计（S5 D5）：文件数 / 加行 / 减行。
+
+    纯 snake_case、完整值；截断与 `camelCase` 字段名是 `api/repository.py` 的边界格式化
+    （D8 的「格式化在边界」）。`files_changed` 是 numstat **记录数**（含二进制、gitlink、
+    纯 mode 变更）；`insertions` / `deletions` 是各记录加/减行求和（`-` 记 0）。
+    """
+
+    files_changed: int
+    insertions: int
+    deletions: int
 
 
 def _environment() -> dict[str, str]:
@@ -287,6 +330,112 @@ def list_branches(root: Path) -> list[BranchInfo] | None:
     return branches
 
 
+def resolve_commit(root: Path, ref: str) -> str | None:
+    """把一个 ref（分支名 / 提交号 / ...）解析成 **commit** 的 object id（S5 D2）。
+
+    | 返回 | 含义 |
+    |---|---|
+    | `"<40 或 64 位小写 hex>"` | 解析成功；形状由**本函数**校验（不信 rev-parse 的回显） |
+    | `None` | 问不出来（不存在 / 不是 commit：tree id 会被 `^{commit}` 拒掉） |
+    | 抛 `GIT_ERRORS` 里那三个异常 | 起不来 / 卡住 / 非 UTF-8 |
+
+    三条命令形状的理由（都是实测，不是推断）：
+
+    - `--verify` **只能收一个 rev**（多参数回 `fatal: 需要一个单独的版本` + exit 128），
+      所以 base/head 各调一次，不要合并成一条；
+    - `--end-of-options` 让 `-` 开头的字符串不被当成选项（`--no-index^{commit}` → exit 128）；
+    - `^{commit}` 强制 commit 类型：拿 tree id 来问会回
+      `expected commit type, but the object dereferences to tree type` + exit 128。
+
+    **形状必须自己校验**：没有 `--verify` 时 rev-parse 会把有歧义的参数原样回显到 stdout
+    （实测 `git rev-parse --end-of-options main^{commit} nosuch^{commit}` 输出
+    `--end-of-options`、`<sha>`、`nosuch^{commit}` 三行且 exit 128）。"回显"不等于"解析结果"。
+
+    这是**唯一**把用户给的 ref 字符串送进 git 的地方（D2）：调用方拿到 id 后，stat / patch
+    只用 `<a>...<b>` 两个 id，于是注入面收敛到这一条命令（且它带 `--end-of-options`），
+    并且 base/head 在解析后不再"移动"——统计与 patch 描述同一对 commit。
+    """
+    sha = _stdout(
+        run_git(["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"], root=root)
+    )
+    return sha if sha is not None and _OBJECT_ID.fullmatch(sha) else None
+
+
+def _git_output(result: subprocess.CompletedProcess[str]) -> str | None:
+    """成功则返回**原样** stdout（不 strip），非零退出 → `None`。
+
+    diff 的输出是**内容**：首尾空白（补丁的行首空格）有意义，不能用 `_stdout` 的整段 strip
+    （`_stdout` 是给"取一个名字/一个 sha"这类单值询问用的）。
+    """
+    return result.stdout if result.returncode == 0 else None
+
+
+def diff_stat(root: Path, base: str, head: str) -> DiffStat | None:
+    """`base...head` 的统计（S5 D5）：**三点**语义——共同祖先 → head（D1）。
+
+    | 返回 | 含义 |
+    |---|---|
+    | `DiffStat`（可能全 0） | git 答了；**全 0 = 同一 commit，是成功**（D6） |
+    | `None` | 非零退出（无共同祖先等）——"问不出来" |
+    | 抛 `GitUnavailableError` / `GitTimeoutError` | 起不来 / 卡住（由调用方翻码） |
+
+    命令固定为 `git -c core.quotePath=false diff --numstat -z --no-renames <a>...<b>`
+    （DIFF_FLAGS 见上）。解析规则：
+
+    - 按 `\\x00` 切记录，**每条只取前两段**（`add\\tdel\\tpath`）——`-z` 下路径原样输出，
+      可以含 tab 甚至换行（实测 `tab\\tname.txt` 的记录里那个 tab 就是路径的一部分）；
+      按行切会把这类路径切坏，这是必须 `-z` 而不是按行解析的原因（T36）；
+    - 字段是 `-`（二进制）时按 0 计；纯 mode 变更 git 给 `0 0`，gitlink 也给一行；
+    - 记录数就是 `files_changed`（含二进制 / gitlink / mode-only）。
+
+    `decode_errors="replace"`：文件名只出现在被丢弃的第三段，但解析前先解码——仓库里存在
+    非 UTF-8 文件名是常态，为此让整条 diff 失败是错的（D3.3；统计是**内容**不是身份）。
+    """
+    result = run_git(
+        [*_DIFF_CONFIG, "diff", "--numstat", "-z", *STAT_FLAGS, f"{base}...{head}"],
+        root=root,
+        decode_errors="replace",
+    )
+    if result.returncode != 0:  # 无共同祖先：stdout 空 + exit 128（实测）→ 问不出来
+        return None
+    files = insertions = deletions = 0
+    for record in result.stdout.split("\x00"):
+        if not record:
+            continue
+        fields = record.split("\t", 2)
+        if len(fields) != 3:  # format 变了：**不猜**（同 list_branches 的 len(fields) != 4）
+            return None
+        files += 1
+        insertions += 0 if fields[0] == "-" else int(fields[0])
+        deletions += 0 if fields[1] == "-" else int(fields[1])
+    return DiffStat(files_changed=files, insertions=insertions, deletions=deletions)
+
+
+def diff_patch(root: Path, base: str, head: str) -> str | None:
+    """`base...head` 的完整 patch 文本（S5 D1/D4）：**三点**语义，flag 全部钉死。
+
+    | 返回 | 含义 |
+    |---|---|
+    | `str`（可能是 `""`） | git 答了；**空串 = 无差异，是成功**（D6） |
+    | `None` | 非零退出（无共同祖先等）——"问不出来" |
+    | 抛 `GitUnavailableError` / `GitTimeoutError` | 起不来 / 卡住 |
+
+    `decode_errors="replace"`（D3.3）：patch 正文与文件名是**内容**，只经 `textContent`
+    进 DOM、**永不回传 git**；仓库里有非 UTF-8 的文件内容（latin-1 源码、历史遗留）是常态，
+    为它回 500 是错的。实测：strict 解码在 `\xff` 处抛 `UnicodeDecodeError`，
+    replace 得到 `-�� latin1 bad` / `+�� latin1 bad2`，可正常显示。
+
+    返回**原样** stdout（不 strip）：空差异就是 `""`，截断判断（D6）按字符数在边界层做，
+    L0 不替调用方决定上限。
+    """
+    result = run_git(
+        [*_DIFF_CONFIG, "diff", *DIFF_FLAGS, f"{base}...{head}"],
+        root=root,
+        decode_errors="replace",
+    )
+    return _git_output(result)
+
+
 GIT_ERRORS: Final[tuple[type[Exception], ...]] = (
     GitUnavailableError,
     GitTimeoutError,
@@ -295,19 +444,25 @@ GIT_ERRORS: Final[tuple[type[Exception], ...]] = (
 
 __all__ = [
     "BRANCH_FORMAT",
+    "DIFF_FLAGS",
     "GIT_ERRORS",
     "GIT_TIMEOUT_SECONDS",
+    "STAT_FLAGS",
     "BranchInfo",
+    "DiffStat",
     "GitOutputUndecodableError",
     "GitTimeoutError",
     "GitUnavailableError",
     "bare_root",
     "default_branch",
+    "diff_patch",
+    "diff_stat",
     "git_executable",
     "is_repo",
     "is_worktree_root",
     "list_branches",
     "origin_url",
     "repo_root",
+    "resolve_commit",
     "run_git",
 ]

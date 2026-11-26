@@ -624,6 +624,91 @@ PY
 ② 整段 strip 改变的是**值**，不一定是**段数**——解析器和它的"怎么复现"都要盯实测字节；
 ③ 只测边界（单分支 / 最后一条）的用例会给 bug 开后门，**列表类断言要遍历每一条**。
 
+## 差异视图（S5：第一次把用户 ref 送进 git）
+
+### T34 ❌ git 的用户配置会改 diff 输出——每一条都要一个 flag 钉死（S5 已处理）
+
+**现象**：同一个仓库、同一对 commit，用户机器上的 git 配置不同会让 `repo.diff` 给出**不同答案**。
+这不是过度设计：下面每条都在 `/tmp` 里**真跑过**（git 2.53）：
+
+| 配置 | 不钉 flag 会怎样 | 钉法 |
+|---|---|---|
+| `color.ui=always` | patch 里混入 ANSI：`od -c` 首字节是 `033 [ 1 m`（`\x1b[1m`） | `--no-color` |
+| `diff.external=false` | patch 直接失败：`fatal: 外部 diff 退出，停止在 f.txt`，exit 128 | `--no-ext-diff` |
+| `.gitattributes` + `diff.<driver>.textconv` | hunk 内容被换成外部命令输出（实测 `-SECRET` / `+b` 而不是 `-a` / `+b`） | `--no-textconv` |
+| `diff.renames`（缺省 **true**） | 重命名算 1 个文件（`0 0 old => new`）；用户设 false 就变 2 个文件（`0 2 old` + `2 0 new`） | `--no-renames`（MVP 裁决：重命名 = 一删一增，D4） |
+| `diff.context=1` | hunk 从 `@@ -2,7 +2,7 @@` 变成 `@@ -4,3 +4,3 @@` | `--unified=3` |
+| `core.quotePath`（缺省 true） | 非 ASCII 路径变 `"\344\270\255\346\226\207.txt"`；关掉后是 `中文.txt` | `-c core.quotePath=false`（**必须放在 `diff` 子命令之前**） |
+
+**怎么复现**（S5 实测脚本的形状）：
+
+```bash
+tmp=$(mktemp -d); cd "$tmp"; git init -q --initial-branch=main p; cd p
+git -c user.email=a@b -c user.name=a commit -q --allow-empty -m init
+printf 'one\ntwo\n' > f.txt; git add -A; git -c user.email=a@b -c user.name=a commit -q -m base
+git checkout -q -b feature; printf 'one\nTWO\n' > f.txt; git add -A
+git -c user.email=a@b -c user.name=a commit -q -m change; git checkout -q main
+git config color.ui always
+git diff --no-ext-diff main...feature | od -c | head -1   # 033 [ 1 m ...
+git diff --no-color --no-ext-diff main...feature | head -1 # diff --git a/f.txt b/f.txt
+git config --unset color.ui; git config diff.external false
+git diff main...feature >/dev/null; echo "exit=$?"          # exit=128（外部 diff）
+git diff --no-ext-diff main...feature | head -1; echo "exit=$?"  # diff --git ...; exit=0
+```
+
+**教训**：① "git 的输出"不是你的输出——用户的全局/仓库配置都参与；② 定 flag 时**逐条**想
+"哪个配置会改这个字节"，并写成测试；③ 反向验证：把 `--no-color` / `--no-ext-diff` 从
+`DIFF_FLAGS` 里删掉 → `test_patch_has_no_ansi_when_color_ui_always` /
+`test_patch_ignores_external_diff_driver` **真的变红**（D12 #1/#2 已固化）。
+**位置**：`gitops/repo.py` 的 `DIFF_FLAGS` / `STAT_FLAGS` / `_DIFF_CONFIG`。
+
+### T35 ❌ 三点 diff 没有共同祖先时 git 报的是"无合并基线"，不是 500（S5 已处理）
+
+**现象**：`git checkout --orphan` 造两个不相干历史后：
+
+```text
+$ git diff --numstat main...other
+fatal: main...other：无合并基线        # exit 128，stdout 空
+```
+
+`repo.diff` 的契约是 `ok:false` + `BAD_REF` + 一句人话「两个 ref 没有共同祖先，无法比较」，
+**不是** `INTERNAL`（那会把正常处境报成"未预期错误需报障"），也**不新增码**（07 §1.3 里
+`BAD_REF` 是语义最贴的：分支/提交不存在——比较基线不存在）。回归：`test_unrelated_histories_are_bad_ref`。
+
+**别再踩**：不要把 `git diff` 的非零退出统一翻成 `INTERNAL`；D7 的表里没有一行是"未预期"——
+先按**语义**找最近的既有码。
+
+### T36 ❌ `--numstat` 必须 `-z`；而且不能和 `--unified` 同给（S5 已处理）
+
+**现象 1（路径可含制表/换行）**：`--numstat` 的默认输出按 `\n` 分行，路径里的换行会被转义成
+`"new\nline.txt"`（带引号）——按行切、再按 `\t` 切都会坏。**必须** `-z`：
+
+```text
+$ git -c core.quotePath=false diff --numstat -z --no-renames main...feature | od -c
+-  \t   -  \t   b . b i n \0            ← 二进制：-/-，计 1 个文件
+0  \t   0  \t   m o d e . s h \0        ← 纯 mode 变更：0/0
+1  \t   0  \t   n e w \n l i n e . t x t \0   ← 路径里的换行**原样**在 NUL 记录里
+1  \t   0  \t   t a b \t n a m e . t x t \0   ← 路径里的 tab 也是原样
+```
+
+解析时**只取前两段**（`record.split("\t", 2)`），路径怎么脏都不影响统计。
+
+**现象 2（`--unified` 会把 patch 混回来）**：`--numstat` 隐含 `--no-patch`，但 `--unified`
+隐含 `--patch` 并把它覆盖回来——git 2.53 实测：
+
+```text
+$ git diff --numstat -z --unified=3 main...feature | od -c | head -2
+1 \t 1 \t f . t x t \0 \0 d i f f   - - g i t   a / f . t x t ...
+                ↑ numstat 记录          ↑ 完整 patch 也出来了
+```
+
+按 NUL 切记录时，patch 段会被当成第 2 条"记录"，解析直接崩或被静默算错。所以
+`STAT_FLAGS` 是 `DIFF_FLAGS` **去掉 `--unified`** 的那一组；`--unified=3` 只给 patch 用。
+
+**回归**：`test_stat_counts_binary_file_without_line_counts` / `test_stat_counts_mode_only_change`
+/ `test_rename_counts_as_delete_plus_add` / `test_stat_exact_numbers`（S5 的 -z 解析）；
+`--unified` 那条由 `test_patch_contains_expected_line_kinds` + 实现里的 `STAT_FLAGS` 守着。
+
 ## 已知未决问题
 
 **S4.5 起的规则**：每项必须有「到期切片」——到那一刀开工前，要么修掉，要么明确豁免并写清后果。
@@ -649,6 +734,7 @@ PY
 | U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** | **S7（worktree 可见）前** | S7 要在 worktree 上展示 origin/默认分支，字段语义错会直接显示错 |
 | U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) | **S7 前**（或明确豁免） | 左栏留一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND` |
 | U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。**→ ✅ 结案（S5）**：按 D3.2 的裁决修 —— `run_git` 增加 `decode_errors`（缺省 `strict`），严格模式解码失败抛新异常 `GitOutputUndecodableError`（加进 `GIT_ERRORS`）；`api/repository.py` 把 `repo.branches` / `repo.bind` / `repo.diff` 三条路径一律翻成 `NOT_SUPPORTED` +「仓库含非 UTF-8 的名称，第一版不支持」，不再回 `INTERNAL`。实测触发：`git branch $'bad-\xff'` 之后 `for-each-ref` 原始输出是 `b'bad-\xff\nmain\n'`（严格解码在 position 4 抛 `UnicodeDecodeError`）；JSON 的 lone surrogate 经 `surrogateescape` 会变成真字节、`rev-parse --verify` 真的能解析成功——所以入站也挡（D3.1）。回归：`tests/test_diff.py` D10 第 19/20 行 + 反向注入 D12 #3。 | ✅ **已修（S5）** | — | ref 名回传 git 会变 `BAD_REF`，甚至指向别的 ref——比报错更糟 |
+| U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **S18（空态/错误态与大仓库体检）前** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）；届时裁决：流式读 + 字节上限，或明确豁免并写进 05 安全红线 |
 
 ---
 

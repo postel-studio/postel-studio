@@ -40,7 +40,7 @@
 | `BAD_CWD` | 400 | 相对路径（要求绝对） | 修正后可 |
 | `PATH_OUTSIDE_ROOT` | 403 | 路径越出允许根 | 否 |
 | `PERMISSION_DENIED` | 403 | 权限不足 | 否 |
-| `NOT_SUPPORTED` | 400 | 第一版不支持（如 L3/L4） | 否 |
+| `NOT_SUPPORTED` | 400 | 第一版不支持（如 L3/L4；S5 起也用于「仓库含非 UTF-8 的 ref 名」） | 否 |
 | `ADAPTER_UNAVAILABLE` | 503 | Agent 命令不存在/起不来 | 可 |
 | `ADAPTER_TIMEOUT` | 504 | 握手超时 | 可 |
 | `CONTEXT_CONFLICT` | 409 | 规范冲突，阻断任务 | 人工解决后 |
@@ -170,7 +170,7 @@
 > 重绑同一路径都不会让它变。客户端可以把它当长期缓存的身份用（`bot_id`、分支列表都挂在它上面）。
 > 唯一会变的情形是仓库被移动到新路径。
 
-### 4.2 `repo.diff`
+### 4.2 `repo.diff`（简例；完整契约见 §4.6）
 
 ```json
 {"type":"req","id":"c2","method":"repo.diff",
@@ -255,6 +255,66 @@
 >
 > 分支列表**不落库**（[06-data-model §8](06-data-model.md)）：每次按需从 git 读，
 > 所以用户 `git switch` 之后刷新页面就能看到，不存在"缓存过期"这一类问题。
+
+---
+
+### 4.6 `repo.diff`（S5：点分支 → 看到 diff）
+
+```json
+// 请求：base / head 是任意可解析成 commit 的 ref 名（分支、tag、提交号都行）
+{"type":"req","id":"c6","method":"repo.diff",
+ "params":{"repoId":"adec6540a725","base":"main","head":"feature","maxChars":100000}}
+// 成功：data 是**对象**；stat 描述完整差异，patch 可能被 maxChars 截断
+{"type":"res","id":"c6","ok":true,
+ "result":{"data":{"stat":{"filesChanged":2,"insertions":3,"deletions":1},
+                   "patch":"diff --git a/f.txt b/f.txt\nindex 4cb29ea..6addb9b 100644\n...",
+                   "truncated":false},
+           "seq":17}}
+// 失败：ref 不存在 / 不是 commit / 两个 ref 没有共同祖先
+{"type":"res","id":"c6","ok":false,
+ "error":{"code":"BAD_REF","message":"分支或提交不存在","field":"head"}}
+```
+
+**语义一句话**：三点 `base...head`（共同祖先 → head）——报的是"head 相对共同祖先改了什么"，
+**不**把 base 在分支点之后自己的提交算进来（两点语义会；S5 D1）。
+
+`data` 载荷（**不多不少三个字段**）：
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `stat` | object | `{filesChanged, insertions, deletions}`，三个非负整数。`filesChanged` 是 git numstat **记录数**（含二进制、gitlink、纯 mode 变更）；插入/删除是各行数值求和（二进制的 `-` 记 0）。**不受截断影响**——统计描述完整差异 |
+| `patch` | string | 完整 patch 文本（可能为 `""`：base 与 head 同一 commit 是**成功**，不是错误）。超过 `maxChars` 时按**字符**切（允许切在行中间），不静默丢内容：`truncated` 会告诉客户端 |
+| `truncated` | boolean | `len(完整 patch) > maxChars`；只影响 `patch`，**不影响** `stat` |
+
+`maxChars` 规则（S5 D6）：
+
+| 项 | 值 / 规则 |
+|---|---|
+| 缺省 | `100000` |
+| 合法区间 | `[1000, 200000]` |
+| 类型 | 必须是 `int` 且**不是 `bool`**（`True` 是 `int` 子类，`isinstance(True, int)` 为真） |
+| 越界 | `INVALID_PARAMS`（**不夹紧**：夹紧会让调用方以为拿到了它要的长度） |
+
+错误码（**不许新增码**，07 §1.3 的既有码之内；顺序 = 参数形状 → 资源存在 → ref → 语义）：
+
+| 情形 | 码 |
+|---|---|
+| `repoId` 缺失 / 非字符串 / 空 | `INVALID_PARAMS` |
+| `repoId` 查不到 | `REPO_NOT_BOUND` |
+| `base`/`head` 缺失 / 非字符串 / 空 / 超长 / 控制字符 / lone surrogate / `-` 开头 | `INVALID_PARAMS` |
+| 仓库路径已不存在（目录或 `.git` 被删）**先于 ref 判** | `REPO_NOT_BOUND` |
+| ref 解析不到（不存在 / 不是 commit，例如 tree id） | `BAD_REF` |
+| 两个 ref 没有共同祖先（三点没有 merge base） | `BAD_REF`（文案「两个 ref 没有共同祖先，无法比较」） |
+| `git` 不存在 | `ADAPTER_UNAVAILABLE` |
+| `git` 超时 | `INTERNAL`（同 S3 D6，S19 的 doctor 再细化） |
+| 仓库含非 UTF-8 的 ref 名（S5 D3.2 / U15） | `NOT_SUPPORTED` |
+| 成功（含空差异） | `ok: true` |
+
+> **不落库、不缓存**（[06-data-model §8](06-data-model.md)）：每次按需从 git 读。
+> 缓存会让「用户刚 `git commit` 完」看到旧 diff，比慢更糟。
+>
+> **只到 `<a>...<b>`**：不支持 pathspec（`-- path`）、不开 rename 检测（重命名 = 一删一增）、
+> 不做语法高亮（只按行着色，前端的事）。
 
 ---
 
