@@ -1,6 +1,6 @@
 # 03 · assets — `src/postel_studio/web/assets.py`
 
-> 层 L4 · 948 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
+> 层 L4 · 1222 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
 > ⚠️ **本模块是 Code Map 里覆盖最薄的一块**：JS 的 DOM 行为没有自动化测试。见 §测试。
 
 ## 职责
@@ -15,68 +15,95 @@ S5 起主区还有「差异」面板（D9 的 DOM 契约）：点分支行（鼠
 发 `repo.diff` → 统计串 + 逐行着色 patch / 截断提示 / 按码映射的错误 / 断连回 idle。
 **diff 是不可信文本**（文件名可以是 `<script>`）：进 DOM 一律 `textContent`，全页零 `innerHTML`。
 
+S6 起左栏还有「Bots」区、主区还有只读的「Charter」面板（D8 的 DOM 契约）：点仓库行 →
+`bot.list` → 一行一个 Bot（名字 / 权限徽标 / charter 摘要）→ 点 Bot 行（鼠标或 `Enter`）→
+`memory.charter.get` → 全文 `<pre>` + 记忆目录绝对路径。**charter 是用户可编辑文本 = 不可信**：
+只进 `textContent`，同样零 `innerHTML`。
+
 ## 符号表
 
 | 符号 | 行 | 做什么 |
 |---|---|---|
-| `HEARTBEAT_INTERVAL_MS` | 38 | `1000`，心跳间隔 |
-| `RECONNECT_DELAY_MS` | 39 | `500`，点重连到发起的延迟 |
-| `REQUIRED_PARAMS` | 42 | 全部占位符元组（9 个；S4/S5 都没加新占位符） |
-| `ERROR_TEXT` | 56 | 07 §1.3 错误码 → 用户可读中文（S3 左栏 + S4 分支面板 + S5 差异面板共用；S4 补 `REPO_NOT_BOUND`，S5 补 `BAD_REF` / `NOT_SUPPORTED`） |
-| `ERROR_TEXT_FALLBACK` | 69 | 表外的码走这句通用文案（**只给绑定表单**；分支/差异面板各有自己那句） |
-| `INDEX_HTML` | 71 | 页面本体 |
-| `error_text_json()` | 911 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
-| `render_index(...)` | 920 | 填占位符 |
+| `HEARTBEAT_INTERVAL_MS` | 43 | `1000`，心跳间隔 |
+| `RECONNECT_DELAY_MS` | 44 | `500`，点重连到发起的延迟 |
+| `REQUIRED_PARAMS` | 47 | 全部占位符元组（9 个；S4/S5 都没加新占位符） |
+| `ERROR_TEXT` | 61 | 07 §1.3 错误码 → 用户可读中文（S3 左栏 + S4 分支面板 + S5 差异面板共用；S4 补 `REPO_NOT_BOUND`，S5 补 `BAD_REF` / `NOT_SUPPORTED`） |
+| `ERROR_TEXT_FALLBACK` | 74 | 表外的码走这句通用文案（**只给绑定表单**；分支/差异面板各有自己那句） |
+| `INDEX_HTML` | 76 | 页面本体 |
+| `error_text_json()` | 1185 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
+| `render_index(...)` | 1194 | 填占位符 |
 
 页面内的 DOM / JS（S3 左栏仓库区）：
 
 | 元素/函数 | 行 | 做什么 |
 |---|---|---|
-| `<section id="repos" data-state="loading">` | 279 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
-| `#bind-form` / `#bind-path` / `#bind-button` | 281-284 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
-| `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 286-289 | 错误 / 连接状态 / 列表 / 空态 |
-| `setState(state, text)` | 360 | 状态灯 + `#content.stale` + 转给 `setRepoState` |
-| `setRepoState(state, text)` | 371 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**）；非 connected 时把分支/差异面板重置回 idle |
-| `errorText(code)` | 397 | 错误码 → 文案（**不看 message**；绑定表单用） |
-| `renderRepos(list)` | 405 | 一行 = 名称 + 「默认分支 X」；`li` 可选中（`tabindex` / `role=button` / `data-selected`），重建后恢复选中标记；同时把 `defaultBranch` 存进 `repoDefaultBranches` 供差异面板用 |
-| `loadRepos()` | 457 | 连上后发 `repo.list` |
-| `submitBind()` | 748 | 发 `repo.bind`，成功/失败各自收口 |
-| `request(method, params, done)` | 796 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
+| `<section id="repos" data-state="loading">` | 343 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
+| `#bind-form` / `#bind-path` / `#bind-button` | 345-348 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
+| `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 350-353 | 错误 / 连接状态 / 列表 / 空态 |
+| `setState(state, text)` | 446 | 状态灯 + `#content.stale` + 转给 `setRepoState` |
+| `setRepoState(state, text)` | 457 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**）；非 connected 时把分支/差异面板重置回 idle |
+| `errorText(code)` | 487 | 错误码 → 文案（**不看 message**；绑定表单用） |
+| `renderRepos(list)` | 495 | 一行 = 名称 + 「默认分支 X」；`li` 可选中（`tabindex` / `role=button` / `data-selected`），重建后恢复选中标记；同时把 `defaultBranch` 存进 `repoDefaultBranches` 供差异面板用 |
+| `loadRepos()` | 552 | 连上后发 `repo.list` |
+| `submitBind()` | 1022 | 发 `repo.bind`，成功/失败各自收口 |
+| `request(method, params, done)` | 1070 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
 
 S4 的分支面板（D6）：
 
 | 元素/函数 | 行 | 做什么 |
 |---|---|---|
-| `<section id="branches" data-state="idle">` | 254 | 主区分支面板，位置在 `#content` 之后；初始 idle |
-| `#branches-title` / `#branches-state` / `#branches-error` / `#branch-list` / `#branch-empty` | 255-259 | 标题 / 状态文案 / 错误 / 列表 / 空态（DOM 契约，id 不许改） |
-| `BRANCH_ERROR_FALLBACK` | 337 | 分支面板**自己的**兜底「读取分支列表失败」（不用 `ERROR_TEXT_FALLBACK`） |
-| `branchErrorText(code)` | 473 | 错误码 → 中文；表外走分支自己的兜底 |
-| `resetBranches(state, text)` | 481 | 清空列表 + 回指定 state；断连时 `idle` + 「已断开：分支列表未知」 |
-| `applyRepoSelection()` | 492 | 左边行 `data-selected="true"`（选中标记只在这一个函数里打/清） |
-| `renderBranches(list)` | 507 | 一行 = `.branch-name` / `.branch-sha` / `.branch-upstream`（有才建）/ `.branch-current`（仅当前）；**S5 起每行可点/键盘可达**（`tabIndex` / `role=button` / `data-selected`），重建后恢复选中 |
-| `loadBranches()` | 551 | 发 `repo.branches`；用 `branchRequestToken` 丢弃过期回包 |
-| `selectRepo(repoId, name)` | 737 | 选中仓库：更新选中态 + 标题 + **清空差异面板** + 取分支 |
+| `<section id="branches" data-state="idle">` | 300 | 主区分支面板，位置在 `#content` 之后；初始 idle |
+| `#branches-title` / `#branches-state` / `#branches-error` / `#branch-list` / `#branch-empty` | 301-305 | 标题 / 状态文案 / 错误 / 列表 / 空态（DOM 契约，id 不许改） |
+| `BRANCH_ERROR_FALLBACK` | 401 | 分支面板**自己的**兜底「读取分支列表失败」（不用 `ERROR_TEXT_FALLBACK`） |
+| `branchErrorText(code)` | 568 | 错误码 → 中文；表外走分支自己的兜底 |
+| `resetBranches(state, text)` | 576 | 清空列表 + 回指定 state；断连时 `idle` + 「已断开：分支列表未知」 |
+| `applyRepoSelection()` | 587 | 左边行 `data-selected="true"`（选中标记只在这一个函数里打/清） |
+| `renderBranches(list)` | 602 | 一行 = `.branch-name` / `.branch-sha` / `.branch-upstream`（有才建）/ `.branch-current`（仅当前）；**S5 起每行可点/键盘可达**（`tabIndex` / `role=button` / `data-selected`），重建后恢复选中 |
+| `loadBranches()` | 646 | 发 `repo.branches`；用 `branchRequestToken` 丢弃过期回包 |
+| `selectRepo(repoId, name)` | 1006 | 选中仓库：更新选中态 + 标题 + **清空差异面板** + 取分支 |
 
 S5 的差异面板（D9）：
 
 | 元素/函数 | 行 | 做什么 |
 |---|---|---|
-| `<section id="diff" data-state="idle">` | 263 | 主区差异面板，位置在 `#branches` 之后；初始 idle |
-| `#diff-title` / `#diff-base` / `#diff-head` / `#diff-compare` / `#diff-state` / `#diff-error` / `#diff-truncated` / `#diff-stat` / `#diff-patch` | 264-275 | 标题 / 两个 ref 输入 + 对比按钮 / 状态文案 / 错误 / 截断提示 / 统计 / patch（DOM 契约，id 不许改） |
-| `DIFF_ERROR_FALLBACK` / `DIFF_HINT` | 354-355 | 差异面板自己的兜底「读取差异失败」/ 初始提示文案 |
-| `repoDefaultBranches` | 356 | `repoId → defaultBranch`（点分支行时 base 的来源；`null` = HEAD 游离） |
-| `selectedBranchName` | 357 | 当前点选的分支行（列表重建后恢复 `data-selected`） |
-| `diffErrorText(code)` | 589 | 错误码 → 中文；表外走差异面板自己的兜底 |
-| `diffTitleText()` | 593 | `差异` / `差异 · <repoName>`（`textContent`，不拼 HTML） |
-| `clearDiffContent(state, text)` | 598 | 清空统计/patch/错误/截断 + 回指定 state；`diffRequestToken += 1` 让在途回包作废 |
-| `applyBranchSelection()` | 612 | 分支行 `data-selected` 的唯一打/清点（重建后恢复） |
-| `resetDiff(state, text)` | 625 | 切仓库 / 断连的收口：清分支选中 + `clearDiffContent` |
-| `diffLineKind(line)` | 633 | **按 D9 的顺序**分类：meta（`diff --git`/`index`/mode/`\\`）→ hunk（`@@`）→ meta（`+++ `/`--- `）→ add → del → ctx |
-| `renderDiffPatch(patch)` | 645 | 一行一个 `<div class="diff-line diff-<kind>">`，文本 `textContent`（不可信） |
-| `diffStatText(stat)` | 657 | `<N> 个文件 · +<X> −<Y>`（U+00B7 / U+2212） |
-| `requestDiff(base, head)` | 662 | 发 `repo.diff`；`diffRequestToken` 丢弃过期回包；处理 truncated / 空 patch |
-| `selectBranch(name)` | 701 | 点分支行：填两个输入框；默认分支本身 / 无默认分支 → idle + 文案、**不发请求** |
-| `submitDiff()` | 721 | 手填表单：trim 后为空 → `#diff-error`「请填 base 和 head」、state 不变 |
+| `<section id="diff" data-state="idle">` | 309 | 主区差异面板，位置在 `#branches` 之后；初始 idle |
+| `#diff-title` / `#diff-base` / `#diff-head` / `#diff-compare` / `#diff-state` / `#diff-error` / `#diff-truncated` / `#diff-stat` / `#diff-patch` | 310-321 | 标题 / 两个 ref 输入 + 对比按钮 / 状态文案 / 错误 / 截断提示 / 统计 / patch（DOM 契约，id 不许改） |
+| `DIFF_ERROR_FALLBACK` / `DIFF_HINT` | 418-419 | 差异面板自己的兜底「读取差异失败」/ 初始提示文案 |
+| `repoDefaultBranches` | 420 | `repoId → defaultBranch`（点分支行时 base 的来源；`null` = HEAD 游离） |
+| `selectedBranchName` | 421 | 当前点选的分支行（列表重建后恢复 `data-selected`） |
+| `diffErrorText(code)` | 684 | 错误码 → 中文；表外走差异面板自己的兜底 |
+| `diffTitleText()` | 688 | `差异` / `差异 · <repoName>`（`textContent`，不拼 HTML） |
+| `clearDiffContent(state, text)` | 693 | 清空统计/patch/错误/截断 + 回指定 state；`diffRequestToken += 1` 让在途回包作废 |
+| `applyBranchSelection()` | 707 | 分支行 `data-selected` 的唯一打/清点（重建后恢复） |
+| `resetDiff(state, text)` | 720 | 切仓库 / 断连的收口：清分支选中 + `clearDiffContent` |
+| `diffLineKind(line)` | 728 | **按 D9 的顺序**分类：meta（`diff --git`/`index`/mode/`\\`）→ hunk（`@@`）→ meta（`+++ `/`--- `）→ add → del → ctx |
+| `renderDiffPatch(patch)` | 740 | 一行一个 `<div class="diff-line diff-<kind>">`，文本 `textContent`（不可信） |
+| `diffStatText(stat)` | 752 | `<N> 个文件 · +<X> −<Y>`（U+00B7 / U+2212） |
+| `requestDiff(base, head)` | 757 | 发 `repo.diff`；`diffRequestToken` 丢弃过期回包；处理 truncated / 空 patch |
+| `selectBranch(name)` | 796 | 点分支行：填两个输入框；默认分支本身 / 无默认分支 → idle + 文案、**不发请求** |
+| `submitDiff()` | 816 | 手填表单：trim 后为空 → `#diff-error`「请填 base 和 head」、state 不变 |
+
+S6 的 Bots 区与 charter 面板（D8）：
+
+| 元素/函数 | 行 | 做什么 |
+|---|---|---|
+| `<section id="charter" data-state="idle">` | 325 | 主区 charter 面板，位置在 `#diff` 之后；初始 idle |
+| `#charter-title` / `#charter-state` / `#charter-error` / `#charter-memory` / `#charter-content` | 326-331 | 标题（`Charter` / `Charter · <bot>`）/ 状态文案 / 错误 / `记忆目录：<绝对路径>` / 全文（**一个 `<pre>` + `textContent`**） |
+| `<section id="bots" data-state="idle">` | 334 | 左栏 Bots 区，位置在 `#repos` **之前**（03-ui-spec §2：左栏上 Bot / 下仓库） |
+| `#bots-title` / `#bots-state` / `#bots-error` / `#bot-list` / `#bot-empty` | 335-339 | 标题 / 状态文案 / 错误 / 列表 / 空态（DOM 契约，id 不许改） |
+| `botsEl` … `charterContent` | 425-434 | 两个面板的元素引用 |
+| `BOT_HINT` / `CHARTER_HINT` / `BOT_ERROR_FALLBACK` / `CHARTER_ERROR_FALLBACK` | 436-440 | 提示文案与**各自**的兜底（不用绑定表单那句「绑定失败」） |
+| `selectedBotId` / `selectedBotName` / `botRequestToken` / `charterRequestToken` | 441-444 | 选中的 Bot（与 repo 强绑定）+ 两个过期回包拦截器 |
+| `botErrorText(code)` / `charterErrorText(code)` | 840/844 | 按码映射；`charterErrorText` 把 `INVALID_PARAMS` 翻成「找不到这个 Bot」（D6） |
+| `charterTitleText()` | 850 | `Charter` / `Charter · <botName>` |
+| `resetBots(state, text)` | 854 | 清列表 + 回 state；`botRequestToken += 1` 让在途回包作废 |
+| `applyBotSelection()` | 864 | Bot 行 `data-selected` 的唯一打/清点（列表重建后恢复） |
+| `renderBots(list)` | 879 | 一行 = `.bot-name` / `.bot-permission` / `.bot-charter-summary`；`li` 键盘可达；选中的 Bot 消失 → charter 回 idle |
+| `loadBots()` | 933 | 发 `bot.list`；`botRequestToken` 丢弃过期回包 |
+| `resetCharter(state, text)` | 956 | 清记忆目录/全文/错误 + 回 state（切仓库、断连） |
+| `loadCharter(botId, botName)` | 969 | 发 `memory.charter.get`；全文与路径只进 `textContent`（D8/D9） |
+| `selectBot(botId, botName)` | 998 | 选中 Bot → 取 charter |
+| `setRepoState` / `renderRepos` / `selectRepo` | 457/495/1006 | S6 钩子：断连重置两个面板、仓库列表重建后重取 `bot.list`、切仓库清 charter |
 
 ## 关键决策与理由
 
@@ -246,11 +273,23 @@ DOM 契约（**id / `data-state` 值 / 类名都是契约，浏览器验收按�
 | 断连 | idle + 「已断开：差异未知」+ 清空（同 S4 分支面板纪律）；**重连不自动重发 diff**（diff 是查询历史动作，重放会覆盖用户正在看的对比） |
 | 快速切换 | `diffRequestToken` 拦住过期回包（同 `branchRequestToken`） |
 | 键盘 | 分支行 `tabindex="0"` + `role="button"`，`Enter`/`Space` 与 click 同一条路径（`preventDefault` 防 Space 滚动） |
-| 安全 | 全文件 `innerHTML` 零使用（diff 是不可信文本，文件名可以是 `<script>`）；静态测试钉住 |
+| 安全 | 全文件 `innerHTML` 零使用（diff / charter 都是不可信文本）；静态测试钉住 |
 
 **为什么 `repoDefaultBranches` 是「按 repoId 的 map」而不是 `selectRepo` 的参数**：S4 的
 `renderRepos` → `selectRepo(repoId, repoName)` 回调形状与页面契约断言是既有资产，S5
 **不改它**；默认分支在 `renderRepos` 里顺手记进 map，`selectBranch` 再按 `selectedRepoId` 取。
+
+### S6：charter 是不可信文本，两个面板与分支/差异同源
+
+- **全文只进 `<pre>` 的 `textContent`**：charter 是用户可编辑的 Markdown，可能包含任何字符
+  （含 `<script>`）。S6 的浏览器验收专门写一段 `<script>` 进 charter 再点开，断言 DOM 里
+  **没有 script 元素**。
+- **显隐只由 `data-state` + `hidden`**：`#bots` / `#charter` 与 `#branches` / `#diff` 同一套
+  CSS 规则，JS 不逐个 `style.display`（T8）。
+- **断连清空、重连重放**（D8）：断连时两个面板回 idle 并清空；重连后若 repo 仍选中则重取
+  `bot.list`，选中的 Bot 仍存在时把 charter 重放回来（charter 是静态内容，重放不会覆盖
+  用户正在看的对比——这一条与 diff 的「不重放」不同）。
+- **两个 token**：`botRequestToken` / `charterRequestToken` 各自拦住过期回包（快速切仓库）。
 
 ## 修改须知
 
@@ -296,6 +335,7 @@ DOM 契约（**id / `data-state` 值 / 类名都是契约，浏览器验收按�
 | `test_page_diff_stat_and_truncation_have_exact_copy` | 统计串的 U+00B7/U+2212 与截断文案 |
 | `test_page_diff_branch_rows_are_keyboard_selectable` | 分支行 `tabindex` / `role=button` / Enter-Space 同路径 |
 | `test_page_never_uses_inner_html` | 全文件 `innerHTML` 零使用（D10 第 18 行，反向注入 D12 #5 的靶子） |
+| `tests/test_bot_charter.py`（页面契约 3 条，S6） | 两个面板的 id/文案/顺序、行结构、charter 只经 `textContent`、零 `innerHTML` |
 
 S3 的页面行为**没有**进 pytest（T9 的老问题，S3 也没解决）。验收 1–4 与 D1 的断连可区分
 由 **`tools/acceptance/s3_bind.mjs`** 验：真 Chrome + 真内核 + 读真 DOM，**跳过而不失败**

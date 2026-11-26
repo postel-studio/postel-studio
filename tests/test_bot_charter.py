@@ -37,6 +37,7 @@ from postel_studio.domain.models import (
 )
 from postel_studio.storage import db as state_db
 from postel_studio.storage import paths
+from postel_studio.web import assets
 
 from .gateway_util import Kernel, decode_frame, frame_result, frame_seq
 
@@ -570,3 +571,63 @@ def test_ws_bot_frames_match_service(gw: Kernel, state_home: Path, tmp_path: Pat
     finally:
         bots.close()
         repos.close()
+
+
+# ---------------------------------------------------------------------------
+# D11 第 14 行：页面契约（**文本断言**；真实 DOM 由 tools/acceptance/s6_bots.mjs 验）
+# ---------------------------------------------------------------------------
+
+
+def test_page_has_bots_and_charter_dom_contract() -> None:
+    """**D11 第 14 行**：两个面板的 id、文案、DOM 顺序与「一个 `<pre>` 显示全文」（D8）。"""
+    page = assets.INDEX_HTML
+    for fragment in (
+        '<section id="bots" data-state="idle" aria-live="polite">',
+        '<h2 id="bots-title">Bots</h2>',
+        '<p id="bots-state">选择一个仓库查看它的 Bot</p>',
+        '<p id="bots-error" role="alert" hidden></p>',
+        '<ul id="bot-list"></ul>',
+        '<p id="bot-empty" hidden>这个仓库还没有 Bot。</p>',
+        '<section id="charter" data-state="idle" aria-live="polite">',
+        '<h2 id="charter-title">Charter</h2>',
+        '<p id="charter-state">点左侧的 Bot 查看它的 charter</p>',
+        '<p id="charter-error" role="alert" hidden></p>',
+        '<p id="charter-memory" hidden></p>',
+        '<pre id="charter-content" hidden></pre>',
+    ):
+        assert fragment in page, fragment
+    assert page.index('id="bots"') < page.index('id="repos"')  # D8：左栏上 Bot / 下仓库
+    assert page.index('id="charter"') > page.index('id="diff"')  # 主区 charter 在 #diff 之后
+    assert "正在读取 Bot…" in page
+    assert "已断开：Bot 列表未知" in page
+    assert "记忆目录：" in page
+    assert "white-space: pre-wrap" in page  # charter 全文可换行、不假设中文宽度
+
+
+def test_page_renders_bot_rows_and_charter_with_text_content() -> None:
+    """**D11 第 14 行**：行结构（`.bot-name` / `.bot-permission` / `.bot-charter-summary`）、
+    键盘可达、选中标记、以及 charter 全文只经 `textContent` 进 DOM。"""
+    page = assets.INDEX_HTML
+    for fragment in (
+        "li.dataset.botId = rowId;",
+        "li.tabIndex = 0;",
+        'li.setAttribute("role", "button");',
+        'name.className = "bot-name";',
+        'badge.className = "bot-permission";',
+        'summary.className = "bot-charter-summary";',
+        'rows[i].dataset.selected = "true";',
+        'charterTitle.textContent = "Charter · " + botName;',
+        'charterMemory.textContent = "记忆目录：" + String(payload.memoryPath || "");',
+        'charterContent.textContent = String(payload.content == null ? "" : payload.content);',
+    ):
+        assert fragment in page, fragment
+    assert "botRequestToken" in page  # D8：快速切换各自的过期回包拦截
+    assert "charterRequestToken" in page
+
+
+def test_page_never_uses_inner_html_in_bot_panels() -> None:
+    """**D11 第 14 行**：全文件 `innerHTML` 零使用。
+
+    charter 是**用户可编辑文本 = 不可信**（05 §4.2 同一精神），进 DOM 一律 `textContent`。
+    """
+    assert "innerHTML" not in assets.INDEX_HTML
