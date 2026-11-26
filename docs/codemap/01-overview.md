@@ -14,9 +14,10 @@
 │  单进程：postel-studio serve                    （前台，Ctrl+C 停） │
 │                                                                  │
 │  主线程 ────────────────────────────────────────────────────────  │
+│   ⓪ 删掉上一轮 SIGKILL 残留的 server.json（看见文件=内核在听）    │
 │   ① 抢锁 kernel.lock（O_EXCL 原子）                              │
 │   ② bind(127.0.0.1, 0) → 内核自行选端口                          │
-│   ③ 装信号处理器（SIGTERM/SIGINT）                               │
+│   ③ 装信号处理器（SIGTERM/SIGINT）  ← 必须早于 ④                │
 │   ④ 写 token 文件 + server.json                                  │
 │   ⑤ uvicorn.run(sockets=[已监听的 sock])                        │
 │        └─ asyncio 事件循环                                       │
