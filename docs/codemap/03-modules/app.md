@@ -13,8 +13,8 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `API_VERSION` | 22 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
-| `health()` | 25 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
+| `API_VERSION` | 24 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
+| `health()` | 27 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
 | `create_app(ws_path, host, port)` | 38 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
 | （局部）`store = RepoStore()` | 52 | 打开 `state.db`（状态根下） | 注入链的起点 |
 | （局部）`repositories = RepositoryService(store)` | 53 | `repo.bind` / `repo.list` / `repo.branches` 的实现 | `gateway.Providers` |
@@ -24,12 +24,12 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 
 | 路由 | 行 | 认证 | 返回 |
 |---|---|---|---|
-| `GET /` | 46 | 无 | HTML（每次渲染签发新 ticket） |
-| `GET /api/health` | 60 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
+| `GET /` | 67 | 无 | HTML（每次渲染签发新 ticket） |
+| `GET /api/health` | 69 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
 | `GET /api/where` | 73 | 无 | `{host, port, wsPath, pid}` |
-| `WS /gateway/<sha16>` | 93（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
+| `WS /gateway/<sha16>` | 84（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
 
-**S3 没有加路由。** `repo.bind` / `repo.list` 走 WS，`/api/repos` 是 404
+**S3/S4 没有加路由。** `repo.bind` / `repo.list` / `repo.branches` 走 WS，`/api/repos` 是 404
 （`test_bind.py::test_no_http_route_for_repositories` 守着）。
 
 ## 关键决策与理由

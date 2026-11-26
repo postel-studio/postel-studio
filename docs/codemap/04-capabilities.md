@@ -43,16 +43,16 @@
 |---|---|
 | 用户路径 | 右上角状态灯：已连接 / 已断开 / 重连中 |
 | DOM | `web/assets.py` 里 `id="status"`、`id="status-text"` |
-| 状态切换 | `web/assets.py:112` `setState()` |
+| 状态切换 | `web/assets.py:280` `setState()` |
 | 由谁守住 | `test_gateway.py::test_page_declares_status_lamp_and_three_states`（**文本断言**） |
 
 ### C5 · 断连 ≤3 秒可见 + 灰化 + 重连按钮
 
 | 项 | 位置 |
 |---|---|
-| 心跳判活 | `web/assets.py:157` `startHeartbeat()` |
-| 唯一向下出口 | `web/assets.py:129` `fail()` |
-| 灰化规则 | `web/assets.py:68-69` `#content.stale` / `::after` |
+| 心跳判活 | `web/assets.py:560` `startHeartbeat()` |
+| 唯一向下出口 | `web/assets.py:515` `fail()` |
+| 灰化规则 | `web/assets.py:102-104` `#content.stale` / `::after` |
 | 按钮显示 | `setState()` 里 `button.style.display = ...` |
 | 由谁守住 | `test_gateway.py::test_server_cleans_up_connection_after_client_disconnect`（**后端侧**）、`::test_page_has_stale_rule_and_toggles_it_on_disconnect`（**文本**） |
 | ⚠️ 真实 DOM 行为 | **无自动化测试**，靠人工浏览器验证 |
@@ -61,10 +61,10 @@
 
 | 项 | 位置 |
 |---|---|
-| 重连入口 | `web/assets.py:218` `reconnect()` |
-| 取新票 | `web/assets.py:168` `freshTicket()` |
-| 端口校验 | `web/assets.py:179` `PORT_CHANGED` |
-| 建连 | `web/assets.py:194` `connect()` |
+| 重连入口 | `web/assets.py:621` `reconnect()` |
+| 取新票 | `web/assets.py:571` `freshTicket()` |
+| 端口校验 | `web/assets.py:582` `PORT_CHANGED` |
+| 建连 | `web/assets.py:597` `connect()` |
 | 由谁守住 | `test_gateway.py::test_reconnect_after_disconnect_works_without_restart`（网关侧）、`::test_frontend_reports_port_change_and_does_not_guess`（文本） |
 | ⚠️ 边界 | **端口变了无法自动恢复**（D7），页面会明确告知 |
 
@@ -81,17 +81,17 @@
 
 | 项 | 位置 |
 |---|---|
-| 签发 | `api/gateway.py:45` `TicketRegistry.issue()`（在 `app.index()` 里调用） |
-| 消费 | `api/gateway.py:54` `consume()` |
+| 签发 | `api/gateway.py:50` `TicketRegistry.issue()`（在 `app.index()` 里调用） |
+| 消费 | `api/gateway.py:59` `consume()` |
 | 页面注入 | `web/assets.py` 的 `<meta name="postel-handshake">` |
-| 拒绝握手 | `api/gateway.py:101` → HTTP 403 |
+| 拒绝握手 | `api/gateway.py:128` → HTTP 403 |
 | 由谁守住 | `test_gateway.py::test_ticket_is_single_use`、`::test_missing_ticket_is_rejected_with_403`、`::test_forged_ticket_is_rejected_with_403` |
 
 ### C9 · 内核告知自己的位置（`/api/where`）
 
 | 项 | 位置 |
 |---|---|
-| 路由 | `api/app.py:67` |
+| 路由 | `api/app.py:73` |
 | 数据来源 | `create_app(ws_path, host=, port=)` 注入的**本进程真实绑定** |
 | 由谁守住 | `test_gateway_inprocess.py::test_where_reports_this_kernels_real_binding`（删掉 server.json 后仍答同样值） |
 
@@ -109,13 +109,13 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 左栏输入框粘绝对路径 → 点「绑定」→ 左栏出现「名称 / 默认分支」 |
-| 前端入口 | `web/assets.py:266` `submitBind()`（真 `<form>`，回车也可） |
-| 方法表 | `api/gateway.py:109` `dispatch()` 的 `repo.bind` 分支 |
-| 业务编排 | `api/repository.py:143` `RepositoryService.bind()` |
+| 前端入口 | `web/assets.py:484` `submitBind()`（真 `<form>`，回车也可） |
+| 方法表 | `api/gateway.py:111` `dispatch()` 的 `repo.bind` 分支 |
+| 业务编排 | `api/repository.py:154` `RepositoryService.bind()` |
 | 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
-| **`.git` 判定** | `api/repository.py:61` `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
+| **`.git` 判定** | `api/repository.py:72` `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
 | **子目录校正** | `api/repository.py:_bindable_root()`（D2，见 06 T25） |
-| 探测 | `gitops/repo.py:149` `origin_url()`、`:163` `default_branch()` |
+| 探测 | `gitops/repo.py:176` `origin_url()`、`:190` `default_branch()` |
 | id | `domain/models.py:124` `repo_id(path)`——**只看路径**，写后永不更新（S3.5 D1，U9 已结案） |
 | origin 识别 | `domain/models.py:111` `origin_hash()` → `repos.origin_hash`（D2；帧层**不暴露**） |
 | 落库 | `storage/db.py:163` `RepoStore.upsert()`（同路径不产第二行；`repo_id` 只 INSERT 时写） |
@@ -127,9 +127,9 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 页面加载 / 重连成功后自动拉一次 |
-| 前端 | `web/assets.py:257` `loadRepos()` → `:237` `renderRepos()` |
-| 方法表 | `api/gateway.py:111` |
-| 业务 | `api/repository.py:139` `RepositoryService.list()` |
+| 前端 | `web/assets.py:366` `loadRepos()` → `:318` `renderRepos()` |
+| 方法表 | `api/gateway.py:113` |
+| 业务 | `api/repository.py:150` `RepositoryService.list()` |
 | 读库 | `storage/db.py:145` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
 | 由谁守住 | `test_bind.py::test_list_returns_array_payload_with_camel_case_keys`、`::test_data_survives_reopening_the_store` |
 
@@ -138,8 +138,8 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 内核不在 / 断连时，左栏仓库区显示「已断开：内核没有连着，仓库列表未知」，**不显示**空态 |
-| 状态源 | `web/assets.py:217` `setRepoState()` → `#repos[data-state]` |
-| 显隐规则 | `web/assets.py:95-135` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
+| 状态源 | `web/assets.py:291` `setRepoState()` → `#repos[data-state]` |
+| 显隐规则 | `web/assets.py:109-154` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
 | 由谁守住 | `tools/acceptance/s3_bind.mjs` 的 `CHECK D1 …` 四行（CDP 断网 → 读 DOM → 恢复 → 点重连，见 06 T27） |
 
 ### C14 · 点仓库 → 看到分支列表（`repo.branches`）—— S4
