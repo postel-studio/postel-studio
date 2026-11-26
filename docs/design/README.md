@@ -8,6 +8,10 @@
 | [02-architecture.md](02-architecture.md) | 进程模型、Cordis 风格模块划分、统一 Bot 运行时接口、工作区隔离、接入层、落盘 | 阶段 2 方案 |
 | [02b-protocol.md](02b-protocol.md) | 三层协议（前端↔内核 / 内核↔PI）、帧格式、订阅、权限往返、禁止事项 | 阶段 2 通信契约 |
 | [03-ui-spec.md](03-ui-spec.md) | 仿 GitHub 的仓库页规格、产品区区分、交互与验收口径 | 阶段 2 UI |
+| [04-task-breakdown.md](04-task-breakdown.md) | M1~M3 里程碑、依赖图、21 个垂直切片 | 阶段 3 拆解 |
+| [05-security.md](05-security.md) | 威胁模型、认证、权限、输入校验、密钥管理、供应链、隐私、PR 验收清单 | 阶段 2 安全底线 |
+| [06-data-model.md](06-data-model.md) | 五个实体、字段与约束、状态机、关系、落盘一致性、迁移 | 阶段 2 数据 |
+| [07-api-contract.md](07-api-contract.md) | 方法清单、错误码表、请求/响应、事件、兼容演进 | 阶段 2 接口 |
 
 ## 原型
 
