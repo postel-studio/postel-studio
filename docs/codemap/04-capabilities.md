@@ -174,6 +174,22 @@
 | 由谁守住 | `tests/test_diff.py` **47 个用例**（真 git + 真 SQLite + 真 WS 帧）：D10 第 1–21 行 + 页面契约 7 条；反向注入 5 条在 `tests/test_reverse_checks.py` |
 | ⚠️ UI 行为 | pytest 里只有文本断言；D11 的 10 条由 `node tools/acceptance/s5_diff.mjs` 在真实 Chrome 里跑（T9） |
 
+### C16 · 左栏看到 Bot 与它的 charter（`bot.list` / `memory.charter.get`）—— S6
+
+| 项 | 位置 |
+|---|---|
+| 用户路径 | 左栏「Bots」区在选中仓库后出现 `builder`（名字 / L1 徽标 / 职责摘要）→ 点它（鼠标或 `Enter`）→ 主区「Charter」面板显示 charter 全文与记忆目录**绝对路径** |
+| 前端入口 | `web/assets.py` 的 `#bots` / `#charter` 面板：`loadBots()` / `selectBot()` / `loadCharter()`；断连 / 切仓库的收口是 `resetBots()` / `resetCharter()` |
+| DOM 契约 | `#bots[data-state]` / `#charter[data-state]` + `li[data-bot-id]` / `.bot-name` / `.bot-permission` / `.bot-charter-summary` / `#charter-memory` / `#charter-content`（S6 D8） |
+| 方法表 | `api/gateway.py:125` `bot.list` / `api/gateway.py:127` `memory.charter.get` |
+| 业务编排 | `api/bots.py:86` `BotService`：惰性播种（D2）、摘要五条与 `charterRev`（D5）、错误码（D6） |
+| 数据 | `storage/db.py:284` `BotStore`（v3 的 `bots` 表）；charter **正文在文件**：`storage/paths.py:252` `ensure_memory_space` / `storage/paths.py:271` `read_charter` |
+| 安全 | 记忆目录 `<状态根>/bots/<repo_id>/<name>/`：目录 `0700`、`charter.md` `0600`（D3 / T38）；名字白名单 + resolve 越界断言 |
+| 错误码 | `INVALID_PARAMS`（repoId / botId 形状错、botId 查不到）/ `REPO_NOT_BOUND`（repoId 查不到）/ `INTERNAL`（记忆目录读写失败）——07 §1.3 既有码，**一个不新增** |
+| 由谁守住 | `tests/test_bot_charter.py` **26 个用例**（真 SQLite + 真文件 + 真 WS 帧）：D11 第 1–14 行；反向注入 5 条在 `tests/test_reverse_checks.py` |
+| M1 收口 | `scripts/accept_m1.py` 一条命令跑通 S1–S6 + 家具（真内核 / 真 git / 真 WS），由 `tests/test_accept_m1.py` 子进程验收 |
+| ⚠️ UI 行为 | pytest 里只有文本断言；D8 的 DOM 行为由 `node tools/acceptance/s6_bots.mjs` 在真实 Chrome 里跑（T9） |
+
 ---
 
 ## 2. 常见任务 → 文件
@@ -187,7 +203,9 @@
 ④ tests/test_gateway.py    加一个往返用例 + 一个反例（坏参数 → INVALID_PARAMS）
 ⑤ 若错误码是新的          frames.py 常量 + 07 §1.3 表（**S3 D6：不许新造码**，先改表）
 ⑥ 把该方法的 matcher 从 tests/test_gateway.py::test_unknown_method_is_unknown_method_not_subscribe
-                           的反例清单里**拿掉**（S3 实现 repo.bind 时踩过）
+                           的反例清单里**拿掉**（S3 实现 repo.bind 时踩过；S6 的 bot.list 同）
+⑦ 若属于新的一族（如 S6 的 bot.* / memory.*）：新开 L3 handler 模块 + LAYERS 登记 +
+                           02-layers 层表 + Providers 注入（照 api/bots.py 抄）
 ```
 
 **注意**：方法多到 6~8 个时 `dispatch()` 的 `if` 链该改注册表，但现在别提前抽象。
@@ -256,9 +274,9 @@
 | S3 遗留 | `repo.unbind` / `repo.list` 之外的 `REPO_NOT_BOUND` 帧方法入口 | — | 见 06 U9（`repo_id` 已稳定）、U10（store 不关）、U14（移动仓库产生两行） |
 | ~~S4~~ | **已完成**：点仓库行 → 主区分支面板列出本地分支（当前徽章 / 8 位 sha / upstream） | `gitops.BranchInfo` + `list_branches`；`api/repository.branches`；前端 `#branches` | 新增 C14；`for-each-ref` 的 ref 解析首次出现，逼出 **T33** |
 | ~~S5~~ | **已完成**：点分支 → 统计 + 着色 patch（截断不静默丢、非法 ref 可读、键盘可达） | `gitops.resolve_commit`/`diff_stat`/`diff_patch`；`api/repository.diff`；前端 `#diff` | 新增 C15；**第一次把用户 ref 送进 git**，裁决 U15（T34/T35/T36） |
-| S6 | Bot 与 charter | `memory/`、`store/` | 新增两页 |
+| ~~S6~~ | **已完成**：左栏 Bots 区 + 主区只读 charter 面板（M1 一条命令复现 S1–S6） | `api/bots.py`、`bots` 表（v3）、paths 的记忆空间；前端 `#bots`/`#charter`；`scripts/accept_m1.py` | 新增 C16；逼出 **T38**（umask 权限）与 **U17**（`bot.list` 惰性播种 / `charter_rev` 未维护） |
 | S7 | worktree 路径 | `git/worktree` | |
-| S8 | 创建 Bot | `storage/db.py` 加 `bots` 表（第二次迁移） | 01-overview 已是"单进程 + 一个库"，再改一张表图 |
+| S8 | 创建 Bot | `api/bots.py` 加 `create`；`bots` 表已在 v3 存在；预置播种改由显式动作负责（U17 到期） | 01-overview 已是"单进程 + 一个库"，再改一张表图；`charter_rev` 的写路径要到 S22 |
 | S9 | 检测 Agent | `agent/`（ACP 握手） | **第二个进程模型出现，01-overview 重画** |
 | S10 | 派活跑起来 | 任务状态机、流式输出 | `dispatch()` 会明显变长 |
 | S11 | 收件箱出现候选 | diff → candidate | |
