@@ -50,19 +50,23 @@ postel-studio/
 ## 开发
 
 ```bash
-uv sync                # 创建 .venv 并安装（editable）
-uv run postel-studio   # 运行入口
-bash scripts/check.sh  # 质量门禁：lint + 格式 + 类型 + 测试覆盖率 + 凭据扫描
+uv sync                      # 创建 .venv 并安装（editable）
+bash scripts/install-hooks.sh # 装提交钩子（.git/hooks 不进 git，每台机器装一次）
+uv run postel-studio         # 运行入口
+bash scripts/check.sh        # 质量门禁：lint + 格式 + 类型 + 测试 + 代码地图 + 凭据
 ```
 
 依赖统一用 `uv add <pkg>` 管理，不要手改 `pyproject.toml` 再去 `pip install`。
+
+**改了 `src/` 或 `tests/` 就必须更新 [`docs/codemap/`](docs/codemap/)**，否则门禁会失败。
+这条规则是为了让下一个人（或下一个 Agent）读得懂你的改动，不是形式主义。
 
 ## 约定
 
 - **包名**：安装名 `postel-studio`（连字符），导入名 `postel_studio`（下划线）。
 - **分支**：默认 `main`，已跟踪 `origin/main`。
 - **密钥**：只放 `.env` 或本机凭据里，绝不提交；`.env` 已在 `.gitignore`。
-- **提交前**：`scripts/check.sh` 必须全绿（pre-commit 钩子会拦截 lint/format/凭据问题）。
+- **提交前**：`scripts/check.sh` 必须全绿（pre-commit 钩子会拦截 lint/format/代码地图/凭据问题）。
 
 ## 仓库
 

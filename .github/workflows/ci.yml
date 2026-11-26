@@ -13,9 +13,12 @@ jobs:
     name: 质量门禁
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 是代码地图门禁的前提：它要跟基准分支比对改动文件，
+      # 浅克隆（默认 depth=1）下没有 origin/main，门禁会退化成「跳过」。
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -36,6 +39,10 @@ jobs:
 
       - name: Tests with coverage
         run: uv run pytest --cov --cov-report=term-missing
+
+      # 改了 src/ 或 tests/ 就必须更新 docs/codemap/，否则地图开始撒谎
+      - name: Code map freshness
+        run: bash scripts/check.sh codemap
 
       # 与 publish.yml 的冒烟保持一致：证明打包产物可安装可运行
       - name: Build and smoke-test the wheel

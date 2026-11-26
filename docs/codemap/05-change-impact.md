@@ -33,6 +33,7 @@
 | 版本号 | `pyproject.toml:version` **和** `__init__.py:__version__` | 发版时两处不一致 |
 | 新增依赖 | `pyproject.toml` + `uv.lock` + **CI 的 `uv sync --frozen`** | CI 装不上 |
 | `scripts/check.sh` 的门禁项 | `CONTRIBUTING.md` 门禁表、`.github/workflows/ci.yml` | 本地与 CI 分叉 |
+| `scripts/gate-codemap.sh` 的判定范围 | 它自己的 `tests/test_gate_codemap.py`、CONTRIBUTING 门禁表 | 门禁悄悄放行（见 06 §门禁） |
 
 ---
 
@@ -65,11 +66,28 @@
 | format | `ruff format --check .` | 是 | |
 | types | `mypy`（strict，`src`+`tests`） | 是 | |
 | test | `pytest --cov` | 是 | 覆盖率下限 **60%**（S2 时实际 76%） |
+| codemap | `scripts/gate-codemap.sh` | 是 | `src/`+`tests/` 变了，`docs/codemap/` 也必须变 |
 | secrets | 正则 + 与 `.env` 逐值比对 | 是 | |
 
-`pre-commit` 钩子只跑快的三项（lint / format / secrets）。**完整门禁必须手动跑。**
+另有 `bash scripts/check.sh build`（`uv build` + 装进干净虚拟环境跑 `postel-studio version`）：
+**不在 `all` 里**（慢），CI 与发版跑，本地发版前手动跑。
+
+`pre-commit` 钩子只跑快的四项（lint / format / codemap / secrets）。**完整门禁必须手动跑。**
+
+钩子本身受版本管理：`scripts/hooks/pre-commit` + `scripts/install-hooks.sh`
+（`.git/hooks` 不进 git，换机器/重新 clone 后要重装一次）。
 
 配置全部在 `pyproject.toml`。CI 用 `uv sync --frozen` 保证可复现。
+
+### codemap 门禁怎么判
+
+`src/` 或 `tests/` 有改动、而 `docs/codemap/` 零改动 → 失败。
+它取**并集**：相对基准分支的提交 + 暂存区 + 工作区。只看 `main...HEAD` 会漏掉
+还没 commit 的改动，而 pre-commit 时改动恰好还在暂存区——这个漏报修过一次，见 06 §门禁。
+
+基准分支缺省取 `main`，依次回退 `origin/main`；都找不到时**提示后仍比对未提交改动**，
+不在 git 仓库里时**跳过**（导出 tarball 场景不能误报）。
+CI 里 `origin/main` 存在的前提是 `fetch-depth: 0`——浅克隆下它会退化成跳过。
 
 ### 门禁的已知盲区（**重要**）
 
@@ -79,6 +97,7 @@
 | `opencode` / `dsh` / `pi` 相关集成测试是 skip-gated | CI 绿 ≠ 真实 Agent 路径可用（S9/S10 起会出现） |
 | 层依赖检查（[02-layers §4](02-layers.md#4-可执行检查)）是**文档片段**，未进门禁 | 有人写出向上依赖时门禁不会拦 |
 | 覆盖率 60% 是很低的下限 | 新模块可以「测一点点就过」——**靠 review 而非门禁守** |
+| codemap 门禁只看「动没动」，不看「写得对不对」 | 在 `docs/codemap/` 加一行错别字也能过门禁；**内容质量仍靠 review** |
 
 ---
 

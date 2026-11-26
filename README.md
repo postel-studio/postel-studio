@@ -43,6 +43,12 @@ To change this code, start at [`docs/codemap/`](docs/codemap/). It is indexed to
 and why it differs from the plan. When they disagree, source docstrings win — and the
 code map gets fixed.
 
+**Updating the code map is a gate, not a suggestion.** Any change under `src/` or `tests/`
+without a change under `docs/codemap/` fails `bash scripts/check.sh` and CI
+([`scripts/gate-codemap.sh`](scripts/gate-codemap.sh)). The repo's code is written mostly by
+agents and reviewed by humans; without the map, the next reader has to read all the source
+before judging a diff, however small it is.
+
 ## Development
 
 ```bash
