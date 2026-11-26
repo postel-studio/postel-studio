@@ -35,6 +35,7 @@ node tools/acceptance/s3_bind.mjs      # S3：绑定仓库 → 左栏出现
 node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分支列表
 node tools/acceptance/s5_diff.mjs      # S5：点分支行 → 主区出现统计 + 着色 diff
 node tools/acceptance/s6_bots.mjs      # S6：左栏出现 Bot → 点开看 charter 全文与记忆目录
+node tools/acceptance/s7_worktree.mjs  # S7：分配工作区 → 磁盘上真有 worktree → 回收
 ```
 
 脚本自己会做这些事，**不碰你的真实 `~/.postel`**（06-pitfalls T18）：
@@ -168,3 +169,24 @@ node tools/acceptance/s6_bots.mjs      # S6：左栏出现 Bot → 点开看 cha
 
 脚本还会检查：内核日志里没有未脱敏的 ticket（05 §4.1）、两个用户仓库零改动（记忆只在
 状态根下）。截图与内核日志落在 `/tmp/postel-s6-acceptance-XXXX/`（结尾打印路径）。
+
+## S7 · 分配 / 回收工作区（`s7_worktree.mjs`）
+
+真 Chrome + 真内核 + 两个真仓库。除了读 DOM，它还用 Node 的 `fs` 与真 `git` 核对**磁盘与
+git 的事实**（页面说"路径是 X"，脚本就去 `existsSync(X)` 并 `git worktree list`）：
+
+| 输出行 | 对应 |
+|---|---|
+| `1 初始 #workspace 是 idle …` / `不显示路径、分配不可点` | D9（没选仓库之前不说"这个仓库还没有工作区"） |
+| `2 选仓库后 ready + 空态文案` / `预填默认分支` / `Bot：builder` / `分配可点` | D9 + 验收 2 的前置 |
+| `3 页面显示路径` / `3 页面显示分支` / `3 磁盘上真有这个目录` / `3 git worktree list 里有它` / `3 不在用户仓库工作目录里` | **验收 1 + 2**（页面与磁盘与 git 三处对得上） |
+| `4 第二次点击仍是同一路径` / `4 git 里仍只有一条记录` | **验收 3**（复用，不重复创建） |
+| `5 脏工作区回收 → error + 可读文案` / `5 目录与未提交的文件都还在` | D5/D6（不 `--force`，不丢用户数据） |
+| `5 干净后回收 → 目录消失` / `5 git 里不再有它` / `5 分支保留` | **验收 4**（回收不删分支） |
+| `6 不存在的 baseRef → 可读错误` / `6 没有留下半个目录` | **验收 5**（`BAD_BASE_REF`） |
+| `7 回车也能分配` | D9（真 `<form>`：回车与点按钮同一条路径） |
+| `8 断连 → idle + 「已断开：工作区未知」+ 清空` | D9 的断连纪律（不留旧路径装新鲜） |
+| `9 全程无 console 错误` + 末尾的"两个仓库零改动" | T9 的补充 + S3 验收 5 的同一纪律 |
+
+脚本还会打印状态根下 `worktrees/` 的真实内容（`状态根下的 worktrees：["<repoId>"]`），
+截图与内核日志落在 `/tmp/postel-s7-acceptance-XXXX/`。

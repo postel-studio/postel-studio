@@ -37,6 +37,12 @@
 | `gitops/repo.py:run_git()` | `GIT_TERMINAL_PROMPT=0` / 超时 / `shell=False`、`test_bind.py::test_bind_uses_git_in_a_way_that_cannot_prompt` | **05 §3.3 违规 / 网关被 git 挂住** |
 | `gitops/repo.py` 的 `root` 参数 | 变成可选 = 放弃 D4 的允许根 | 子进程会跑在 cwd 上 |
 | `gitops/repo.py:run_git` 的 `decode_errors` 缺省值 | 06 U15、S5 D3.2；`tests/test_diff.py` 的 D10 第 19/20 行 | 非 UTF-8 refname 又回 `INTERNAL`（U15 复发），或 mangled 名字被回传 git |
+| `gitops/worktrees.py` 的**写面清单**（`add` / `remove` / `prune`） | S7 D5 的允许清单、`api/worktrees.py` 的三个方法、`tests/test_worktree.py` 全部用例 | **内核开始删/改用户仓库里的东西**——S7 之前它是只读的 |
+| `remove_worktree` 加 `--force` | S7 D5 的红线；反向注入 S7 #3、`test_release_dirty_worktree_is_conflict_and_keeps_files` | 未提交的工作被静默删掉 |
+| `add_worktree` 的两个形态（`-b` vs 检出已有分支） | 06 T40（传 sha 会变成游离 HEAD）；`test_acquire_after_release_keeps_the_workspace_branch_tip` | 分支上的提交"看不见"，`worktree list` 的 `branch` 也消失 |
+| `worktree` 载荷的七个字段 | 07 §2.8 / §4.9、`api/worktrees.py:_payload`、页面 `#workspace-*` | 客户端字段错位；`list` 的条目**不该有** `reused` |
+| `WORKTREE_CONFLICT` 的触发条件 | 07 §1.3 的码表 + `ERROR_TEXT` + `tests/test_worktree.py` | 把"正常用户处境"报成 `INTERNAL`（S4 D5 的同一课） |
+| `storage/paths.worktree_dir` 的白名单 / 越界断言 | S7 D2；反向注入 S7 #1 | 用户可控的 bot 名进了路径（`..` 恰好 resolve 回根） |
 | `gitops/repo.py:list_branches` 的 `--format` / 解析 | 06 T33（`%(HEAD)` 空格 + 整段 strip）、S4 D1/D2/D3；`tests/test_branches.py` 全部解析用例 | 当前分支标记判反 / 最后一条记录解析失败 / remote-tracking 混进列表 |
 | `api/repository.py:branches` 的错误码或文案 | 07 §1.3（**不许新造码**）、S4 D5；`test_branches.py` 的错误码用例 | 空仓库被报成错误 / 删仓库被报成 INTERNAL / 错误文案回显用户路径 |
 | `assets.py` 的 `#diff[data-state]` 状态机 / 行分类顺序 / `#diff-patch` 渲染 | S5 D9（DOM 契约）、`node tools/acceptance/s5_diff.mjs`、`test_diff.py` 的页面契约用例 | `+++` 变绿、截断静默丢、断连留旧 diff、XSS（文件名进 innerHTML） |
