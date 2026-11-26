@@ -21,7 +21,7 @@
  */
 
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -218,13 +218,17 @@ async function waitBranchesReady(page) {
   await sleep(200);
 }
 
-async function clickRepo(page, name) {
+async function clickRepoRow(page, name) {
   await page.evaluate((rowName) => {
     const li = Array.from(document.querySelectorAll("#repo-list li[data-repo-id]"))
       .find((row) => ((row.querySelector(".repo-name") || {}).textContent || "") === rowName);
     if (!li) throw new Error(`找不到仓库行：${rowName}`);
     li.click();
   }, name);
+}
+
+async function clickRepo(page, name) {
+  await clickRepoRow(page, name);
   await waitBranchesReady(page);
 }
 
@@ -388,6 +392,35 @@ async function main() {
     check("D6 重连且仍有选中仓库 → 自动重取分支", reconnected.rows.length === 3
       && reconnected.title.includes("demo-main"), reconnected.rows.map((r) => r.name));
     await page.screenshot({ path: join(shots, "7-reconnected.png") });
+
+    // D6 错误态：把已绑定的仓库目录真删掉，再点它 → repo.branches 回 REPO_NOT_BOUND。
+    // 断言面板进 error（不是空白、不是"绑定失败"），并且错误不是终态：切到另一个仓库能恢复。
+    await rm(repoA, { recursive: true, force: true });
+    await clickRepoRow(page, "demo-main");
+    await page.waitForFunction(
+      () => document.getElementById("branches").dataset.state === "error",
+      { timeout: 15000 },
+    );
+    await sleep(200);
+    const errored = await snapshot(page);
+    check("D6 删除仓库后点它 → data-state=error", errored.state === "error", errored.state);
+    check(
+      "D6 错误态显示按码映射文案「仓库未绑定或已不存在」",
+      errored.errorVisible && errored.error.includes("仓库未绑定或已不存在"),
+      errored.error,
+    );
+    check("D6 错误态不是绑定表单的「绑定失败」", !errored.error.includes("绑定失败"), errored.error);
+    check("D6 错误态不显示分支列表与空态", !errored.listVisible && !errored.emptyVisible);
+    await page.screenshot({ path: join(shots, "8-branch-error.png") });
+
+    await clickRepo(page, "demo-empty");
+    const recovered = await snapshot(page);
+    check(
+      "D6 错误后可切到其它仓库恢复",
+      recovered.state === "ready" && recovered.emptyVisible,
+      recovered.state,
+    );
+    await page.screenshot({ path: join(shots, "9-recovered.png") });
   } finally {
     await browser.close().catch(() => {});
     await stopKernel(kernel);
@@ -405,7 +438,7 @@ async function main() {
     process.stdout.write(`\n❌ ${failures} 项失败\n`);
     process.exit(1);
   }
-  process.stdout.write("\n✅ 浏览器验收全部通过（S4 验收 1–5 + D6 的空态/切回刷新/键盘可达/断连清空）\n");
+  process.stdout.write("\n✅ 浏览器验收全部通过（S4 验收 1–5 + D6 的空态/切回刷新/键盘可达/断连清空/错误态/恢复）\n");
 }
 
 main().catch((error) => {

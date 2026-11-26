@@ -86,7 +86,10 @@ node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分�
 5. 期间真的 `git branch hotfix`，再切回来 → 列表**刷新**（出现 `hotfix`）；
 6. 键盘：`Enter` 选空仓库、`Space` 切回来；
 7. CDP 断网 → 面板回 `idle` + 「已断开：分支列表未知」+ 列表清空；恢复网络点「重连」→
-   自动重取（选中仓库还在）。
+   自动重取（选中仓库还在）；
+8. **错误态**：删掉已绑定仓库的目录再点那一行 → `repo.branches` 回 `REPO_NOT_BOUND` →
+   `data-state="error"` + 按**码**映射的「仓库未绑定或已不存在」（不是绑定表单的「绑定失败」）；
+   再点另一个仓库能恢复（错误不是终态）。
 
 截图与内核日志落在 `/tmp/postel-s4-acceptance-XXXX/`（结尾打印路径）。
 
@@ -98,3 +101,4 @@ node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分�
 | `CHECK 4 空仓库 data-state=ready` / `显示空态文案` | S4 验收 4 |
 | `CHECK 5 切回后列表刷新（出现新分支 hotfix）` | S4 验收 5 |
 | `CHECK D6 …`（初始 idle / role+tabindex / upstream / 选中态 / 键盘 / 断连清空 / 重连重取） | D6 的 DOM 契约 |
+| `CHECK D6 删除仓库后点它 → data-state=error` / `按码映射文案` / `不是「绑定失败」` / `错误后可切到其它仓库恢复` | D6 的失败态（`REPO_NOT_BOUND` 的文案映射 + 错误不是终态） |
