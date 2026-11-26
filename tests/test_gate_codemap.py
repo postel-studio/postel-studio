@@ -113,6 +113,30 @@ def test_tests_dir_also_counts(repo: Path) -> None:
     assert _gate(repo).returncode == 1
 
 
+def test_paths_with_spaces_are_still_detected(repo: Path) -> None:
+    """改动清单按行读（`read -r`），带空格的文件名不能被拆开或漏掉。"""
+    (repo / "src" / "with space.py").write_text("y = 1\n", encoding="utf-8")
+    _git(repo, "add", "src/with space.py")
+    result = _gate(repo)
+    assert result.returncode == 1
+    assert "src/with space.py" in result.stdout
+
+
+def test_fails_closed_when_the_change_list_cannot_be_read(repo: Path) -> None:
+    """读不到改动清单时必须**失败**，不能把「读不到」当成「没改代码」。
+
+    T39：早期实现用进程替换 `do < <(git diff …)` 读清单，而进程替换要有 `/dev/fd`；
+    没有它的环境里重定向失败、`while` 一句都不读 → 清单为空 → 门禁打印
+    「✅ 未改代码」放行。假绿比红更糟，所以这里把 `git diff` 弄失败（烧掉索引），
+    断言门禁退出 1 且不出现 ✅。
+    """
+    (repo / ".git" / "index").write_bytes(b"not an index\n")
+    result = _gate(repo)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "无法读取改动清单" in result.stdout + result.stderr
+    assert "✅" not in result.stdout
+
+
 def test_skips_outside_git_repository(tmp_path: Path) -> None:
     """不在 git 仓库里（导出 tarball、非 git 安装）应跳过而不是误报失败。"""
     work = tmp_path / "plain"
