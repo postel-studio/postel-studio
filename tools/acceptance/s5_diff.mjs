@@ -194,6 +194,14 @@ async function makeBigRepo(base) {
   return repo;
 }
 
+async function makeDetachedRepo(base) {
+  const repo = await makeRepo(base, "demo-detached");
+  await gitIn(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
+  await gitIn(repo, ["branch", "feature"]);
+  await gitIn(repo, ["checkout", "-q", "--detach", "HEAD"]);
+  return repo;
+}
+
 async function makeXssRepo(base) {
   const repo = await makeRepo(base, "demo-xss");
   await gitIn(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
@@ -362,6 +370,7 @@ async function main() {
   const repoMain = await makeStandardRepo(work);
   const repoBig = await makeBigRepo(work);
   const repoXss = await makeXssRepo(work);
+  const repoDetached = await makeDetachedRepo(work);
   const kernel = await startKernel(stateHome);
   const browser = await puppeteer.launch({
     executablePath: chrome.path,
@@ -391,11 +400,12 @@ async function main() {
     await bindPath(page, repoMain);
     await bindPath(page, repoBig);
     await bindPath(page, repoXss);
+    await bindPath(page, repoDetached);
     await page.waitForFunction(
-      () => document.querySelectorAll("#repo-list li[data-repo-id]").length === 3,
+      () => document.querySelectorAll("#repo-list li[data-repo-id]").length === 4,
       { timeout: 15000 },
     );
-    check("0 左栏三行仓库", (await page.evaluate(REPO_ROWS)).length === 3);
+    check("0 左栏四行仓库", (await page.evaluate(REPO_ROWS)).length === 4);
 
     // ---- 验收 1/2/9：点 demo-main 的 feature 分支 → ready，stat 逐字、着色行 ----
     await clickRepoRow(page, "demo-main");
@@ -452,6 +462,24 @@ async function main() {
     check("4 手填对比的 stat 正确", manual.stat === EXPECTED_STAT, manual.stat);
     await page.screenshot({ path: join(shots, "3-manual-compare.png") });
 
+    // ---- 表单空值（D9 的交互表）：trim 后任一为空 → #diff-error 提示，data-state 保持原样 ----
+    await page.evaluate(() => {
+      document.getElementById("diff-base").value = "  ";
+      document.getElementById("diff-head").value = "";
+    });
+    await page.click("#diff-compare");
+    await sleep(200);
+    const emptyForm = await page.evaluate(() => ({
+      state: document.getElementById("diff").dataset.state,
+      error: document.getElementById("diff-error").textContent,
+      errorVisible: document.getElementById("diff-error").offsetParent !== null,
+    }));
+    check(
+      "D9 空表单 → #diff-error「请填 base 和 head」且 state 保持原样",
+      emptyForm.errorVisible && emptyForm.error === "请填 base 和 head" && emptyForm.state === manual.state,
+      emptyForm,
+    );
+
     // ---- 验收 8：键盘 —— 聚焦分支行 + Enter 与 click 同一条路径 ----
     await clickBranchRow(page, "main"); // 先回到 idle，证明是键盘那一下触发的
     await waitDiffState(page, "idle");
@@ -485,6 +513,19 @@ async function main() {
       xss.patchText.includes("x<script>alert(1)<script>.txt"),
     );
     await page.screenshot({ path: join(shots, "6-xss.png") });
+
+    // ---- D9：游离 HEAD（defaultBranch=null）→ 点分支不发请求，提示手填 ref ----
+    await clickRepoRow(page, "demo-detached");
+    await clickBranchRow(page, "feature");
+    await sleep(300);
+    const detached = await snapshot(page);
+    check(
+      "D9 游离 HEAD → idle +「不知道默认分支」提示",
+      detached.state === "idle" &&
+        detached.stateText.includes("不知道默认分支（HEAD 未指向分支），请在上方填两个 ref"),
+      { state: detached.state, text: detached.stateText },
+    );
+    check("D9 游离 HEAD 不发请求：stat/patch 不显示", !detached.statVisible && !detached.patchVisible);
 
     // ---- 验收 6：大 diff → 截断提示可见 + 文案逐字 + patch 非空 ----
     await clickRepoRow(page, "demo-big");
@@ -525,7 +566,7 @@ async function main() {
       process.stdout.write("CHECK ✗ 内核日志里出现了未脱敏的 ticket\n");
     }
     // 六个 repo 目录都不该被内核写东西（S3 验收 5 的同一纪律，这里作为清理前的最后一瞥）
-    for (const repo of [repoMain, repoBig, repoXss]) {
+    for (const repo of [repoMain, repoBig, repoXss, repoDetached]) {
       const status = await gitIn(repo, ["status", "--porcelain"]).catch(() => null);
       if (status && status.stdout.trim() !== "") {
         failures += 1;
@@ -535,6 +576,7 @@ async function main() {
     await rm(repoMain, { recursive: true, force: true });
     await rm(repoBig, { recursive: true, force: true });
     await rm(repoXss, { recursive: true, force: true });
+    await rm(repoDetached, { recursive: true, force: true });
   }
 
   if (failures > 0) {
