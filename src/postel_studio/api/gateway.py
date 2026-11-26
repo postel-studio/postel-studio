@@ -1,9 +1,10 @@
 """网关：一次性 handshake ticket → WebSocket → 帧分派（S2 D1/D3/D4/D5）。
 
 方法表（`dispatch()`）：S2 的 `system.echo` / `system.health`，S3 加了 `repo.bind` / `repo.list`，
-S4 加了 `repo.branches`，S5 加了 `repo.diff`，S6 加了 `bot.list` / `memory.charter.get`
+S4 加了 `repo.branches`，S5 加了 `repo.diff`，S6 加了 `bot.list` / `memory.charter.get`，
+S7 加了 `worktree.acquire` / `worktree.list` / `worktree.release`
 （都**只走 WS 帧**，不新开 HTTP 路由）。
-其余一律 `UNKNOWN_METHOD`；订阅 / topic 机制在 S2 **故意不存在**，S3/S4/S5 也没有加——
+其余一律 `UNKNOWN_METHOD`；订阅 / topic 机制在 S2 **故意不存在**，S3~S7 也没有加——
 不要在这里提前长出来。
 
 业务处理函数**不在本模块实现**：它们由 `app` 侧构造后经 `Providers` 注入（S2 R3 的教训，
@@ -87,9 +88,10 @@ class Providers:
     """从 `app` 侧注入的能力（消环用：`app` import 本模块，本模块不得反向 import `app`）。
 
     `repo_bind` / `repo_list` 是 S3 加的两个业务入口，`repo_branches` 是 S4 加的第三个，
-    `repo_diff` 是 S5 加的第四个，`bot_list` / `memory_charter_get` 是 S6 加的第五、六个；
+    `repo_diff` 是 S5 加的第四个，`bot_list` / `memory_charter_get` 是 S6 加的第五、六个，
+    S7 又加了 `worktree_acquire` / `worktree_list` / `worktree_release`；
     签名刻意用 `dict → dict`（列表载荷用 `list[dict]`）：闸门只认「帧的参数对象进、载荷对象出」，
-    网关不知道仓库、数据库、git、charter 文件的存在。
+    网关不知道仓库、数据库、git、charter 文件、工作区目录的存在。
     抛 `frames.FrameError` 时网关原样转发它的 `code` / `message`（D6 的稳定码）。
     """
 
@@ -100,6 +102,9 @@ class Providers:
     repo_diff: Callable[[dict[str, object]], dict[str, object]]
     bot_list: Callable[[dict[str, object]], list[dict[str, object]]]
     memory_charter_get: Callable[[dict[str, object]], dict[str, object]]
+    worktree_acquire: Callable[[dict[str, object]], dict[str, object]]
+    worktree_list: Callable[[dict[str, object]], list[dict[str, object]]]
+    worktree_release: Callable[[dict[str, object]], dict[str, object]]
 
 
 def active_connection_count() -> int:
@@ -126,6 +131,12 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.bot_list(params)
     if method == "memory.charter.get":  # S6 / 07 §4.8：charter 正文 + 内容哈希版本
         return providers.memory_charter_get(params)
+    if method == "worktree.acquire":  # S7 / 07 §4.9：分配工作区（幂等，复用返回同一路径）
+        return providers.worktree_acquire(params)
+    if method == "worktree.list":  # S7 / 07 §4.9：这个仓库下本内核建的工作区（0..n）
+        return providers.worktree_list(params)
+    if method == "worktree.release":  # S7 / 07 §4.9：回收（不删分支、不加 --force）
+        return providers.worktree_release(params)
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 

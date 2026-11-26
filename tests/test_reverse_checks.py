@@ -36,6 +36,7 @@
 
 S5 的 5 条注入（D12 表）跨 L0 / L3 / 前端三层：`DIFF_FLAGS` 的两个 flag、`run_git` 的
 缺省 `decode_errors`、`resolve_commit` 的 `^{commit}`、以及页面里 diff 行的渲染方式。
+S7 的 4 条注入针对**写面与状态机**：路径白名单、复用判定、`--force`、baseRef 形状。
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ def _target_test(name: str, *, file: str = "test_bind") -> str:
     """被测测试的节点 id。
 
     缺省在 `tests/test_bind.py`（S3 的验收文件）；S4 的分支列表注入指向
-    `tests/test_branches.py`。
+    `tests/test_branches.py`，S7 的工作区注入指向 `tests/test_worktree.py`。
     """
     return f"tests/{file}.py::{name}"
 
@@ -299,8 +300,10 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "postel_studio/storage/paths.py",
-        '    if not bot_name_ok(name):\n        raise ValueError(f"bot 名字不合法：{name!r}")',
-        '    if False:\n        raise ValueError(f"bot 名字不合法：{name!r}")',
+        "    if not bot_name_ok(name):\n"
+        '        raise ValueError(f"bot 名字不合法：{name!r}")\n'
+        "    path = bots_root() / repo_id / name",
+        "    path = bots_root() / repo_id / name",
         _target_test(
             "test_ensure_memory_space_rejects_names_that_escape_bots_root",
             file="test_bot_charter",
@@ -314,6 +317,41 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         '      charterContent.innerHTML = String(payload.content == null ? "" : payload.content);',
         _target_test("test_page_never_uses_inner_html_in_bot_panels", file="test_bot_charter"),
         "S6 #5：charter 全文从 textContent 改成 innerHTML（用户可编辑文本进 HTML）",
+    ),
+    # ---- S7：工作区的写面与状态机（D2 / D3 / D5 / D7）----
+    (
+        "postel_studio/storage/paths.py",
+        "    if not bot_name_ok(name):\n"
+        '        raise ValueError(f"bot 名字不合法：{name!r}")\n'
+        "    if not _REPO_ID_RE.fullmatch(repo_id):",
+        "    if not _REPO_ID_RE.fullmatch(repo_id):",
+        _target_test(
+            "test_worktree_dir_rejects_names_that_escape_worktrees_root", file="test_worktree"
+        ),
+        "S7 #1：`worktree_dir` 不再校验 bot 名白名单（`../x` 恰好 resolve 回根，越界断言拦不住）",
+    ),
+    (
+        "postel_studio/api/worktrees.py",
+        "            if registered is not None and not registered.prunable and target.is_dir():",
+        "            if False:  # 注入：不认已有工作区，每次都想新建",
+        _target_test("test_acquire_twice_reuses_the_same_worktree", file="test_worktree"),
+        "S7 #2：acquire 不再复用已注册的工作区（重复点击会去撞 git 的'路径已存在'）",
+    ),
+    (
+        "postel_studio/gitops/worktrees.py",
+        '    _run(["worktree", "remove", str(target)], root=root)',
+        '    _run(["worktree", "remove", "--force", str(target)], root=root)',
+        _target_test(
+            "test_release_dirty_worktree_is_conflict_and_keeps_files", file="test_worktree"
+        ),
+        "S7 #3：回收加 `--force`（未提交的改动会被删掉，D5 的红线）",
+    ),
+    (
+        "postel_studio/api/worktrees.py",
+        "        if not isinstance(value, str) or not ref_name_ok(value):",
+        "        if not isinstance(value, str):",
+        _target_test("test_acquire_rejects_invalid_base_ref_shape", file="test_worktree"),
+        "S7 #4：baseRef 不再过 S5 D3.1 的形状（`-x` 会进 git 的选项位，用户输入直接下传）",
     ),
 )
 
@@ -350,8 +388,9 @@ _UPSERT_COVERS_ID: tuple[tuple[str, str, str], ...] = (
 _OLD_ID_ALGORITHM: tuple[tuple[str, str, str], ...] = (
     (
         "postel_studio/api/repository.py",
-        "from postel_studio.domain.models import Repo, origin_hash, repo_id",
-        "from postel_studio.domain.models import Repo, origin_hash, repo_id, repo_id_for_origin",
+        "from postel_studio.domain.models import Repo, origin_hash, ref_name_ok, repo_id",
+        "from postel_studio.domain.models import ("
+        "Repo, origin_hash, ref_name_ok, repo_id, repo_id_for_origin)",
     ),
     (
         "postel_studio/api/repository.py",

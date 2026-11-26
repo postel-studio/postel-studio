@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Final
 
 from postel_studio.api import frames
-from postel_studio.domain.models import Repo, origin_hash, repo_id
+from postel_studio.domain.models import Repo, origin_hash, ref_name_ok, repo_id
 from postel_studio.gitops import repo as gitops
 from postel_studio.storage.db import RepoStore
 
@@ -67,8 +67,6 @@ MSG_MAX_CHARS_INVALID: Final = "maxChars 必须是 1000 到 200000 之间的整�
 DEFAULT_MAX_CHARS: Final = 100_000
 MIN_MAX_CHARS: Final = 1_000
 MAX_MAX_CHARS: Final = 200_000
-# D3.1：ref 名长度上限（git 的 refname 本身远短于这个数；这是入站形状检查的一部分）。
-MAX_REF_LENGTH: Final = 200
 
 # `RepositoryService` 里有个方法叫 `list`，**类作用域**里的 `list[...]` 注解会被 mypy 解析成
 # 那个方法（`valid-type`）。所以分支载荷的列表类型用模块级别名，别在类体里直接写 `list[...]`。
@@ -102,16 +100,8 @@ def _require_ref(params: dict[str, object], field: str) -> str:
     `encode` 是唯一可靠的判据（`isinstance(s, str)` / `len()` 都看不出 lone surrogate）。
     """
     value = params.get(field)
-    if not isinstance(value, str):  # 缺字段（None）/ 数字等：同一句话
+    if not isinstance(value, str) or not ref_name_ok(value):
         raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF)
-    if not value or len(value) > MAX_REF_LENGTH or value.startswith("-") or not value.strip():
-        raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF)
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF)
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError:  # lone surrogate：只有编码才会炸
-        raise _fail(frames.INVALID_PARAMS, MSG_INVALID_REF) from None
     return value
 
 
@@ -200,25 +190,6 @@ def _split(repo: Repo) -> dict[str, object]:
         "originUrl": repo.origin_url,
         "defaultBranch": repo.default_branch,
     }
-
-
-def _repo_path_is_gone(repo: Repo) -> bool:
-    """绑定的仓库路径是否已经不能用了（S5 D7 #4）：目录被删，或目录还在但 `.git` 被删。
-
-    **这一步必须先于 ref 解析**：路径没了时 `rev-parse` 同样失败，不先探测就会把
-    "仓库没了"报成"ref 不存在"——用户会去改 ref，但真正的问题是仓库被删 / 搬走了。
-
-    判据沿用 `_bindable_root` 的前两条：目录在 **且**（`.git` 存在 **或** git 说是裸仓库）。
-    - 不用 `git rev-parse` 判定：它会向父目录 discover，父目录恰好是仓库时会误判"还活着"；
-    - `.git` 被删时 `bare_root` 会在非仓库目录里跑一次 git（非零 / `false`）→ 判死；
-    - 裸仓库本来就没有 `.git`，所以必须留 `bare_root` 这一条，否则会误杀已绑定的裸仓库。
-    """
-    path = Path(repo.path)
-    if not path.is_dir():
-        return True
-    if gitops.is_worktree_root(path):
-        return False
-    return gitops.bare_root(path) is None
 
 
 class RepositoryService:
@@ -376,7 +347,9 @@ class RepositoryService:
         max_chars = _require_max_chars(params)  # D6：越界报错，不夹紧
         root = Path(repo.path)
         try:
-            if _repo_path_is_gone(repo):  # #4：不许被 ref 错误盖住
+            # #4：不许被 ref 错误盖住。判据在 gitops（T25：`git -C` 会向父目录 discover，
+            # 所以『还是不是仓库』必须先于任何 git 询问；S7 的工作区用同一条）。
+            if not gitops.is_usable_repo(Path(repo.path)):
                 raise _fail(REPO_NOT_BOUND, MSG_REPO_PATH_MISSING)
             base_sha = gitops.resolve_commit(root, base)  # #5
             head_sha = gitops.resolve_commit(root, head)

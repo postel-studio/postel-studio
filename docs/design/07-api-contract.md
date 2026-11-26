@@ -41,6 +41,7 @@
 | `PATH_OUTSIDE_ROOT` | 403 | 路径越出允许根 | 否 |
 | `PERMISSION_DENIED` | 403 | 权限不足 | 否 |
 | `NOT_SUPPORTED` | 400 | 第一版不支持（如 L3/L4；S5 起也用于「仓库含非 UTF-8 的 ref 名」） | 否 |
+| `WORKTREE_CONFLICT` | 409 | 工作区目录被占用 / 里面有未提交的改动 / 分支被别的 worktree 占着（S7 新增） | 人工处理后可 |
 | `ADAPTER_UNAVAILABLE` | 503 | Agent 命令不存在/起不来 | 可 |
 | `ADAPTER_TIMEOUT` | 504 | 握手超时 | 可 |
 | `CONTEXT_CONFLICT` | 409 | 规范冲突，阻断任务 | 人工解决后 |
@@ -130,6 +131,29 @@
 | `agent.list` | — | `agent[]`（已注册通道 + 能力） |
 | `agent.capabilities` | `agentKind, target?` | `{flags, unsupported}` |
 | `permission.check` | `botId, need` | `{allowed, reason?}` |
+
+### 2.8 工作区
+
+> S7 新增。工作区 = 一个真实的 `git worktree`，目录在 `<状态根>/worktrees/<repoId>/<botName>/`。
+> **不落库**：事实源是 `git worktree list` 与目录本身（06 §2.5 的裁决）。
+
+| 方法 | 参数 | 返回 |
+|---|---|---|
+| `worktree.acquire` | `repoId, botId, baseRef?` | `worktree`（幂等：已有则复用，`reused: true`） |
+| `worktree.list` | `repoId` | `worktree[]`（不含 `reused`） |
+| `worktree.release` | `repoId, botId` | `{removed: bool, path}`（**不删分支**） |
+
+`worktree` 载荷（恰好七个字段）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `repoId` | string | 12 位 hex |
+| `botId` | string | `{repoId}/{name}` |
+| `botName` | string | 目录末段 |
+| `path` | string | 绝对路径，在 `worktrees` 根之下 |
+| `branch` | string | `bot/<botName>/workspace` |
+| `headSha` | string | 8 位小写 hex（边界格式化，同 §4.5） |
+| `reused` | bool | 仅 `acquire` 有；`true` = 这次没有做任何 git 写操作 |
 
 ---
 
@@ -388,6 +412,39 @@
 | `botId` 缺失 / 非字符串 | `INVALID_PARAMS` |
 | `botId` 格式合法但查不到（含路径穿越企图） | `INVALID_PARAMS`（文案「找不到这个 Bot」；07 §1.3 没有更贴的码，M1 不擅自扩码表） |
 | charter 读失败（权限、磁盘满） | `INTERNAL` |
+
+### 4.9 `worktree.acquire` / `list` / `release`（S7：分配工作区）
+
+```json
+{"type":"req","id":"c9","method":"worktree.acquire",
+ "params":{"repoId":"adec6540a725","botId":"adec6540a725/builder","baseRef":"main"}}
+{"type":"res","id":"c9","ok":true,"result":{"seq":9,"data":{
+  "repoId":"adec6540a725","botId":"adec6540a725/builder","botName":"builder",
+  "path":"/home/u/.postel/worktrees/adec6540a725/builder",
+  "branch":"bot/builder/workspace","headSha":"91a5baa7","reused":false}}}
+```
+
+`baseRef` 缺省用 `repo.defaultBranch`；`reused: true` 表示这次只读、没有任何写操作。回收：
+
+```json
+{"type":"req","id":"c10","method":"worktree.release",
+ "params":{"repoId":"adec6540a725","botId":"adec6540a725/builder"}}
+{"type":"res","id":"c10","ok":true,"result":{"seq":10,"data":{
+  "removed":true,"path":"/home/u/.postel/worktrees/adec6540a725/builder"}}}
+```
+
+`removed: false` 只出现在"本来就没有工作区"（重复回收不是错误）。错误码：
+
+| 情形 | 码 |
+|---|---|
+| `repoId` / `botId` 缺失或类型错 / `botId` 查不到或属于别的仓库 | `INVALID_PARAMS` |
+| `repoId` 查不到；仓库路径被删 / `.git` 被删 | `REPO_NOT_BOUND` |
+| `baseRef` 形状不合法；没有默认分支又没给 `baseRef` | `INVALID_PARAMS` |
+| `baseRef` 解析不到（含 0 提交的空仓库） | `BAD_BASE_REF` |
+| 目录被占用 / 工作区脏（回收会丢东西）/ 分支被别的 worktree 占着 | `WORKTREE_CONFLICT`（**S7 新增码**） |
+| git 不存在 | `ADAPTER_UNAVAILABLE` |
+| git 超时 / `worktree add` 或 `remove` 因其它原因被拒 | `INTERNAL` |
+| 仓库含非 UTF-8 的 ref 名 | `NOT_SUPPORTED` |
 
 ---
 

@@ -110,6 +110,15 @@ Repo ──1:N── Bot ──1:N── Task ──0..1── Candidate
 
 ### 2.5 WorktreeLease
 
+> **S7 裁决（2026-11-27）：本表到期 S10，与 `Task` 一起建。** S7 的工作区（`worktree.acquire` /
+> `list` / `release`）**不落库**：路径与分支可由 `git worktree list` 加目录是否存在完整重建
+> （§1 的核心原则），而本表的 `task_id` 是 NOT NULL 外键、`Task` 表要到 S10 才存在。为了一个
+> 3 小时切片提前建一张带哑列的表，S10 还得再迁移一次。S7 期间工作区的身份 = `(repo_id, bot_name)`
+> = 目录路径 = `bot_id` 复合键，三者是同一个东西。
+>
+> 代价（明确记着）：S7 的 `worktree.list` 只看得见"当前这个仓库"的工作区；别的 `repo_id` 下
+> 遗留的目录（例如仓库被移动、U14）不在它的视野里，由 S19 的 doctor 统一报告（**不删除**，§5）。
+
 | 字段 | 类型 | 约束 | 说明 |
 |---|---|---|---|
 | `lease_id` | TEXT PK | ULID | |

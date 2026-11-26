@@ -57,6 +57,7 @@ node tools/acceptance/s3_bind.mjs      # 真 Chrome + 真内核 + 读真 DOM
 node tools/acceptance/s4_branches.mjs
 node tools/acceptance/s5_diff.mjs
 node tools/acceptance/s6_bots.mjs
+node tools/acceptance/s7_worktree.mjs
 ```
 
 它**不进依赖、不跑 CI**，缺 Chrome / puppeteer-core 时会打印 `SKIP …` 并以 0 退出。

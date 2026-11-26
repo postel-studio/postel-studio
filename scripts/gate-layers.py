@@ -46,6 +46,14 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "postel_studio.storage",
         "postel_studio.domain",
     ),
+    # S7：worktree 的**写**操作。与 repo.py 同为 L0（起子进程、碰磁盘），但它是唯一允许
+    # 改 `.git/worktrees/` 的模块，所以额外禁止碰 storage / domain / api / web。
+    "gitops/worktrees.py": (
+        "postel_studio.api",
+        "postel_studio.web",
+        "postel_studio.storage",
+        "postel_studio.domain",
+    ),
     # ---- L1：纯数据变换，不许 IO / 框架 ----
     "api/frames.py": (
         "postel_studio.api.app",
@@ -82,6 +90,21 @@ LAYERS: dict[str, tuple[str, ...]] = {
     ),
     # S6：Bot 业务编排。只是 L3 的又一个 handler 模块：不许反向碰页面（D7）。
     "api/bots.py": ("postel_studio.web",),
+    # S7：工作区业务编排。与 repository.py / bots.py 同为 L3 的 handler 模块：只能向下依赖
+    # （storage / gitops / domain / frames），**不许 import 同层的其它 handler**——`02-layers §3`
+    # 的唯一例外是 `app → gateway` 的装配，不是"handler 之间互相复用"。S7 想复用的两个判定
+    # （baseRef 形状、仓库路径还能不能用）已经下沉到 `domain` / `gitops`，所以这里没有例外。
+    "api/worktrees.py": (
+        "postel_studio.api.app",
+        "postel_studio.api.gateway",
+        "postel_studio.api.server",
+        "postel_studio.api.repository",
+        "postel_studio.api.bots",
+        "postel_studio.web",
+        "fastapi",
+        "starlette",
+        "uvicorn",
+    ),
     "api/repository.py": (
         "postel_studio.api.app",
         "postel_studio.api.gateway",

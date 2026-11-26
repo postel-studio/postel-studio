@@ -1,6 +1,6 @@
 # 03 · domain — `src/postel_studio/domain/`
 
-> 层 L0（纯函数，**无 IO**）· 168 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1](../../design/06-data-model.md) · [08-repo-id-stability](../../design/08-repo-id-stability.md)
+> 层 L0（纯函数，**无 IO**）· 208 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1](../../design/06-data-model.md) · [08-repo-id-stability](../../design/08-repo-id-stability.md)
 
 ## 职责
 
@@ -17,7 +17,7 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 5 | 包标记 + 本层"无 IO"的声明 |
-| `models.py` | 168 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` |
+| `models.py` | 208 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7） |
 
 ## 符号表（`domain/models.py`）
 
@@ -37,6 +37,8 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | `Bot` | 145 | frozen dataclass：`bot_id` / `repo_id` / `name` / `permission` / `agent_kind` / `charter_rev` / `created_at` | `storage/db.py`、`api/bots.py` |
 | `bot_name_ok(name)` | 161 | 名字白名单判定（**纯函数**）；进路径前必须过它（D3） | `storage/paths.py:bot_memory_dir` |
 | `bot_id(repo_id, name)` | 166 | 复合主键 `{repo_id}/{name}`——**唯一的拼接处**（06 §2.2） | `api/bots.py:_seed`、测试 |
+| `REF_NAME_MAX_LENGTH` | 180 | `200`：入站 ref 名的长度上限（S5 D3.1）——**S7 从 `api/repository.py` 搬来** | `ref_name_ok` |
+| `ref_name_ok(value)` | 183 | 入站 ref 名的六条形状（S5 D3.1）：`repo.diff` 的 base/head 与 `worktree.acquire` 的 baseRef 共用一份；lone surrogate 只有 `encode` 抓得到 | `api/repository._require_ref`、`api/worktrees._base_ref` |
 
 ## 关键决策与理由
 

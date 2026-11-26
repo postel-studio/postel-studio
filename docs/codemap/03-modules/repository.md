@@ -1,6 +1,6 @@
 # 03 · repository — `src/postel_studio/api/repository.py`
 
-> 层 L3 · 405 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5/§4.6](../../design/07-api-contract.md)
+> 层 L3 · 378 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5/§4.6](../../design/07-api-contract.md)
 
 ## 职责
 
@@ -18,23 +18,24 @@
 | `NOT_A_REPO` / `BAD_CWD` / `ADAPTER_UNAVAILABLE` / `REPO_NOT_BOUND` / `BAD_REF` / `NOT_SUPPORTED` | 39-45 | 07 §1.3 的码（**不许新造**；`BAD_REF`/`NOT_SUPPORTED` 是 S5 第一次用） | `bind` / `get` / `branches` / `diff` |
 | `MSG_*`（14 个） | 48-63 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
 | `DEFAULT_MAX_CHARS` / `MIN_MAX_CHARS` / `MAX_MAX_CHARS` | 67-69 | 截断契约值：100k / 1000 / 200k（S5 D6，**不许改**） | `_require_max_chars`、测试 |
-| `MAX_REF_LENGTH` | 71 | ref 名入站长度上限 200（D3.1） | `_require_ref` |
-| `BranchPayloads` | 75 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
-| `_fail(code, message)` | 78 | 造 `frames.FrameError`（网关原样转发） | 内部 |
-| `_require_path(params)` | 83 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
-| `_require_ref(params, field)` | 91 | 入站 ref 的形状校验（S5 D3.1 六条；lone surrogate 用 `encode` 才抓得到） | `diff` |
-| `_require_max_chars(params)` | 118 | `maxChars` 缺省/区间/类型（先排 `bool`，S5 D6） | `diff` |
-| `_inside_git_dir(root, target)` | 133 | **T29/T31：`root` → `target` 的相对路径里有 `.git` 段 → 不是仓库入口** | `_bindable_root` |
-| `_bindable_root(target)` | 154 | **D2 子目录校正的总判定**（见下） | `bind` |
-| `_split(repo)` | 190 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
-| `_repo_path_is_gone(repo)` | 205 | S5 D7 #4：路径没了（目录 / `.git` 被删）→ 先于 ref 判 `REPO_NOT_BOUND`；裸仓库用 `bare_root` 兜住 | `diff` |
-| `RepositoryService` | 224 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
-| `RepositoryService.list()` | 230 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
-| `RepositoryService.bind(params)` | 234 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
-| `RepositoryService._require_repo(params)` | 279 | `repoId` 校验 + 查库 → `Repo`（`INVALID_PARAMS` / `REPO_NOT_BOUND` 的落点） | `get` / `branches` / `diff` |
-| `RepositoryService.get(params)` | 294 | 按 `repoId` 取一条（`get` 本身暂无帧方法调用） | 暂无生产调用方 |
-| `RepositoryService.branches(params)` | 298 | `repo.branches`：`repoId` → 允许根 → `gitops.list_branches` → `branch[]`（S4 D1/D5） | `gateway.Providers.repo_branches` |
-| `RepositoryService.diff(params)` | 346 | `repo.diff`：形状校验 → 路径存活 → 解析两个 ref → stat/patch → 截断 + camelCase 载荷（S5 D1–D8） | `gateway.Providers.repo_diff` |
+| ~~`MAX_REF_LENGTH`~~ | — | **S7 搬到 `domain/models.REF_NAME_MAX_LENGTH`**（同层模块不互相 import，见 02-layers §3） | `_require_ref` |
+| `BranchPayloads` | 73 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
+| `_fail(code, message)` | 76 | 造 `frames.FrameError`（网关原样转发） | 内部 |
+| `_require_path(params)` | 81 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
+| ~~`ref_name_is_valid`~~ | — | **S7 搬到 `domain/models.ref_name_ok`**：`repo.diff` 的 base/head 与 `worktree.acquire` 的 baseRef 共用一份，而 L3 之间不互相 import | `_require_ref`、`api/worktrees.py` |
+| `_require_ref(params, field)` | 89 | 入站 ref 的形状校验（S5 D3.1 六条；lone surrogate 用 `encode` 才抓得到） | `diff` |
+| `_require_max_chars(params)` | 108 | `maxChars` 缺省/区间/类型（先排 `bool`，S5 D6） | `diff` |
+| `_inside_git_dir(root, target)` | 123 | **T29/T31：`root` → `target` 的相对路径里有 `.git` 段 → 不是仓库入口** | `_bindable_root` |
+| `_bindable_root(target)` | 144 | **D2 子目录校正的总判定**（见下） | `bind` |
+| `_split(repo)` | 180 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
+| ~~`repo_path_is_gone`~~ | — | **S7 搬到 `gitops/repo.is_usable_repo(path)`**：它只问 git 语义、不认识 `Repo`；`diff` 与 `api/worktrees.py` 都调它（同一族 T25 陷阱） | `diff`、`api/worktrees.py` |
+| `RepositoryService` | 195 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
+| `RepositoryService.list()` | 201 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
+| `RepositoryService.bind(params)` | 205 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
+| `RepositoryService._require_repo(params)` | 250 | `repoId` 校验 + 查库 → `Repo`（`INVALID_PARAMS` / `REPO_NOT_BOUND` 的落点） | `get` / `branches` / `diff` |
+| `RepositoryService.get(params)` | 265 | 按 `repoId` 取一条（`get` 本身暂无帧方法调用） | 暂无生产调用方 |
+| `RepositoryService.branches(params)` | 269 | `repo.branches`：`repoId` → 允许根 → `gitops.list_branches` → `branch[]`（S4 D1/D5） | `gateway.Providers.repo_branches` |
+| `RepositoryService.diff(params)` | 361 | `repo.diff`：形状校验 → 路径存活 → 解析两个 ref → stat/patch → 截断 + camelCase 载荷（S5 D1–D8） | `gateway.Providers.repo_diff` |
 
 ## 关键决策与理由
 

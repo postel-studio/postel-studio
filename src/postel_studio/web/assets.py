@@ -70,6 +70,11 @@ ERROR_TEXT: Final = {
     # S5：repo.diff 会回这两个码（07 §1.3 既有码；不新增）。
     "BAD_REF": "分支或提交不存在",
     "NOT_SUPPORTED": "仓库含非 UTF-8 的名称，第一版不支持",
+    # S7：worktree.acquire / release 会回这两个码。
+    # - BAD_BASE_REF 是 07 §1.3 里本来就有的码（"worktree 基础分支无效"），本刀第一次用到；
+    # - WORKTREE_CONFLICT 是本刀**新增**的码（三处触发语义相同：需要人先处理目录里的内容）。
+    "BAD_BASE_REF": "基础分支不存在或不是提交",
+    "WORKTREE_CONFLICT": "工作区目录被占用，或里面有未提交的改动",
 }
 ERROR_TEXT_FALLBACK: Final = "绑定失败"
 
@@ -277,6 +282,39 @@ INDEX_HTML: Final = """<!doctype html>
   #charter[data-state="error"] #charter-state,
   #charter[data-state="error"] #charter-memory,
   #charter[data-state="error"] #charter-content { display: none; }
+  /* 工作区卡片（S7 D9）。显隐只由 `#workspace[data-state=…]` 与 `hidden` 决定（T8：不碰
+     style.display）；路径 / 分支 / Bot 名都是用户数据，只进 textContent。 */
+  #workspace { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #workspace h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600;
+    letter-spacing: .08em; color: #8b95a7; text-transform: uppercase; }
+  #workspace-form { display: flex; gap: 8px; margin: 10px 0 0; }
+  #workspace-base { flex: 1; min-width: 0; padding: 6px 8px; font: inherit; font-size: 13px;
+    color: #e6e9ef; background: #0f1115; border: 1px solid #39404f; border-radius: 6px; }
+  #workspace-acquire, #workspace-release { padding: 6px 12px; font: inherit; font-size: 13px;
+    color: #e6e9ef; background: #1f2430; border: 1px solid #39404f; border-radius: 6px;
+    cursor: pointer; }
+  #workspace-acquire:hover, #workspace-release:hover { border-color: #58627a; }
+  #workspace-acquire:disabled, #workspace-release:disabled { opacity: .5; cursor: progress; }
+  #workspace-release { margin: 10px 0 0; }
+  #workspace-state, #workspace-empty { margin: 8px 0 0; font-size: 13px; color: #8b95a7; }
+  #workspace-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
+  #workspace-bot, #workspace-path, #workspace-branch { margin: 6px 0 0; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
+  #workspace[data-state="idle"] #workspace-form,
+  #workspace[data-state="idle"] #workspace-details,
+  #workspace[data-state="idle"] #workspace-bot,
+  #workspace[data-state="idle"] #workspace-empty,
+  #workspace[data-state="loading"] #workspace-form,
+  #workspace[data-state="loading"] #workspace-details,
+  #workspace[data-state="loading"] #workspace-bot,
+  #workspace[data-state="loading"] #workspace-empty,
+  #workspace[data-state="ready"] #workspace-state,
+  #workspace[data-state="error"] #workspace-state,
+  #workspace[data-state="error"] #workspace-empty { display: none; }
+  /* 注意：error 状态**不隐藏** `#workspace-details`。回收被拒（脏工作区）之后，用户必须还能
+     看见路径、并**再点一次**「回收」——把按钮藏起来等于让人去刷新页面（真实浏览器验收抓到
+     的第一版缺陷）。没有工作区时 `#workspace-details` 靠 `hidden` 属性隐藏，与这里无关。 */
 </style>
 </head>
 <body>
@@ -329,6 +367,25 @@ INDEX_HTML: Final = """<!doctype html>
     <p id="charter-error" role="alert" hidden></p>
     <p id="charter-memory" hidden></p>
     <pre id="charter-content" hidden></pre>
+  </section>
+  <!-- 主区工作区卡片（S7 D9）：位置在 #charter 之后，不重排既有布局。分配是**显式动作**：
+       选仓库只读 worktree.list，绝不自动建目录。路径 / 分支 / Bot 名都只进 textContent。 -->
+  <section id="workspace" data-state="idle" aria-live="polite">
+    <h2 id="workspace-title">工作区</h2>
+    <p id="workspace-state">选择一个仓库后分配工作区</p>
+    <form id="workspace-form" autocomplete="off">
+      <input id="workspace-base" type="text" spellcheck="false"
+             placeholder="基础分支（缺省用默认分支）" aria-label="基础分支">
+      <button id="workspace-acquire" type="submit" disabled>分配工作区</button>
+    </form>
+    <p id="workspace-error" role="alert" hidden></p>
+    <p id="workspace-bot"></p>
+    <p id="workspace-empty" hidden>这个仓库还没有分配工作区</p>
+    <div id="workspace-details">
+      <p id="workspace-path"></p>
+      <p id="workspace-branch"></p>
+      <button id="workspace-release" type="button">回收工作区</button>
+    </div>
   </section>
   <!-- 左栏 Bots 区（S6 D8）：在 #repos 之前（03-ui-spec §2：左栏上 Bot / 下仓库）。
        初始 idle：没选仓库之前不装成「这个仓库没有 Bot」。 -->
@@ -445,6 +502,28 @@ INDEX_HTML: Final = """<!doctype html>
   var botRequestToken = 0;        // 只认最后一次 bot.list 的回包（快速切仓库）
   var charterRequestToken = 0;    // 只认最后一次 charter 请求的回包
 
+  // 工作区卡片（S7 D9）。三条纪律：显隐只由 data-state / hidden 决定；路径与分支只进
+  // textContent；**创建是显式动作**（选仓库只读 worktree.list，不会自动建目录）。
+  var workspaceEl = document.getElementById("workspace");
+  var workspaceForm = document.getElementById("workspace-form");
+  var workspaceBase = document.getElementById("workspace-base");
+  var workspaceAcquire = document.getElementById("workspace-acquire");
+  var workspaceState = document.getElementById("workspace-state");
+  var workspaceError = document.getElementById("workspace-error");
+  var workspaceEmpty = document.getElementById("workspace-empty");
+  var workspaceDetails = document.getElementById("workspace-details");
+  var workspaceBot = document.getElementById("workspace-bot");
+  var workspacePath = document.getElementById("workspace-path");
+  var workspaceBranch = document.getElementById("workspace-branch");
+  var workspaceRelease = document.getElementById("workspace-release");
+  var WORKSPACE_HINT = "选择一个仓库后分配工作区";
+  // 卡片**自己的**兜底：表外的码不显示绑定场景的「绑定失败」（同分支/差异/Bot 面板）。
+  var WORKSPACE_ERROR_FALLBACK = "工作区操作失败";
+  var workspaceRequestToken = 0;  // 只认最后一次请求的回包（切仓库 / 断连时让旧回包作废）
+  var workspaceBusy = false;      // 分配/回收在进行中：按钮置灰，防连点建两个
+  var workspaceBotId = null;      // 卡片作用的 Bot = 这个仓库的第一个 Bot（D9，M1 只有一个）
+  var workspaceBotName = "";
+
   function setState(state, text) {
     statusEl.dataset.state = state;
     statusText.textContent = text;
@@ -483,6 +562,8 @@ INDEX_HTML: Final = """<!doctype html>
     // 与 repo 强绑定，不清 selectedBotId：重连后由 renderBots 重放（D8）。
     resetBots("idle", state === "disconnected" ? "已断开：Bot 列表未知" : "正在连接内核…");
     resetCharter("idle", state === "disconnected" ? "已断开：charter 未知" : "正在连接内核…");
+    // S7 D9：工作区卡片同一纪律——断连回 idle + 「已断开：工作区未知」+ 清空路径/分支。
+    resetWorkspace("idle", state === "disconnected" ? "已断开：工作区未知" : "正在连接内核…");
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -544,11 +625,13 @@ INDEX_HTML: Final = """<!doctype html>
       resetDiff("idle", DIFF_HINT);   // S5 D9：差异面板一起清空，不留上一个仓库的对比
       resetBots("idle", BOT_HINT);    // S6 D8：Bots 与 charter 一起回 idle（选中的 Bot 随仓库消失）
       resetCharter("idle", CHARTER_HINT);
+      resetWorkspace("idle", WORKSPACE_HINT);   // S7 D9：工作区同理
       return;
     }
     applyRepoSelection();
     loadBranches();   // 重连且仍有选中仓库 → 与 loadRepos 同一条路径自动重取（D6）
     loadBots();       // S6 D8：重连仍选中仓库 → 重取 bot.list（charter 面板不清空）
+    loadWorkspace();  // S7 D9：重连仍选中仓库 → 重取 worktree.list（D4：git 是事实源）
   }
 
   function loadRepos() {
@@ -915,6 +998,14 @@ INDEX_HTML: Final = """<!doctype html>
     }
     // 只有「真的拿到了一个（可能为空的）列表」时才能说「这个仓库还没有 Bot」
     botEmpty.hidden = list.length !== 0;
+    // S7 D9：工作区卡片作用在这个仓库的**第一个** Bot 上（M1 只有一个 builder）。拿到它才允许
+    // 点「分配工作区」——按钮会一直灰着，而不是点了才报「还没有 Bot」。
+    workspaceBotId = list.length > 0 ? (String((list[0] || {}).botId || "") || null) : null;
+    workspaceBotName = list.length > 0 ? String((list[0] || {}).name || "") : "";
+    if (workspaceEl.dataset.state === "ready") {
+      workspaceAcquire.disabled = workspaceBotId === null || workspaceBusy;
+      workspaceBot.textContent = workspaceBotText(workspaceBotName);
+    }
     var stillListed = false;
     for (var j = 0; j < list.length; j++) {
       if (String((list[j] || {}).botId || "") === selectedBotId) { stillListed = true; break; }
@@ -999,6 +1090,136 @@ INDEX_HTML: Final = """<!doctype html>
     });
   }
 
+  // -------------------------------------------------------------------------
+  // 工作区卡片（S7 D9）。四条纪律：
+  //   1. 显隐只由 `#workspace[data-state=…]` 与 hidden 属性决定（T8）；
+  //   2. 路径 / 分支 / Bot 名只进 textContent；
+  //   3. 选仓库只**读**（worktree.list），分配与回收才是写；
+  //   4. 错误按**码**映射（07 §1.3），不把服务端 message 贴到页面上（05 §4.2）。
+  // -------------------------------------------------------------------------
+
+  function workspaceErrorText(code) {
+    return ERROR_TEXT[code] || WORKSPACE_ERROR_FALLBACK;   // 表外的码不显示"绑定失败"
+  }
+
+  // 卡片作用在哪个 Bot 上：**说出来**，别让人猜（D9）。没有 Bot 时说清楚，而不是静默不响应。
+  function workspaceBotText(name) {
+    return name ? ("Bot：" + name) : "Bot：（这个仓库还没有 Bot）";
+  }
+
+  // 本地文案（不是服务端 message）：连接没就绪 / 这个仓库还没有 Bot。
+  function showWorkspaceNote(text) {
+    workspaceEl.dataset.state = "error";
+    workspaceError.textContent = text;
+    workspaceError.hidden = false;
+  }
+
+  function showWorkspaceError(code) {
+    showWorkspaceNote(workspaceErrorText(code));
+    workspaceAcquire.disabled = workspaceBotId === null;
+    workspaceRelease.disabled = false;
+  }
+
+  function resetWorkspace(state, text) {
+    workspaceRequestToken += 1;      // 让在途请求的回包作废（切仓库 / 断连）
+    workspaceBusy = false;
+    workspaceEl.dataset.state = state;
+    workspaceState.textContent = text;
+    workspaceError.textContent = "";
+    workspaceError.hidden = true;
+    workspaceEmpty.hidden = true;
+    workspaceDetails.hidden = true;
+    workspaceBot.textContent = "";
+    workspacePath.textContent = "";
+    workspaceBranch.textContent = "";
+    workspaceAcquire.disabled = true;
+    workspaceRelease.disabled = false;
+  }
+
+  // 有工作区 → 路径 / 分支；没有 → 「还没有分配」。**空不是错误**（D7 第 3 行）。
+  function renderWorkspace(entry) {
+    workspaceEl.dataset.state = "ready";
+    workspaceAcquire.disabled = workspaceBotId === null || workspaceBusy;
+    workspaceRelease.disabled = false;
+    workspaceBot.textContent = workspaceBotText(entry ? entry.botName : workspaceBotName);
+    if (!entry) {
+      workspaceDetails.hidden = true;
+      workspaceEmpty.hidden = false;
+      workspacePath.textContent = "";
+      workspaceBranch.textContent = "";
+      return;
+    }
+    workspacePath.textContent = "路径：" + String(entry.path || "");
+    workspaceBranch.textContent = "分支：" + String(entry.branch || "");
+    workspaceEmpty.hidden = true;
+    workspaceDetails.hidden = false;
+  }
+
+  function loadWorkspace() {
+    if (selectedRepoId === null) { resetWorkspace("idle", WORKSPACE_HINT); return; }
+    resetWorkspace("loading", "正在读取工作区…");
+    var token = workspaceRequestToken;
+    var id = request("worktree.list", { repoId: selectedRepoId }, function (err, data) {
+      if (token !== workspaceRequestToken) { return; }   // 过期回包：切了仓库或已断连
+      if (err) { showWorkspaceError(err); return; }
+      var rows = Array.isArray(data) ? data : [];
+      var mine = null;
+      for (var i = 0; i < rows.length; i++) {
+        // 卡片只关心它自己的 Bot（D9）；别的 Bot 的工作区不属于这张卡。
+        if (workspaceBotId !== null && String((rows[i] || {}).botId || "") === workspaceBotId) {
+          mine = rows[i];
+          break;
+        }
+      }
+      if (mine === null && rows.length > 0) { mine = rows[0]; }
+      renderWorkspace(mine);
+    });
+    if (id === null) { showWorkspaceNote("连接尚未就绪"); }
+  }
+
+  function submitWorkspace() {
+    if (workspaceBusy || selectedRepoId === null) { return; }
+    if (workspaceBotId === null) { showWorkspaceNote("这个仓库还没有 Bot"); return; }
+    var params = { repoId: selectedRepoId, botId: workspaceBotId };
+    var base = workspaceBase.value.trim();
+    if (base) { params.baseRef = base; }   // 空 = 交给内核用默认分支（D8）
+    workspaceBusy = true;
+    workspaceAcquire.disabled = true;
+    workspaceRelease.disabled = true;
+    workspaceError.hidden = true;
+    var token = workspaceRequestToken;
+    var id = request("worktree.acquire", params, function (err, data) {
+      if (token !== workspaceRequestToken) { return; }
+      workspaceBusy = false;
+      if (err) { showWorkspaceError(err); return; }   // 含 BAD_BASE_REF / WORKTREE_CONFLICT
+      renderWorkspace(data && typeof data === "object" ? data : null);
+    });
+    if (id === null) {
+      workspaceBusy = false;
+      showWorkspaceNote("连接尚未就绪");
+    }
+  }
+
+  function releaseWorkspace() {
+    if (workspaceBusy || selectedRepoId === null || workspaceBotId === null) { return; }
+    workspaceBusy = true;
+    workspaceAcquire.disabled = true;
+    workspaceRelease.disabled = true;
+    workspaceError.hidden = true;
+    var token = workspaceRequestToken;
+    var id = request("worktree.release", { repoId: selectedRepoId, botId: workspaceBotId },
+      function (err) {
+        if (token !== workspaceRequestToken) { return; }
+        workspaceBusy = false;
+        if (err) { showWorkspaceError(err); return; }   // 脏工作区 → WORKTREE_CONFLICT
+        loadWorkspace();   // 重新读事实：目录与注册记录都没了（D4，不自己编结果）
+      });
+    if (id === null) {
+      workspaceBusy = false;
+      showWorkspaceNote("连接尚未就绪");
+    }
+  }
+
   function selectBot(botId, botName) {
     if (!botId) { return; }
     selectedBotId = botId;
@@ -1012,6 +1233,8 @@ INDEX_HTML: Final = """<!doctype html>
     selectedRepoId = repoId;
     selectedRepoName = name;
     applyRepoSelection();
+    // S7 D9：基础分支输入框预填这个仓库的默认分支（用户可以改；游离 HEAD 时留空）。
+    workspaceBase.value = repoDefaultBranches[repoId] || "";
     // S5 D9：切仓库 → 差异面板回 idle 并清空 patch/stat/error/选中行，标题跟着仓库名变。
     // 显式重选同一个仓库也会清空（用户正在看的对比就此结束，不静默留着旧结果）。
     resetDiff("idle", DIFF_HINT);
@@ -1021,6 +1244,8 @@ INDEX_HTML: Final = """<!doctype html>
     resetCharter("idle", CHARTER_HINT);
     loadBots();
     loadBranches();
+    // S7 D9：切仓库 → 工作区卡片按新仓库重读（清空旧的路径与分支，不留上一个仓库的结果）。
+    loadWorkspace();
   }
 
   function submitBind() {
@@ -1177,6 +1402,12 @@ INDEX_HTML: Final = """<!doctype html>
   button.addEventListener("click", reconnect);
   bindForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitBind(); });
   diffForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitDiff(); });
+  // S7：分配走 <form>（回车与点按钮同一条路径）；回收是显式按钮（删目录不该被回车触发）。
+  workspaceForm.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    submitWorkspace();
+  });
+  workspaceRelease.addEventListener("click", releaseWorkspace);
   // 断连期间**不自动重连**（禁止事项：不得静默重试而不改 UI 状态），只如实显示「已断开」。
   connect(metaTicket ? metaTicket.content : "");
 }());
