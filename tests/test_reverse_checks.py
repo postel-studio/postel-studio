@@ -163,14 +163,6 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_https_and_ssh_origins_share_the_same_repo_id"),
         "origin 不归一化（https 与 ssh 会得不同 id）",
     ),
-    # ---- 验收 4：重复绑定不产生第二行 ----
-    (
-        "postel_studio/storage/db.py",
-        '"UPDATE repos SET repo_id = ?, origin_url = ?, default_branch = ?,"',
-        '"UPDATE repos SET repo_id = repo_id, origin_url = ?, default_branch = ?,"',
-        _target_test("test_rebinding_after_origin_added_updates_the_row"),
-        "upsert 不更新 repo_id（T26）",
-    ),
     # ---- 05 §4.1：state.db 权限 ----
     (
         "postel_studio/storage/db.py",
@@ -198,6 +190,67 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         "    if False:\n        return None",
         _target_test("test_inprocess_dispatch_exposes_repo_bind"),
         "网关不注册 repo.bind",
+    ),
+)
+
+
+# S3.5 · U9 的**组合注入**（一次改两处；结构同 INJECTIONS，只是 patches 允许多项）。
+#
+# U9 要两处同时存在才复现（实测，见 06-pitfalls T32）：(a) id 依赖 origin（S3 的算法）**且**
+# (b) `upsert` 按 path 命中时覆盖 `repo_id`。只注入任一处，验收 2/3 都是**绿的**——只有 (b)
+# 时新算法算出的 id 本来就相同；只有 (a) 时规则 1 不覆盖 id。单独两半各写成"必须仍然绿"的
+# 用例（`_ONLY_*`）。能红的只有 (a)+(b) = S3 的真实代码形态。
+#
+# 注意 (b) 的参数元组必须一起改：只改 SQL 会红在 `ProgrammingError` 上，那是"红错原因"
+# （见 `_RUNTIME_BREAKAGES`）。
+_UPSERT_COVERS_ID: tuple[tuple[str, str, str], ...] = (
+    (
+        "postel_studio/storage/db.py",
+        '                    "UPDATE repos SET origin_url = ?, origin_hash = ?,'
+        ' default_branch = ?,"',
+        '                    "UPDATE repos SET repo_id = ?, origin_url = ?, origin_hash = ?,"\n'
+        '                    " default_branch = ?,"',
+    ),
+    (
+        "postel_studio/storage/db.py",
+        '                    " added_at = ? WHERE path = ?",\n                    (\n'
+        "                        repo.origin_url,",
+        '                    " added_at = ? WHERE path = ?",\n                    (\n'
+        "                        repo.repo_id,\n"
+        "                        repo.origin_url,",
+    ),
+)
+
+
+# U9(a)：调用方把 `repo_id()` 换回「有 origin 用 URL 哈希」。import + 调用点两段必须一起注入。
+_OLD_ID_ALGORITHM: tuple[tuple[str, str, str], ...] = (
+    (
+        "postel_studio/api/repository.py",
+        "from postel_studio.domain.models import Repo, origin_hash, repo_id",
+        "from postel_studio.domain.models import Repo, origin_hash, repo_id, repo_id_for_origin",
+    ),
+    (
+        "postel_studio/api/repository.py",
+        "                repo_id=repo_id(str(root)),",
+        "                repo_id=repo_id_for_origin(origin) if origin else repo_id(str(root)),",
+    ),
+)
+
+COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], ...] = (
+    (
+        _OLD_ID_ALGORITHM + _UPSERT_COVERS_ID,
+        _target_test("test_rebinding_after_origin_added_updates_the_row"),
+        "U9 完整形态（旧算法 + upsert 覆盖 id）：验收 2 的用例必须红",
+    ),
+    (
+        _OLD_ID_ALGORITHM + _UPSERT_COVERS_ID,
+        _target_test("test_unbound_legacy_id_is_still_reachable_after_origin_change"),
+        "U9 完整形态：验收 3 的用例必须红",
+    ),
+    (
+        _OLD_ID_ALGORITHM + _UPSERT_COVERS_ID,
+        _target_test("test_binding_an_existing_v1_row_keeps_its_legacy_id"),
+        "U9 完整形态：v1 老行的 id 在下一次 bind 被覆盖（D3 的留痕被抹掉）",
     ),
 )
 
@@ -283,6 +336,63 @@ def test_sanity_the_copy_is_really_what_runs(patched_source: Path) -> None:
         module.write_text(original, encoding="utf-8")
 
 
+def _apply_patches(source: Path, patches: tuple[tuple[str, str, str], ...]) -> dict[str, str]:
+    """把一组补丁打到**副本**上，返回「文件 → 原始内容」（供 `finally` 复原）。
+
+    两条纪律（S3.5 加的第一条）：
+
+    1. **锚点必须恰好命中一次**：`str.count(old)` 不是 1 就当场失败。S3.5 改 `db.py` 时它当场
+       抓到过一条旧锚点静默失配（`UPDATE` 里不再有 `repo_id`，那条注入会退化成空操作而永远绿）。
+    2. 同一文件的多段补丁**按顺序叠加**（后一段在前一段的结果上找锚点）。
+    """
+    pristine: dict[str, str] = {}
+    for file, old, new in patches:
+        path = source / file
+        if file not in pristine:
+            pristine[file] = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+        hits = text.count(old)
+        assert hits == 1, f"{file} 里锚点命中 {hits} 次（应恰好 1 次）：{old[:60]!r}"
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return pristine
+
+
+def _restore_patches(source: Path, pristine: dict[str, str]) -> None:
+    """复原副本（**必须**在 `finally` 里调：下一个参数化用例还要用同一份副本）。"""
+    for file, text in pristine.items():
+        (source / file).write_text(text, encoding="utf-8")
+
+
+# 注入后目标测试"红"的**成因**不能是这些：它们说明"注入把代码弄坏了"，与"这条约束有没有被
+# 守住"无关。实测踩过一次：只改 UPDATE 的 SQL 而忘了补参数元组，测试红在
+# `sqlite3.ProgrammingError: Incorrect number of bindings supplied` 上——那次"红"什么也没证明。
+_RUNTIME_BREAKAGES: tuple[str, ...] = (
+    "ProgrammingError",
+    "OperationalError",
+    "NameError",
+    "AttributeError",
+    "ImportError",
+    "ModuleNotFoundError",
+    "TypeError",
+)
+
+
+def _assert_red_for_the_right_reason(
+    result: subprocess.CompletedProcess[str], test_node: str, description: str
+) -> None:
+    """目标测试必须**红**，且红在断言上（不是注入把代码改坏了）。"""
+    assert result.returncode != 0, (
+        f"注入「{description}」之后 {test_node} **仍然是绿的**——这条测试守不住这个约束。\n"
+        f"stdout:\n{result.stdout[-2000:]}\nstderr:\n{result.stderr[-1000:]}"
+    )
+    output = result.stdout + result.stderr
+    for breakage in _RUNTIME_BREAKAGES:
+        assert breakage not in output, (
+            f"注入「{description}」之后目标测试红在 {breakage} 上——注入后的代码没跑起来，"
+            f"这次变红**不说明**那条约束被守住。\nstdout:\n{result.stdout[-1500:]}"
+        )
+
+
 @pytest.mark.parametrize(
     ("file", "old", "new", "test_node", "description"),
     INJECTIONS,
@@ -297,21 +407,68 @@ def test_injected_defect_turns_the_target_test_red(
     description: str,
 ) -> None:
     """注入缺陷 → 目标测试**必须**变红；同时断言副本真的被改了、原文件没被动。"""
-    path = patched_source / file
-    pristine = path.read_text(encoding="utf-8")
-    assert old in pristine, f"{file} 里找不到注入锚点（代码改过了？）：{old[:60]!r}"
+    pristine = _apply_patches(patched_source, ((file, old, new),))
     try:
-        path.write_text(pristine.replace(old, new, 1), encoding="utf-8")
-
         result = _run_target_test(patched_source, test_node)
-
-        assert result.returncode != 0, (
-            f"注入「{description}」之后 {test_node} **仍然是绿的**——这条测试守不住这个约束。\n"
-            f"stdout:\n{result.stdout[-2000:]}\nstderr:\n{result.stderr[-1000:]}"
-        )
+        _assert_red_for_the_right_reason(result, test_node, description)
     finally:
-        # 注入点复原（下一个参数化用例还要用它）
-        path.write_text(pristine, encoding="utf-8")
+        _restore_patches(patched_source, pristine)
+
+
+@pytest.mark.parametrize(
+    ("patches", "test_node", "description"),
+    COMPOSITE_INJECTIONS,
+    ids=[item[2] for item in COMPOSITE_INJECTIONS],
+)
+def test_composite_injected_defect_turns_the_target_test_red(
+    patched_source: Path,
+    patches: tuple[tuple[str, str, str], ...],
+    test_node: str,
+    description: str,
+) -> None:
+    """一次改两处（U9 必须如此，见 `COMPOSITE_INJECTIONS` 的注释）→ 目标测试**必须**变红。"""
+    pristine = _apply_patches(patched_source, patches)
+    try:
+        result = _run_target_test(patched_source, test_node)
+        _assert_red_for_the_right_reason(result, test_node, description)
+    finally:
+        _restore_patches(patched_source, pristine)
+
+
+@pytest.mark.parametrize(
+    ("patches", "label"),
+    [
+        (_OLD_ID_ALGORITHM, "只有 (a)：算法退回「有 origin 用 URL 哈希」"),
+        (_UPSERT_COVERS_ID, "只有 (b)：upsert 按 path 命中时覆盖 repo_id"),
+    ],
+    ids=["only-old-id-algorithm", "only-upsert-covers-id"],
+)
+def test_each_half_of_u9_alone_keeps_stability_green(
+    patched_source: Path, patches: tuple[tuple[str, str, str], ...], label: str
+) -> None:
+    """单独注入 U9 的任一半时，验收 2/3 的用例**必须仍然绿**——D1 由两道锁共同保证。
+
+    | 注入状态 | 验收 2/3 | 原因 |
+    |---|---|---|
+    | (a)+(b)（= S3 真实代码） | **红** | U9 复现，见 `COMPOSITE_INJECTIONS` |
+    | 只有 (a) | 绿 | 规则 1 不写 `repo_id` |
+    | 只有 (b) | 绿 | 同一路径算出的 id 本来就相同 |
+
+    红了说明"另一半"不再独立兜住 D1，先看 `COMPOSITE_INJECTIONS` 里的条目。
+    """
+    pristine = _apply_patches(patched_source, patches)
+    try:
+        for test_node in (
+            _target_test("test_rebinding_after_origin_added_updates_the_row"),
+            _target_test("test_unbound_legacy_id_is_still_reachable_after_origin_change"),
+        ):
+            result = _run_target_test(patched_source, test_node)
+            assert result.returncode == 0, (
+                f"{label} 单独存在就把 {test_node} 弄红了——D1 的两道锁不再各自独立。\n"
+                f"stdout:\n{result.stdout[-2000:]}\nstderr:\n{result.stderr[-1000:]}"
+            )
+    finally:
+        _restore_patches(patched_source, pristine)
 
 
 def test_repository_source_is_never_modified(patched_source: Path) -> None:
