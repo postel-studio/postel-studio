@@ -1,6 +1,6 @@
 # 03 · paths — `src/postel_studio/storage/paths.py`
 
-> 层 L0 · 273 行 · 上游：[模块索引](README.md) · 相关：[01-overview §4](../01-overview.md#4-状态根长什么样)
+> 层 L0 · 322 行 · 上游：[模块索引](README.md) · 相关：[01-overview §4](../01-overview.md#4-状态根长什么样)
 
 ## 职责
 
@@ -16,26 +16,30 @@ Bot 的记忆空间（`bots/<repo_id>/<name>/`）与 charter 模板。
 |---|---|---|---|
 | `ENV_HOME` / `SERVER_FILE` / `LOCK_FILE` | 21-23 | 常量名 | |
 | `DIR_MODE` `0o700` / `FILE_MODE` `0o600` | 25-26 | 权限 | 全部写操作 |
-| `_chmod(path, mode)` | 29 | POSIX 才收紧；Windows 跳过 | 内部 |
-| `state_root()` | 35 | 返回状态根（**不创建**） | `app.py`、`server.py`、测试 |
-| `ensure_state_root()` | 43 | 创建 + 收紧 0700 | `server.serve()` |
+| `_chmod(path, mode)` | 35 | POSIX 才收紧；Windows 跳过 | 内部 |
+| `state_root()` | 41 | 返回状态根（**不创建**） | `app.py`、`server.py`、测试 |
+| `ensure_state_root()` | 49 | 创建 + 收紧 0700 | `server.serve()` |
 | `server_file()` / `lock_file()` / `token_path()` | 51/56/61 | 三个路径 | 内部与 server |
-| `atomic_write(path, data)` | 66 | mkstemp + fsync + replace | 内部 |
+| `atomic_write(path, data)` | 77 | mkstemp + fsync + replace | 内部 |
 | `write_server_info` / `read_server_info` / `remove_server_info` | 84/90/99 | server.json CRUD | server、测试 |
 | `write_token` / `remove_token` / `fingerprint` | 104/111/117 | 令牌文件与指纹 | server |
-| `ERR_ALREADY_RUNNING` | 126 | `"KERNEL_ALREADY_RUNNING"` | server、测试 |
-| `KernelBootError(code, message)` | 129 | 拒绝启动的异常，带稳定码 | CLI、server |
-| `pid_alive(pid)` | 138 | `kill(pid,0)` 探测 | `acquire_lock` |
-| `read_lock_pid(path)` | 151 | 坏锁返回 `None` | `acquire_lock`、`release_lock` |
-| `_lock_payload()` | 161 | 锁内容 JSON | 内部 |
-| `acquire_lock(path, force=)` | 169 | O_EXCL 抢锁 / 覆盖陈旧锁 | `server.serve()` |
-| `release_lock(path)` | 192 | **只删自己的**锁 | `server.serve()` |
+| `ERR_ALREADY_RUNNING` | 137 | `"KERNEL_ALREADY_RUNNING"` | server、测试 |
+| `KernelBootError(code, message)` | 140 | 拒绝启动的异常，带稳定码 | CLI、server |
+| `pid_alive(pid)` | 149 | `kill(pid,0)` 探测 | `acquire_lock` |
+| `read_lock_pid(path)` | 162 | 坏锁返回 `None` | `acquire_lock`、`release_lock` |
+| `_lock_payload()` | 172 | 锁内容 JSON | 内部 |
+| `acquire_lock(path, force=)` | 180 | O_EXCL 抢锁 / 覆盖陈旧锁 | `server.serve()` |
+| `release_lock(path)` | 203 | **只删自己的**锁 | `server.serve()` |
 | `BOTS_DIR` / `CHARTER_FILE` / `MEMORY_DIR` / `SESSIONS_DIR` | 216-219 | `bots` / `charter.md` / `memory` / `sessions` 四个文件名的事实源 | 内部、`api/bots.py` |
-| `CHARTER_TEMPLATE` | 221 | D4 的空白骨架（`# {name}` + 四节标题，**不含任何职责**） | `ensure_memory_space`、测试 |
-| `bots_root()` | 233 | `<状态根>/bots`（不创建） | `bot_memory_dir`、测试 |
-| `bot_memory_dir(repo_id, name)` | 238 | 拼记忆目录；**白名单 + resolve 越界断言**（D3） | `api/bots.py` |
-| `ensure_memory_space(repo_id, name)` | 252 | 缺什么建什么（0700）+ 缺 charter 才写模板（0600，幂等） | `api/bots.py` |
-| `read_charter(repo_id, name)` | 271 | 读 charter 正文（缺失抛 `FileNotFoundError`） | `api/bots.py` |
+| `CHARTER_TEMPLATE` | 222 | D4 的空白骨架（`# {name}` + 四节标题，**不含任何职责**） | `ensure_memory_space`、测试 |
+| `bots_root()` | 234 | `<状态根>/bots`（不创建） | `bot_memory_dir`、测试 |
+| `bot_memory_dir(repo_id, name)` | 239 | 拼记忆目录；**白名单 + resolve 越界断言**（D3） | `api/bots.py` |
+| `ensure_memory_space(repo_id, name)` | 253 | 缺什么建什么（0700）+ 缺 charter 才写模板（0600，幂等） | `api/bots.py` |
+| `read_charter(repo_id, name)` | 272 | 读 charter 正文（缺失抛 `FileNotFoundError`） | `api/bots.py` |
+| `WORKTREES_DIR` / `_REPO_ID_RE` | 285–287 | `"worktrees"` + `repo_id` 的形状（12 位小写 hex，S7 D2） | `worktree_dir` |
+| `worktrees_root()` | 290 | `<状态根>/worktrees`（不创建）：所有工作区目录的唯一父级 | `worktree_dir`、`api/worktrees.py` |
+| `worktree_dir(repo_id, name)` | 295 | 拼工作区目录；**白名单 + repo_id 形状 + resolve 越界断言**（S7 D2） | `api/worktrees.py` |
+| `ensure_worktree_parent(repo_id, name)` | 311 | 只建**父级**（0700）并返回目标路径；叶子交给 `git worktree add` | `api/worktrees.py` |
 
 ## 关键决策与理由
 

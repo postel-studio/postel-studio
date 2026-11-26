@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -271,3 +272,51 @@ def ensure_memory_space(repo_id: str, name: str) -> Path:
 def read_charter(repo_id: str, name: str) -> str:
     """读 charter 正文（UTF-8）。文件不存在时抛 `FileNotFoundError`，由调用方决定语义。"""
     return (bot_memory_dir(repo_id, name) / CHARTER_FILE).read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 工作区（S7 D2）：<状态根>/worktrees/<repo_id>/<bot_name>/
+#
+# 事实源仍在状态根下（**绝不**在用户仓库的工作目录里建 worktree）。两层名字都进路径，
+# 所以两层都要过形状检查：bot 名是用户可控的那一个（白名单，S6 D3 的同一把锁）；
+# `repo_id` 来自库、理论上恒为 12 位 hex，但"理论上"不是判据——写进路径前再断言一次。
+# ---------------------------------------------------------------------------
+
+WORKTREES_DIR: Final = "worktrees"
+# 06 §2.1：`repo_id` 是 12 位小写十六进制。v1 时代的老行也是（URL 哈希取前 12 位）。
+_REPO_ID_RE: Final = re.compile(r"^[0-9a-f]{12}$")
+
+
+def worktrees_root() -> Path:
+    """`<状态根>/worktrees`（**不创建**）：所有工作区目录的唯一父级。"""
+    return state_root() / WORKTREES_DIR
+
+
+def worktree_dir(repo_id: str, name: str) -> Path:
+    """`<状态根>/worktrees/<repo_id>/<name>`（**不创建**，也不检查它是否存在）。
+
+    与 `bot_memory_dir` 同一条纪律：名字进路径前过白名单，再断言 `resolve()` 之后仍在
+    `worktrees_root()` 之下（纵深防御：白名单已够，将来有人放宽时这一条还拦得住）。
+    """
+    if not bot_name_ok(name):
+        raise ValueError(f"bot 名字不合法：{name!r}")
+    if not _REPO_ID_RE.fullmatch(repo_id):
+        raise ValueError("repo_id 必须是 12 位小写十六进制")
+    path = worktrees_root() / repo_id / name
+    if not path.resolve().is_relative_to(worktrees_root()):
+        raise ValueError(f"工作区路径越出 worktrees 根：{path}")
+    return path
+
+
+def ensure_worktree_parent(repo_id: str, name: str) -> Path:
+    """建好**父级**（`worktrees/` 与 `worktrees/<repo_id>/`）并收紧到 `0700`，返回目标路径。
+
+    **不建目标目录本身**：它由 `git worktree add` 建（S7 D7——空目录 git 也接受，但让创建者
+    只有 git 一个，失败时就不必判断"这个空目录是谁留下的"）。
+    显式 `chmod` 的理由与 S6 相同（T38）：umask 022 下 `mkdir` 的父级是 0755。
+    """
+    target = worktree_dir(repo_id, name)
+    for path in (ensure_state_root(), worktrees_root(), target.parent):
+        path.mkdir(parents=True, exist_ok=True)
+        _chmod(path, DIR_MODE)
+    return target

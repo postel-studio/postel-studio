@@ -14,12 +14,14 @@
   │     api/app.py        路由表 + 装配           │
   │     api/repository.py 仓库业务编排（S3）      │  不碰 fastapi
   │     api/bots.py       Bot 与 charter 编排（S6）│  不碰 fastapi
+  │     api/worktrees.py  工作区编排（S7）        │  不碰 fastapi
   ├─────────────────────────────────────────────┤
   │ L2  api/server.py     进程生命周期            │  唯一拥有 socket / 信号
   ├─────────────────────────────────────────────┤
   │ L1  api/frames.py     纯数据变换              │  无 IO、无 async、无框架
   ├─────────────────────────────────────────────┤
-  │ L0  gitops/repo.py    git 子进程（S3）        │  唯一起 git 的地方
+  │ L0  gitops/repo.py    git 只读探测（S3）      │  
+  │     gitops/worktrees.py git 写面（S7）        │  唯一改 .git/worktrees 的地方
   │     storage/db.py     state.db（S3）          │  唯一碰 SQLite 的地方
   │     storage/paths.py  文件系统                │  状态根/锁/原子写
   │     domain/models.py  实体与纯派生（S3）      │  无 IO
@@ -30,6 +32,10 @@
 **S3 新增三块**：`gitops/`（子进程）、`storage/db.py`（SQLite）、`domain/`（纯模型），
 以及 L3 的 `api/repository.py`（业务编排）。它们都是**新层，遵守同一张表**。
 **S6 只加了同层的一个新模块**：`api/bots.py`（L3，与 repository 同款：不碰 fastapi）。
+**S7 加了两个**：`api/worktrees.py`（L3，同款）与 `gitops/worktrees.py`（L0，**写面**——S7 起
+内核第一次改用户的仓库，允许清单见 [S7 D5](../design/issues/S7-worktree-visible.md)）。
+S7 还顺手把两条**共享判定**下沉了一层：`ref_name_ok`（→ `domain`）与 `is_usable_repo`（→ `gitops`），
+就是为了不让 L3 之间互相 import（见 §3）。
 
 **规则一句话：只能向下 import，不能向上；同层之间尽量不 import（唯一例外见 §3）。**
 
@@ -44,10 +50,12 @@ graph TD
     FR["api/frames.py<br/>帧编解码"]
     RS["api/repository.py<br/>仓库业务编排"]
     BT["api/bots.py<br/>Bot 与 charter（S6）"]
+    WT["api/worktrees.py<br/>工作区编排（S7）"]
     AS["web/assets.py<br/>页面"]
     DB["storage/db.py<br/>state.db"]
     PA["storage/paths.py<br/>状态根/文件 IO"]
-    GO["gitops/repo.py<br/>git 子进程"]
+    GO["gitops/repo.py<br/>git 只读探测"]
+    GW2["gitops/worktrees.py<br/>git 写面（S7）"]
     DM["domain/models.py<br/>实体与纯派生"]
 
     CLI -->|"函数内 import<br/>(懒加载)"| SRV
@@ -69,6 +77,12 @@ graph TD
     BT --> PA
     BT --> DM
     BT --> FR
+    APP -->|"构造 WorktreeService"| WT
+    WT --> DB
+    WT --> GO
+    WT --> DM
+    WT --> FR
+    WT --> GW2
     DB --> PA
     DB --> DM
     PA -.->|"函数内 import<br/>(版本号)"| CLI
@@ -99,6 +113,12 @@ graph TD
 | `bots → paths`（S6） | 记忆空间（`ensure_memory_space` / `read_charter`）、`memoryPath` | 否 |
 | `bots → domain`（S6） | `Bot` / `bot_id` / 权限默认值 | 否 |
 | `bots → frames`（S6） | 抛 `FrameError`（与 repository 同款） | 否 |
+| `app → worktrees`（S7） | 构造 `WorktreeService` 注入网关 | 否 |
+| `worktrees → db`（S7） | 两个 store：`repoId` 存不存在、`botId` 属不属于这个仓库 | 否 |
+| `worktrees → gitops`（S7） | `is_usable_repo`（T25）+ 写面 `add/remove/prune` | 否 |
+| `worktrees → domain`（S7） | `bot_id` / `bot_name_ok` / `ref_name_ok` | 否 |
+| `worktrees → frames`（S7） | 抛 `FrameError` | 否 |
+| `gitops/worktrees → gitops/repo`（S7） | 复用 `git_env` / `git_executable` / 三个异常（**环境只许一份**） | 否 |
 | **`gateway → repository`** | **不存在，也不许有**：网关只收到 `Providers` 里的两个函数 | — |
 
 ### 2.0 S3 的分层要点：`repository` 在 L3，但它不认识 fastapi

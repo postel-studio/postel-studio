@@ -1,15 +1,20 @@
 # 03 · gitops — `src/postel_studio/gitops/`
 
-> 层 L0（**起子进程、碰磁盘**）· 468 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md) / [T34](../06-pitfalls.md) / [T36](../06-pitfalls.md)
+> 层 L0（**起子进程、碰磁盘**）· 500 + 226 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md) / [T34](../06-pitfalls.md) / [T36](../06-pitfalls.md) / [T40](../06-pitfalls.md)
 
 ## 职责
 
-**唯一起 `git` 子进程的地方。** 只读探测：这是不是仓库 / 根在哪 / origin 是什么 / 默认分支是谁 /
-本地分支有哪些（S4）/ 两个 commit 之间有什么差异（S5）。
+**唯一起 `git` 子进程的地方**——分成两个文件，读面与写面各一个：
 
-- **不做写操作**（不 commit / 不 checkout / 不 fetch）：S3 的禁止事项，也是 05 §2「判定在执行之前」的前提。
+| 文件 | 面 | 做什么 |
+|---|---|---|
+| `repo.py` | **只读** | 这是不是仓库 / 根在哪 / origin / 默认分支 / 本地分支（S4）/ 两个 commit 之间的差异（S5） |
+| `worktrees.py` | **写**（S7） | 只有三件事：`worktree add` / `remove` / `prune` |
+
+- **`repo.py` 不做写操作**（不 commit / 不 checkout / 不 fetch / 不 worktree）：S3 的禁止事项，也是
+  05 §2「判定在执行之前」的前提。**S7 起写操作存在**，但只存在于 `worktrees.py`，而且只有上表那三条。
 - **唯一**把用户给的 ref 字符串送进 git 的入口是 `resolve_commit`（S5 D2）：它先解析成
-  object id，之后的 `diff_stat` / `diff_patch` 只用 `<a>...<b>` 两个 id。`repo.branches` 仍只收
+  object id，之后的 `diff_stat` / `diff_patch` / `worktree add` 只用那个 id。`repo.branches` 仍只收
   `repoId`（没有 ref 参数）。
 - **不判断"用户能不能绑这个目录"**：那是 `api/repository.py:_bindable_root()` 的事，见下。
 
@@ -18,15 +23,16 @@
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 6 | 包标记（三条硬约束的一句话摘要 + S4 的 `list_branches`） |
-| `repo.py` | 468 | 子进程外壳 + 八个探测函数（S3 的四个、S4 的分支列表、S5 的 ref 解析 / stat / patch）+ **严格解码**（S5 结 U15） |
+| `repo.py` | 500 | 子进程外壳 + 八个探测函数（S3 的四个、S4 的分支列表、S5 的 ref 解析 / stat / patch）+ **严格解码**（S5 结 U15）+ `git_env()`（S7 让写面共用同一份环境） |
+| `worktrees.py` | 226 | 写面（S7）：`add_worktree` / `remove_worktree` / `prune_worktrees` / `list_worktrees` / `branch_exists` / `is_dirty` + `GitRefusedError` |
 
 ## 符号表（`gitops/repo.py`）
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `GIT_TIMEOUT_SECONDS` | 35 | `5.0`：**每个** git 调用的上限（D5） | `run_git`、测试 |
-| `BRANCH_FORMAT` | 40 | `for-each-ref` 的 `--format`：`%00` 分隔四字段（S4 D3） | `list_branches` |
-| `_DROPPED_ENV` | 42 | 不继承的 `GIT_DIR` / `GIT_WORK_TREE` 等 | `_environment` |
+| `GIT_TIMEOUT_SECONDS` | 37 | `5.0`：**每个** git 调用的上限（D5） | `run_git`、测试 |
+| `BRANCH_FORMAT` | 42 | `for-each-ref` 的 `--format`：`%00` 分隔四字段（S4 D3） | `list_branches` |
+| `_DROPPED_ENV` | 71 | 不继承的 `GIT_DIR` / `GIT_WORK_TREE` 等 | `_environment` |
 | `DIFF_FLAGS` | 52 | diff 输出的**确定性 flag**：`--no-color` / `--no-ext-diff` / `--no-textconv` / `--no-renames` / `--unified=3`（S5 D4，T34） | `diff_patch` |
 | `STAT_FLAGS` | 62 | 同一组减去 `--unified`（`--numstat` 与它同给会连 patch 一起输出，S5 实测，T36） | `diff_stat` |
 | `_DIFF_CONFIG` | 66 | `-c core.quotePath=false`（必须在 `diff` **子命令之前**） | `diff_stat` / `diff_patch` |
@@ -37,21 +43,23 @@
 | `BranchInfo` | 100 | frozen dataclass：`name` / `sha`（完整 40 位）/ `upstream` / `is_current`（S4 D1/D4） | `list_branches`、`api/repository.py` |
 | `DiffStat` | 118 | frozen dataclass：`files_changed` / `insertions` / `deletions`（S5 D5；纯事实、snake_case） | `diff_stat`、`api/repository.py` |
 | `_environment()` | 131 | 子进程环境：`GIT_TERMINAL_PROMPT=0` + `GIT_CONFIG_NOSYSTEM=1` + `GIT_OPTIONAL_LOCKS=0` | `run_git`、测试 |
-| `git_executable()` | 141 | `shutil.which("git")`，找不到抛 `GitUnavailableError` | `run_git` |
-| `run_git(args, *, root, decode_errors="strict")` | 153 | **字面数组 + `shell=False` + timeout**；`decode_errors` 原样给 `subprocess.errors`（S5 D3.2） | 全部探测函数 |
-| `_stdout(result)` | 198 | 成功取**整段去空白**的 stdout，否则 `None`（T33 的陷阱源头） | 单值询问（`resolve_commit` 也用它校验形状） |
-| `repo_root(path)` | 205 | `git rev-parse --show-toplevel`（会 discover） | `_bindable_root` 之外的用途小心，见下 |
-| `bare_root(path)` | 220 | 自己就是裸仓库根时返回它 | `_bindable_root`、`_repo_path_is_gone` |
-| `is_worktree_root(path)` | 228 | `path/.git` 存在（**不碰 git**，filesystem 检查） | `_bindable_root`、测试 |
-| `is_repo(path)` | 236 | `repo_root or bare_root`（**同上，别单独当判据**） | 暂无生产调用方；给将来的 doctor |
-| `origin_url(root)` | 246 | `git config --get remote.origin.url` → `str \| None` | `api/repository.py:bind` |
-| `default_branch(root)` | 260 | `git symbolic-ref --short HEAD` → `str \| None` | 同上 |
-| `list_branches(root)` | 279 | `for-each-ref refs/heads/` → `list[BranchInfo] \| None`（S4 D3；三态见下） | `api/repository.py:branches` |
-| `resolve_commit(root, ref)` | 333 | ref → **commit** object id；`rev-parse --verify --end-of-options <ref>^{commit}` + 形状校验（S5 D2） | `api/repository.py:diff` |
-| `_git_output(result)` | 364 | 成功返回**原样** stdout（不 strip；diff 是内容）否则 `None` | `diff_patch` |
-| `diff_stat(root, base, head)` | 373 | `git -c core.quotePath=false diff --numstat -z <a>...<b>` → `DiffStat \| None`（S5 D5，T36） | `api/repository.py:diff` |
-| `diff_patch(root, base, head)` | 414 | `git … diff <DIFF_FLAGS> <a>...<b>` → 完整 patch → `str \| None`（S5 D1/D4） | 同上 |
-| `GIT_ERRORS` | 439 | 三个异常类的元组（"能抛什么"的显式清单） | `api/repository.py`、测试 |
+| `git_env()` | 141 | `_environment()` 的公开别名：**写面**（`gitops/worktrees.py`）也用它，环境只有一份（S7 D5） | `gitops/worktrees.py` |
+| `git_executable()` | 151 | `shutil.which("git")`，找不到抛 `GitUnavailableError` | `run_git` |
+| `run_git(args, *, root, decode_errors="strict")` | 163 | **字面数组 + `shell=False` + timeout**；`decode_errors` 原样给 `subprocess.errors`（S5 D3.2） | 全部探测函数 |
+| `_stdout(result)` | 206 | 成功取**整段去空白**的 stdout，否则 `None`（T33 的陷阱源头） | 单值询问（`resolve_commit` 也用它校验形状） |
+| `repo_root(path)` | 213 | `git rev-parse --show-toplevel`（会 discover） | `_bindable_root` 之外的用途小心，见下 |
+| `bare_root(path)` | 248 | 自己就是裸仓库根时返回它 | `_bindable_root`、`is_usable_repo` |
+| `is_worktree_root(path)` | 236 | `path/.git` 存在（**不碰 git**，filesystem 检查） | `_bindable_root`、测试 |
+| `is_repo(path)` | 244 | `repo_root or bare_root`（**同上，别单独当判据**） | 暂无生产调用方；给将来的 doctor |
+| `is_usable_repo(path)` | 274 | 绑定路径**现在还能不能当仓库用**（目录在 + 有 `.git` 或裸仓库）：S5 D7 #4 与 S7 共用的一条，T25 的判据 | `api/repository.py` 的 `diff`、`api/worktrees.py` |
+| `origin_url(root)` | 254 | `git config --get remote.origin.url` → `str \| None` | `api/repository.py:bind` |
+| `default_branch(root)` | 268 | `git symbolic-ref --short HEAD` → `str \| None` | 同上 |
+| `list_branches(root)` | 287 | `for-each-ref refs/heads/` → `list[BranchInfo] \| None`（S4 D3；三态见下） | `api/repository.py:branches` |
+| `resolve_commit(root, ref)` | 343 | ref → **commit** object id；`rev-parse --verify --end-of-options <ref>^{commit}` + 形状校验（S5 D2） | `api/repository.py:diff` |
+| `_git_output(result)` | 374 | 成功返回**原样** stdout（不 strip；diff 是内容）否则 `None` | `diff_patch` |
+| `diff_stat(root, base, head)` | 383 | `git -c core.quotePath=false diff --numstat -z <a>...<b>` → `DiffStat \| None`（S5 D5，T36） | `api/repository.py:diff` |
+| `diff_patch(root, base, head)` | 424 | `git … diff <DIFF_FLAGS> <a>...<b>` → 完整 patch → `str \| None`（S5 D1/D4） | 同上 |
+| `GIT_ERRORS` | 449 | 三个异常类的元组（"能抛什么"的显式清单） | `api/repository.py`、测试 |
 
 ## 关键决策与理由
 
@@ -228,7 +236,37 @@ upstream"两种布局（前者露 bug、后者覆盖整段 strip 的路径）。
 | 直接 `subprocess.run(["git", ...])`（裸命令名） | `PATH` 被清空时 `FileNotFoundError` 才能被发现；但裸名会在 `PATH` 里有影子 git 时静默跑错东西。改 `which` + 绝对路径 |
 | 用 `git rev-parse --show-toplevel` 当 `is_repo` 的判据 | git 会 discover 到父目录 → 普通目录被判成仓库（T25）。保留函数但**不作为判据** |
 | 用 `git status --porcelain` 判 `isDirty` | 07 §4.1 示例里有 `isDirty`，但 S3 不需要，且它和"是不是仓库"无关。**不填假字段**，留给 S4 |
-| 把超时设成 30 秒 | D5 建议 5 秒；本地只读命令毫秒级，30 秒等于"卡住时整个网关被占 30 秒" |
+| 把超时设成 30 秒 | D5 建议 5 秒；本地只读命令毫秒级，30 秒等于"卡住时整个网关被占 30 秒"。**只读的** 30 秒不行；写面（S7）另算，见下 |
+
+## 写面（`gitops/worktrees.py`，S7）
+
+S7 是内核第一次往用户仓库里写东西。全部写操作就在这一个文件里，且只有三个命令
+（`worktree add` / `remove` / `prune`）——**这是允许清单，不是示例**。
+
+| 符号 | 行 | 做什么 | 谁在用 |
+|---|---|---|---|
+| `WORKTREE_TIMEOUT_SECONDS` | 42 | `30.0`：写操作的超时（读是 5 秒——检出整棵树不是毫秒级） | `_run` |
+| `BRANCH_PREFIX` / `WORKSPACE_LEAF` | 44–45 | `bot` / `workspace`：S7 的占位分支 `bot/<bot>/workspace` | `api/worktrees.py` |
+| `_PRUNED_PREFIX` | 46 | `prunable`：只比**前缀**，因为后面那半句是本地化文案（实测中文） | `list_worktrees` |
+| `GitRefusedError` | 49 | git 非零退出（"我拒绝"）。**不带 git 的输出**（本地化 + 可能含用户路径） | `api/worktrees.py` |
+| `WorktreeEntry` | 58 | frozen dataclass：`path` / `branch`（短名）/ `head_sha` / `prunable` | `list_worktrees`、服务层 |
+| `_run(args, *, root, timeout=)` | 71 | 写操作的外壳：字面数组 + `shell=False` + `git_env()` + 超时；非零退出抛 `GitRefusedError` | 本模块全部函数 |
+| `list_worktrees(root)` | 105 | `worktree list --porcelain` → `list[WorktreeEntry]`（按字段前缀解析） | 服务层三处 |
+| `add_worktree(root, target, *, branch, start_point, create_branch)` | 136 | 建分支（`-b` + 起点）或检出**已存在**的分支 | 服务层 `acquire` |
+| `remove_worktree(root, target)` | 163 | `worktree remove`，**没有 `--force`** | 服务层 `release` |
+| `prune_worktrees(root)` | 172 | 只清"目录已经没了"的元数据 | 服务层（`prunable` 的两条路径） |
+| `branch_exists(root, branch)` | 180 | 本地分支在不在（决定 `-b` 还是检出） | 服务层 `acquire` |
+| `is_dirty(worktree)` | 189 | `status --porcelain` 非空 = 有会被丢掉的东西（判不出来也按脏处理） | 服务层 `release` 的拒绝翻译 |
+| `GIT_WRITE_ERRORS` | 207 | 三个异常的元组（"能抛什么"的显式清单） | 服务层 |
+
+四条值得记住的理由：
+
+1. **不加 `--force`**：实测脏 worktree 的 `remove` 退出 128、加 `--force` 就删。宁可失败。
+2. **不解析本地化文案**：`prunable gitdir 文件指向一个不存在的位置` 是中文；按文案判会在别的
+   locale 静默失效（T39 的同一族）。判定来自文件系统 + 字段**前缀**。
+3. **`create_branch=False` 时必须把分支名传给它，不能传 sha**：传 sha 会静默检出成游离 HEAD
+   ——分支上的提交"消失"，`worktree list` 的 `branch` 字段也消失。实测踩过，见 [T40](../06-pitfalls.md)。
+4. **超时 30 秒**：`worktree add` 要检出一整棵树；5 秒的读超时会在正常仓库上误报。
 
 ## 修改须知
 

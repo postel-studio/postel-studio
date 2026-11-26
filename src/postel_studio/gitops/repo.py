@@ -138,6 +138,16 @@ def _environment() -> dict[str, str]:
     return env
 
 
+def git_env() -> dict[str, str]:
+    """`_environment()` 的公开别名：**写操作模块**（`gitops/worktrees.py`，S7）也要用它。
+
+    写操作有自己的超时与错误语义（30 秒、非零退出算"拒绝"），所以不复用 `run_git`；但环境
+    必须共用一份——`GIT_TERMINAL_PROMPT=0` 与 `GIT_CONFIG_NOSYSTEM=1` 是 05 §3.3 的硬约束，
+    复制第二份迟早会漂。`GIT_OPTIONAL_LOCKS=0` 也跟着走：worktree 命令自己会取需要的锁。
+    """
+    return _environment()
+
+
 def git_executable() -> str:
     """`git` 的路径；不存在就抛 `GitUnavailableError`。
 
@@ -239,6 +249,26 @@ def is_repo(path: Path) -> bool:
     git 语义"这类只读询问用的。
     """
     return repo_root(path) is not None or bare_root(path) is not None
+
+
+def is_usable_repo(path: Path) -> bool:
+    """绑定过的路径**现在还能不能当仓库用**（目录在，且自己有 `.git` 或本身就是裸仓库）。
+
+    这是 S5 D7 #4 与 S7 的**同一条**判据，S7 起搬到这里（原先叫
+    `api/repository.repo_path_is_gone`）：它只问 git 语义，不认识 `Repo` 实体。
+
+    三个方向的理由（T25 是这条的全部来龙去脉）：
+
+    - **不用 `git rev-parse` 判定**：它会向父目录 discover，父目录恰好是仓库时会误判"还活着"；
+      S7 的 `worktree add` 若在这个判据上出错，会把工作区注册到**别人**的仓库里。
+    - `.git` 被删时 `bare_root` 会在非仓库目录里跑一次 git（非零 / `false`）→ 判死。
+    - 裸仓库本来就没有 `.git`，所以必须留 `bare_root` 这一条，否则会误杀已绑定的裸仓库。
+    """
+    if not path.is_dir():
+        return False
+    if is_worktree_root(path):
+        return True
+    return bare_root(path) is not None
 
 
 def origin_url(root: Path) -> str | None:
@@ -457,8 +487,10 @@ __all__ = [
     "default_branch",
     "diff_patch",
     "diff_stat",
+    "git_env",
     "git_executable",
     "is_repo",
+    "is_usable_repo",
     "is_worktree_root",
     "list_branches",
     "origin_url",

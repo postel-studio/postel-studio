@@ -18,6 +18,7 @@ from postel_studio import __version__
 from postel_studio.api import gateway
 from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
+from postel_studio.api.worktrees import WorktreeService
 from postel_studio.storage.db import BotStore, RepoStore
 from postel_studio.storage.paths import state_root
 from postel_studio.web.assets import render_index
@@ -53,7 +54,12 @@ def create_app(
     store = RepoStore()
     repositories = RepositoryService(store)
     # S6：Bot 的元数据在同一份 state.db 的另一张表（v3），charter 在状态根的文件里。
-    bots = BotService(BotStore(), store)
+    # 一个 `BotStore` 给两个 service 用（每个 store 自开连接、自带一把锁）：S7 的工作区要知道
+    # "这个 bot 属于这个仓库"，Bots 面板要知道"这个仓库有哪些 bot"，两处不能看到不同的世界。
+    bot_store = BotStore()
+    bots = BotService(bot_store, store)
+    # S7：工作区（git worktree）的分配与回收。它**不落库**（D4）：事实源是 git 与文件系统。
+    worktrees = WorktreeService(store, bot_store)
 
     def index() -> HTMLResponse:
         page = render_index(
@@ -96,6 +102,9 @@ def create_app(
             repo_diff=repositories.diff,  # S5
             bot_list=bots.list,  # S6
             memory_charter_get=bots.charter_get,  # S6
+            worktree_acquire=worktrees.acquire,  # S7
+            worktree_list=worktrees.list,  # S7
+            worktree_release=worktrees.release,  # S7
         ),
     )
     return app

@@ -1,37 +1,38 @@
 # 03 · app — `src/postel_studio/api/app.py`
 
-> 层 L3 · 101 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
+> 层 L3 · 110 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
 
 ## 职责
 
 路由表。构造 FastAPI 应用，挂 3 个 HTTP 路由，并把网关挂上去。
 
 S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `RepositoryService`（S6 再加
-`BotStore` + `BotService`）→ `gateway.Providers`。
+`BotStore` + `BotService`，S7 再加 `WorktreeService`）→ `gateway.Providers`。
 **加了仓库能力，但一个 HTTP 路由都没加**（S3 D1：`repo.*` 只走 WS 帧）。
 
 ## 符号表
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `API_VERSION` | 24 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
-| `health()` | 27 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
-| `create_app(ws_path, host, port)` | 38 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
+| `API_VERSION` | 26 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
+| `health()` | 29 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
+| `create_app(ws_path, host, port)` | 40 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
 | （局部）`store = RepoStore()` | 54 | 打开 `state.db`（状态根下） | 注入链的起点 |
 | （局部）`repositories = RepositoryService(store)` | 55 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的实现 | `gateway.Providers` |
-| （局部）`bots = BotService(BotStore(), store)` | 56 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里） | `gateway.Providers` |
-| `gateway.Providers(health=…, repo_bind=…, repo_list=…, repo_branches=…, repo_diff=…, bot_list=…, memory_charter_get=…)` | 89-99 | 注入给网关（**唯一**构造点） | `gateway.install` |
+| （局部）`bot_store = BotStore()` / `bots = BotService(bot_store, store)` | 59-60 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里）。S7 起这一个 `BotStore` 同时给 `WorktreeService` 用 | `gateway.Providers` |
+| （局部）`worktrees = WorktreeService(store, bot_store)` | 62 | S7：`worktree.acquire` / `list` / `release` 的实现（**不落库**，事实源是 git） | `gateway.Providers` |
+| `gateway.Providers(health=…, repo_bind=…, repo_list=…, repo_branches=…, repo_diff=…, bot_list=…, memory_charter_get=…, worktree_acquire=…, worktree_list=…, worktree_release=…)` | 93-105 | 注入给网关（**唯一**构造点） | `gateway.install` |
 
 ### 三个路由
 
 | 路由 | 行 | 认证 | 返回 |
 |---|---|---|---|
-| `GET /` | 67 | 无 | HTML（每次渲染签发新 ticket） |
-| `GET /api/health` | 69 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
-| `GET /api/where` | 73 | 无 | `{host, port, wsPath, pid}` |
-| `WS /gateway/<sha16>` | 84（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
+| `GET /` | 76 | 无 | HTML（每次渲染签发新 ticket） |
+| `GET /api/health` | 78 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
+| `GET /api/where` | 82 | 无 | `{host, port, wsPath, pid}` |
+| `WS /gateway/<sha16>` | 93（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
 
-**S3/S4/S5 没有加路由。** `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 走 WS，`/api/repos` 是 404
+**S3~S7 都没有加路由。** `repo.*` / `bot.list` / `worktree.*` 全走 WS，`/api/repos` 是 404
 （`test_bind.py::test_no_http_route_for_repositories` 守着）。
 
 ## 关键决策与理由

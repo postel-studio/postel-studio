@@ -166,3 +166,43 @@ def bot_name_ok(name: str) -> bool:
 def bot_id(repo_id: str, name: str) -> str:
     """复合主键 `{repo_id}/{name}`（06 §2.2）——**唯一的拼接处**，别处不要手写格式。"""
     return f"{repo_id}/{name}"
+
+
+# ---------------------------------------------------------------------------
+# 入站 ref 名的形状（S5 D3.1）：纯判定，无 IO。
+#
+# 放在 domain 而不是 `api/repository.py`：S5 的 `repo.diff`（base / head）与 S7 的
+# `worktree.acquire`（baseRef）都要用它，而**同层模块之间不互相 import**（02-layers §3）。
+# 它只吃字符串、只回答"形状对不对"，正好是这一层的形状。
+# ---------------------------------------------------------------------------
+
+# git 的 refname 本身远短于这个数；这是入站形状检查的一部分，不是 git 的限制。
+REF_NAME_MAX_LENGTH: Final = 200
+
+
+def ref_name_ok(value: object) -> bool:
+    """一个**入站 ref 名**的形状是否合法（S5 D3.1 的六条）——纯判定，**不抛、不拼文案**。
+
+    六条同时满足才算合法：`str`、非空、长度 ≤ `REF_NAME_MAX_LENGTH`、不含控制字符
+    （`< 0x20` 或 `0x7F`）、`encode("utf-8")` 不抛、`strip()` 后非空、不以 `-` 开头。
+
+    **lone surrogate 必须挡掉**（实测，不是推测）：JSON 允许 `"\\udcff"` 这种转义，
+    `json.loads` 会得到一个 lone surrogate 的 `str`；Python 给子进程编码 argv 时用
+    `surrogateescape`，于是它在**字节层**变成原始 `0xFF`——正好是 git 里那个非 UTF-8
+    ref 名的字节，`rev-parse --verify` 实测**真的解析成功**。不挡的话，`repo.branches`
+    拒绝展示的名字，客户端能用 JSON 转义"洗"回 git：一侧拒绝、另一侧接受 = 漏洞。
+    `encode` 是唯一可靠的判据（`isinstance(s, str)` / `len()` 都看不出 lone surrogate）。
+
+    文案由调用方给（`repo.diff` 说 base/head，`worktree.acquire` 说 baseRef），**码**不变。
+    """
+    if not isinstance(value, str):
+        return False
+    if not value or len(value) > REF_NAME_MAX_LENGTH or value.startswith("-") or not value.strip():
+        return False
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:  # lone surrogate：只有编码才会炸
+        return False
+    return True

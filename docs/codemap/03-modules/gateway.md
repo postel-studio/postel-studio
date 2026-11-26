@@ -1,6 +1,6 @@
 # 03 · gateway — `src/postel_studio/api/gateway.py`
 
-> 层 L3 · 181 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
+> 层 L3 · 192 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
 
 ## 职责
 
@@ -10,16 +10,16 @@ WebSocket 网关：**认证 → 接受 → 分派 → 回帧**。
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `GATEWAY_PATH` | 36 | `"/gateway"`，路径前缀 | `server.gateway_path()` |
-| `TICKET_TTL_SECONDS` | 37 | `60.0` | `TicketRegistry` |
-| `CLOSE_FRAME_INVALID` | 39 | `4002` 关闭码 | `handler` |
-| `TicketRegistry` | 42 | 一次性 ticket 签发/消费 | `app.create_app` |
-| `ConnectionState` | 75 | 每连接的 `seq` 计数器（D4） | `handler` |
-| `Providers` | 86 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list` / `repo_branches` / `repo_diff` / S6 的 `bot_list` / `memory_charter_get`） | `app.create_app` |
-| `active_connection_count()` | 99 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
-| `dispatch(method, params, providers)` | 111 | 方法表（8 个分支） | `handler` |
-| `install(app, path, tickets, providers)` | 138 | 把 WS 路由挂到 app | `app.create_app` |
-| `_ACTIVE` / `_ACTIVE_LOCK` | 70-71 | 活动连接表（模块级） | 内部 |
+| `GATEWAY_PATH` | 39 | `"/gateway"`，路径前缀 | `server.gateway_path()` |
+| `TICKET_TTL_SECONDS` | 40 | `60.0` | `TicketRegistry` |
+| `CLOSE_FRAME_INVALID` | 42 | `4002` 关闭码 | `handler` |
+| `TicketRegistry` | 45 | 一次性 ticket 签发/消费 | `app.create_app` |
+| `ConnectionState` | 78 | 每连接的 `seq` 计数器（D4） | `handler` |
+| `Providers` | 87 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list` / `repo_branches` / `repo_diff` / S6 的 `bot_list` / `memory_charter_get` / S7 的 `worktree_acquire` / `worktree_list` / `worktree_release`） | `app.create_app` |
+| `active_connection_count()` | 110 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
+| `dispatch(method, params, providers)` | 116 | 方法表（11 个分支） | `handler` |
+| `install(app, path, tickets, providers)` | 143 | 把 WS 路由挂到 app | `app.create_app` |
+| `_ACTIVE` / `_ACTIVE_LOCK` | 73-74 | 活动连接表（模块级） | 内部 |
 
 ## 关键决策与理由
 
