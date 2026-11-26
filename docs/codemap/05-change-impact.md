@@ -88,13 +88,15 @@
 | format | `ruff format --check .` | 是 | |
 | types | `mypy`（strict，`src`+`tests`） | 是 | |
 | test | `pytest --cov` | 是 | 覆盖率下限 **60%**（S2 时实际 76%） |
+| docs | `scripts/gate-docs.py` | 是 | 相对链接 / 锚点 / `#L` 行号 / 模块行数表 / 页面 id 一致性（S4.5） |
+| layers | `scripts/gate-layers.py` | 是 | 只许向下 import；**新模块必须登记层**（S4.5，结掉 U5） |
 | codemap | `scripts/gate-codemap.sh` | 是 | `src/`+`tests/` 变了，`docs/codemap/` 也必须变 |
 | secrets | 正则 + 与 `.env` 逐值比对 | 是 | |
 
 另有 `bash scripts/check.sh build`（`uv build` + 装进干净虚拟环境跑 `postel-studio version`）：
 **不在 `all` 里**（慢），CI 与发版跑，本地发版前手动跑。
 
-`pre-commit` 钩子只跑快的四项（lint / format / codemap / secrets）。**完整门禁必须手动跑。**
+`pre-commit` 钩子只跑快的几项（lint / format / docs / layers / codemap / secrets）。**完整门禁必须手动跑。**
 
 钩子本身受版本管理：`scripts/hooks/pre-commit` + `scripts/install-hooks.sh`
 （`.git/hooks` 不进 git，换机器/重新 clone 后要重装一次）。
@@ -117,9 +119,9 @@ CI 里 `origin/main` 存在的前提是 `fetch-depth: 0`——浅克隆下它会
 |---|---|
 | **前端 DOM 行为无自动化测试** | 状态灯是否真的变红、按钮是否真的出现，只有人工验证 |
 | `opencode` / `dsh` / `pi` 相关集成测试是 skip-gated | CI 绿 ≠ 真实 Agent 路径可用（S9/S10 起会出现） |
-| 层依赖检查（[02-layers §4](02-layers.md#4-可执行检查)）是**文档片段**，未进门禁 | 有人写出向上依赖时门禁不会拦 |
 | 覆盖率 60% 是很低的下限 | 新模块可以「测一点点就过」——**靠 review 而非门禁守** |
-| codemap 门禁只看「动没动」，不看「写得对不对」 | 在 `docs/codemap/` 加一行错别字也能过门禁；**内容质量仍靠 review** |
+| codemap 门禁只看「动没动」，不看「写得对不对」 | **部分结掉（S4.5）**：链接/锚点/行号/行数表/页面 id 已机械检查；文字内容质量仍靠 review（U8） |
+| 文档门禁不判「说的对不对」 | 一段错误的解释（如 S4 的 T33 初版）照样能过门禁；**内容对错只能靠跑它写的复现命令**（[09 §1.1](../design/09-slice-dod.md)） |
 
 ---
 
