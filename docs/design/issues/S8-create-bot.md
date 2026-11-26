@@ -407,3 +407,72 @@ step 6 only has to call it.
 - [ ] Budget actually measured and reported, over or under.
 - [ ] `07` (both method sections + the new code), `06` (U17), `03` (the form), `01` (the default
       cell), `codemap` (modules, capabilities, change impact, pitfalls) all updated in this PR.
+
+## 12. Addendum (written while implementing; the decisions above are not rewritten)
+
+### 12.1 A real defect: the disabled submit button stole the focus, and Escape died (T41)
+
+The first version bound the "Escape closes the form" handler to `<form id="bot-create-form">`.
+Clicking **Create** disables the submit button (`botCreateBusy`, to stop double-submits) — and a
+browser moves focus to `<body>` when the focused element becomes disabled. For the few hundred
+milliseconds of the request the keyboard focus was outside the form, so `keydown` never reached the
+handler. After a failure the button was re-enabled, but focus did not come back: pressing Escape did
+**nothing**.
+
+Caught by `tools/acceptance/s8_create_bot.mjs` step 6 (press Escape in real Chrome, read
+`#bot-create-form.hidden`). The pytest assertion that "the page contains that listener" was **green**
+the whole time — it proves intent, not behaviour (the T9 lesson, this time on keyboard events).
+
+Fixed by binding on `document` with a `!botCreateForm.hidden` guard, plus focusing the name input on
+a failed submit (that is the field a person wants to edit). Recorded as **T41**.
+
+### 12.2 D10 was not a formality: three scripts really did depend on the seed
+
+| Script | What broke | What changed |
+|---|---|---|
+| `scripts/accept_m1.py` | asserted "first `bot.list` returns exactly one `builder`" | now asserts `[]`, then `bot.create`, then re-lists (a **stronger** assertion: the empty list is the new contract) |
+| `tools/acceptance/s6_bots.mjs` | step 4 switched to a second repo and expected `builder` there too | step 4 now asserts that repo is **empty** (new assertion), then creates `builder` through the form |
+| `tools/acceptance/s7_worktree.mjs` | asserted `Bot：builder` after selecting a repo | creates `builder` through the form first |
+
+Also `tests/test_worktree.py`'s `bind` fixture seeded via `bot.list`; it now calls `bot.create`.
+And `tests/test_gateway.py`'s "unknown method" counter-example list had to drop `bot.create` — a
+method that becomes real stops being a valid counter-example (it now answers `INVALID_PARAMS` for
+empty params, which is a *correct* answer). `bot.delete` replaced it.
+
+### 12.3 The `01 §4` contradiction was real, and it was four-to-one
+
+`01-requirements §4` marked the **L0** row "新 Bot 默认". Four other places said `L1`
+(05 §2.2, 06 §2.2, the v3 DDL default, and this slice's acceptance criteria). The cell is corrected
+to `—` with a note pointing at 05 §2.2 and to this spec's D2. Nothing else in 01 was touched.
+
+### 12.4 Budget: 14% over the estimate, well under the ceiling
+
+`git diff --numstat origin/main -- src`:
+
+| File | Added | Deleted | Total |
+|---|---|---|---|
+| `web/assets.py` | 215 | 2 | 217 |
+| `api/bots.py` | 122 | 36 | 158 |
+| `domain/models.py` | 67 | 3 | 70 |
+| `storage/db.py` | 20 | 0 | 20 |
+| `api/gateway.py` | 9 | 2 | 11 |
+| `api/app.py` | 2 | 0 | 2 |
+| **Total** | **435** | **43** | **478 / 6 files** |
+
+Estimate was 420 / 7 (D6 of §6). The page again dominates. Everything else (tests 812, acceptance
+743, docs 352) is outside the ceiling by definition.
+
+### 12.5 Test names as shipped
+
+`tests/test_bot_create.py` (new, 56 collected cases). Names that changed from §4:
+
+| Planned | Shipped |
+|---|---|
+| `::test_set_permission_changes_the_value` | same |
+| `::test_create_rejects_illegal_names[<6 shapes>]` | `[<10 shapes>]`, plus `::test_create_rejects_non_string_names` (4 non-`str` shapes) |
+| — | `::test_create_does_not_overwrite_an_existing_charter` (the D6 step-6 idempotence claim) |
+| — | `::test_create_does_not_care_about_the_repo_shape` (normal / bare / path-gone, D9) |
+| — | `::test_permission_parse_table`, `::test_permission_covers_is_a_ladder`, `::test_unassignable_permissions_are_exactly_l3_and_l4` |
+| — | `::test_page_js_wires_the_form_without_inner_html`, `::test_error_text_table_knows_the_new_code` |
+
+Reverse injections shipped: 5 (S8 #1–#5) in `tests/test_reverse_checks.py`.

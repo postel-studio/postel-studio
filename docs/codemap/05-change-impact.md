@@ -37,6 +37,13 @@
 | `gitops/repo.py:run_git()` | `GIT_TERMINAL_PROMPT=0` / 超时 / `shell=False`、`test_bind.py::test_bind_uses_git_in_a_way_that_cannot_prompt` | **05 §3.3 违规 / 网关被 git 挂住** |
 | `gitops/repo.py` 的 `root` 参数 | 变成可选 = 放弃 D4 的允许根 | 子进程会跑在 cwd 上 |
 | `gitops/repo.py:run_git` 的 `decode_errors` 缺省值 | 06 U15、S5 D3.2；`tests/test_diff.py` 的 D10 第 19/20 行 | 非 UTF-8 refname 又回 `INTERNAL`（U15 复发），或 mangled 名字被回传 git |
+| `api/bots.py` 的 `create` **判序**（repoId → 名字 → 权限 → agentKind → 重名 → 写盘） | S8 D6 + `test_create_rejects_illegal_names_and_writes_nothing`、`test_list_on_a_repo_with_no_bots_writes_nothing` | 被拒绝的请求开始留下行或目录（"什么都没创建"变成假话） |
+| `Permission` 的四个成员 / `UNASSIGNABLE_PERMISSIONS` | S8 D2、`test_permission_parse_table`、`test_create_rejects_l3_and_l4`、反向注入 S8 #1 | 页面出现第五个选项，或 `L3` 被悄悄接受（**产品红线**：05 §2.3） |
+| `BOT_PERMISSION_DEFAULT` | 05 §2.2、`test_create_defaults_to_l1`、反向注入 S8 #3、页面下拉的 `selected` | 新建 Bot 的默认级别变了却不报错 |
+| `bot.list` 的**纯读**性质 | S8 D7 / U17、`test_list_on_a_repo_with_no_bots_writes_nothing`、反向注入 S8 #4 | 一个 GET 又开始写库（并行客户端撞 `UNIQUE`、`doctor` 误判） |
+| `ALREADY_EXISTS` | 07 §1.3 表 + `botCreateErrorText` + `test_create_duplicate_name_is_already_exists` | 撞名被报成「名字不合法」——页面撒谎 |
+| 页面两个权限下拉的选项 | S8 D8、`test_page_permission_select_lists_exactly_four_levels`、`tools/acceptance/s8_create_bot.mjs` | 出现 `L3`/`L4`（哪怕灰掉），或默认值不再是 L1 |
+| `bot-create-form` 的 Escape 绑定位置 | 06 T41、`test_page_js_wires_the_form_without_inner_html` | 绑回 `<form>` 就会被 `disabled` 抢走焦点，Esc 静默失效 |
 | `gitops/worktrees.py` 的**写面清单**（`add` / `remove` / `prune`） | S7 D5 的允许清单、`api/worktrees.py` 的三个方法、`tests/test_worktree.py` 全部用例 | **内核开始删/改用户仓库里的东西**——S7 之前它是只读的 |
 | `remove_worktree` 加 `--force` | S7 D5 的红线；反向注入 S7 #3、`test_release_dirty_worktree_is_conflict_and_keeps_files` | 未提交的工作被静默删掉 |
 | `add_worktree` 的两个形态（`-b` vs 检出已有分支） | 06 T40（传 sha 会变成游离 HEAD）；`test_acquire_after_release_keeps_the_workspace_branch_tip` | 分支上的提交"看不见"，`worktree list` 的 `branch` 也消失 |

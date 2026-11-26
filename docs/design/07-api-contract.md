@@ -42,6 +42,7 @@
 | `PERMISSION_DENIED` | 403 | 权限不足 | 否 |
 | `NOT_SUPPORTED` | 400 | 第一版不支持（如 L3/L4；S5 起也用于「仓库含非 UTF-8 的 ref 名」） | 否 |
 | `WORKTREE_CONFLICT` | 409 | 工作区目录被占用 / 里面有未提交的改动 / 分支被别的 worktree 占着（S7 新增） | 人工处理后可 |
+| `ALREADY_EXISTS` | 409 | 要创建的东西已经存在（S8 新增：同一个仓库里已有同名 Bot） | 换个名字后可 |
 | `ADAPTER_UNAVAILABLE` | 503 | Agent 命令不存在/起不来 | 可 |
 | `ADAPTER_TIMEOUT` | 504 | 握手超时 | 可 |
 | `CONTEXT_CONFLICT` | 409 | 规范冲突，阻断任务 | 人工解决后 |
@@ -93,7 +94,7 @@
 | 方法 | 参数 | 返回 |
 |---|---|---|
 | `bot.list` | `repoId` | `bot[]` |
-| `bot.create` | `repoId, name, agentKind, permission?` | `bot` |
+| `bot.create` | `repoId, name, permission?, agentKind?` | `bot`（S8：`agentKind` 只收缺省/`null`，见 §4.10） |
 | `bot.set_permission` | `botId, permission` | `bot` |
 | `bot.delete` | `botId` | `{removed:bool}` |
 
@@ -362,16 +363,15 @@
 | `botId` | string | `{repoId}/{name}`（06 §2.2 的复合主键） |
 | `repoId` | string | 12 位 hex |
 | `name` | string | 06 §2.2 白名单 `^[a-z][a-z0-9-]{0,31}$` |
-| `permission` | string | M1 恒为 `"L1"`（06 §2.2 默认；改权限是 M2） |
+| `permission` | string | `L0` / `L1` / `L2` / `L2+` 之一；新建默认 `L1`（S8 D2） |
 | `agentKind` | string \| **null** | M1 是 **`null`（未选择）**：S9 之前没有任何通道被验证过，编一个适配器名等于宣称"已支持"（04 §6 禁止） |
 | `charterRev` | number | 见 §4.8：`int(sha256(charter 内容)[:8], 16)` |
 | `charterSummary` | string | charter 第一个正文段落的摘要（>80 字符截断加 `…`）；没有正文时 `"尚未填写职责"` |
 | `memoryPath` | string | **绝对路径**：`<状态根>/bots/<repoId>/<name>`（不伪装 `~`，S6 D9） |
 
-**惰性播种（S6 D2）**：`bot.create` 是 S8，M1 没有创建入口。`bot.list` 发现该 repo
-**一个 Bot 都没有**时，创建预置 Bot（`builder` / `L1` / `agentKind=null`）并创建记忆空间；
-**已有任何 Bot 绝不新建**（连调两次仍是 1 个）。这是 M1 的临时形态：一个读方法会落一行
-（06 U17，到期 S8）。
+**S8 起这是纯读**：M1 的"惰性播种"（一个读方法会落一行）已删除（S8 D7，U17 的第一半）。
+一个 Bot 都没有的仓库回空数组 `[]`，**不落行、不建目录**——创建是人的动作（§4.10 的
+`bot.create`）。页面据此显示「这个仓库还没有 Bot。」+「新建 Bot」。
 
 错误码（**不许新增码**，07 §1.3 之内）：
 
@@ -445,6 +445,68 @@
 | git 不存在 | `ADAPTER_UNAVAILABLE` |
 | git 超时 / `worktree add` 或 `remove` 因其它原因被拒 | `INTERNAL` |
 | 仓库含非 UTF-8 的 ref 名 | `NOT_SUPPORTED` |
+
+---
+
+### 4.10 `bot.create` / `bot.set_permission`（S8：人建 Bot、人改权限）
+
+```json
+{"type":"req","id":"c11","method":"bot.create",
+ "params":{"repoId":"adec6540a725","name":"qa-1","permission":"L2"}}
+{"type":"res","id":"c11","ok":true,"result":{"seq":11,"data":{
+  "botId":"adec6540a725/qa-1","repoId":"adec6540a725","name":"qa-1",
+  "permission":"L2","agentKind":null,"charterRev":1525472935,
+  "charterSummary":"尚未填写职责",
+  "memoryPath":"/home/u/.postel/bots/adec6540a725/qa-1"}}}
+```
+
+返回的就是 §4.7 的 `bot` 载荷（**同样八个字段**）。建 Bot 同时建出记忆空间
+（`<状态根>/bots/<repoId>/<name>/` + `charter.md` 模板 + `memory/` + `sessions/`，0700/0600）；
+已有 `charter.md` 绝不覆盖。
+
+`permission` 五条规则（S8 D2）：
+
+| 入站 | 结果 |
+|---|---|
+| 缺字段 / `null` | 默认 **`L1`**（05 §2.2「新建 Bot」） |
+| `L0` / `L1` / `L2` / `L2+` | 接受，落库并回载荷 |
+| `L3` / `L4` | `NOT_SUPPORTED`——认识这两个名字，第一版不授予 |
+| 其它（`L9` / `l1` / `""` / 数字） | `INVALID_PARAMS` |
+
+`L3`（跨仓库 PR）与 `L4`（合并）**不在** `L0 < L1 < L2 < L2+` 这根梯子上（01 §4：不同维度），
+所以"持 `L2+`"不蕴含"能对上游开 PR"。
+
+改权限：
+
+```json
+{"type":"req","id":"c12","method":"bot.set_permission",
+ "params":{"botId":"adec6540a725/qa-1","permission":"L1"}}
+{"type":"res","id":"c12","ok":true,"result":{"seq":12,"data":{ …同上八字段，permission 为 "L1" }}}
+```
+
+`permission` 是**必填**（改权限没有"默认值"）；写成当前值也成功（幂等，不产生无意义的写）。
+
+错误码：
+
+| 情形 | 码 |
+|---|---|
+| `repoId` 缺失 / 非字符串 / 空 | `INVALID_PARAMS` |
+| `repoId` 查不到 | `REPO_NOT_BOUND` |
+| `name` 不在 06 §2.2 白名单（`^[a-z][a-z0-9-]{0,31}$`）或不是字符串 | `INVALID_PARAMS` |
+| 同一仓库已有同名 Bot | `ALREADY_EXISTS`（**S8 新增码**，409） |
+| `permission` 是 `L3` / `L4` | `NOT_SUPPORTED` |
+| `permission` 是别的字符串或非字符串（**改权限时**缺字段 / `null` 也在此列） | `INVALID_PARAMS` |
+| `agentKind` 给了字符串（S9 之前没有任何通道被验证过） | `NOT_SUPPORTED` |
+| `agentKind` 给了非字符串的非 null 值 | `INVALID_PARAMS` |
+| `botId` 缺失 / 非字符串 / 查不到 | `INVALID_PARAMS` |
+| 记忆目录 / charter 读写失败（权限、磁盘满） | `INTERNAL` |
+
+两条如实说明：
+
+1. **权限只被存下来、显示出来，尚未被强制执行**——执行在 S16（权限门）。在此之前，
+   `permission` 的价值是"人第一次能看见并修改它"，不是"它挡住了什么"。
+2. **`bot.create` 不检查仓库路径是否还在**：它只写状态根、不读 git（S8 D9）。仓库回到原路径
+   时 `repo_id` 不变，这一行就能重新用。
 
 ---
 
