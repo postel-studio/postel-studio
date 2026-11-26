@@ -633,8 +633,12 @@ def _ids_in_database(path: Path) -> list[str]:
 
 
 def test_v1_database_upgrades_to_v2_without_rewriting_any_repo_id(tmp_path: Path) -> None:
-    """**S3.5 验收 5 / D3（本次审核的重点）**：v1 库 → `RepoStore()`（= migrate）→ v2，
-    `repo_id` **一个都没变**、`user_version == 2`。
+    """**S3.5 验收 5 / D3（本次审核的重点）**：v1 库 → `RepoStore()`（= migrate）→ 当前 schema，
+    `repo_id` **一个都没变**、`user_version == SCHEMA_VERSION`。
+
+    S3.5 写这条时当前 schema 是 v2；S6 加了 `bots` 表（v3），所以断言改成
+    `state_db.SCHEMA_VERSION`——本用例守的是「v1 老库升到**当前**版本且 id 不变」，
+    不是「恰好停在 v2」。
 
     必须"手工用 v1 的 SQL 建库"而不是"新建一个库再看它是 v2"：后者只证明**新库**的建表
     语句带 `origin_hash`，v2 的 `ALTER TABLE` 是否跑、老行有没有被弄坏、`user_version` 有没有
@@ -674,7 +678,7 @@ def test_v1_database_upgrades_to_v2_without_rewriting_any_repo_id(tmp_path: Path
     assert after_ids == before_ids, f"D3：迁移改写了 repo_id（前 {before_ids} / 后 {after_ids}）"
     assert url_hash in after_ids, "有 origin 的老行必须保持**URL 哈希**原值，不许重算成路径哈希"
     with sqlite3.connect(db_file) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == state_db.SCHEMA_VERSION
         columns = {row[1] for row in conn.execute("PRAGMA table_info(repos)")}
         assert "origin_hash" in columns
         # 老行照旧读得出来（列加了、数据没动）
@@ -707,7 +711,7 @@ def test_migration_is_reentrant_and_a_second_open_changes_nothing(tmp_path: Path
 
     assert first_ids == before_ids == second_ids
     with sqlite3.connect(db_file) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == state_db.SCHEMA_VERSION
     assert _database_digest(db_file) == first_digest, "第二次打开改动了库内容"
 
 

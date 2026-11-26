@@ -151,7 +151,7 @@ id 变成 URL 哈希了，但库里仍是路径哈希，**界面与本刀算出�
 | `tests/test_bind.py::test_data_survives_reopening_the_store` | 真文件持久化 + `0600` |
 | `tests/test_bind.py::test_schema_is_versioned_and_migration_is_reentrant` | `user_version` + 重复 migrate |
 | `tests/test_bind.py::test_rebinding_same_path_yields_same_id_and_single_row` | 验收 4（含直接 `SELECT COUNT(*)`） |
-| `tests/test_bind.py::test_v1_database_upgrades_to_v2_without_rewriting_any_repo_id` | **真库迁移**（v1 DDL 手工建库 → migrate → id 一个没变、`user_version=2`） |
+| `tests/test_bind.py::test_v1_database_upgrades_to_v2_without_rewriting_any_repo_id` | **真库迁移**（v1 DDL 手工建库 → migrate → id 一个没变、`user_version=SCHEMA_VERSION`；S3.5 时是 2，S6 起 3） |
 | `tests/test_bind.py::test_migration_is_reentrant_and_a_second_open_changes_nothing` | 迁移可重入（内容摘要相同） |
 | `tests/test_bind.py::test_binding_an_existing_v1_row_keeps_its_legacy_id` | D3 的留痕：老行 id 不被下一次 bind 改写 |
 | `tests/test_bind.py::test_rebinding_after_origin_added_updates_the_row` | D1 回归锁（id **不**被更新） |
