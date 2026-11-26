@@ -216,3 +216,4 @@ local_only ──push──> pushed ──pr──> pr_open ──approve──>
 | diff 全文 | 可由 Git 重建；存了会成为一致性负担 |
 | Agent 的完整对话记录 | 属于 Agent 自己的会话文件；我们只存引用与摘要 |
 | 用户源码副本 | 只在 worktree 里，不在 DB |
+| 分支列表 | **视图实体**：每次按需从 git 读（`repo.branches`），不落库。分支的真相只可能在 git 里，存一份就是第二事实源（S4 D4/D5） |
