@@ -410,3 +410,87 @@ $ git -C /tmp/wt config --get remote.origin.url  → https://example.com/o/p.git
       line counts refreshed; `04-capabilities` gains a C-row for the workspace
 - [ ] `06-pitfalls`: U13/U14 decisions recorded with the measurement above
 - [ ] Budget reported honestly: actual `src/` lines and files vs §6
+
+## 12. Addendum (written while implementing, not edited into the decisions above)
+
+The spec is the first commit; this section records what the implementation learned, in the order it
+learned it. Nothing above was rewritten to match the outcome.
+
+### 12.1 A real defect: `worktree add` with a commit id silently detaches HEAD
+
+The first implementation passed the resolved commit id in **both** forms of `add`. When the branch
+already exists (i.e. every acquire after a release) git checks out the *commit*, not the branch, and
+says nothing:
+
+```text
+$ git -C /tmp/wt symbolic-ref --short HEAD
+fatal: 不是符号引用                     # detached
+$ git -C demo worktree list --porcelain
+HEAD 27999c10                          # the base commit, not the branch tip
+                                       # no `branch` line at all
+```
+
+The test that would have caught it ("commit on the workspace branch, release, acquire, assert the
+tip") did not exist in the first pass; the reuse test only compared paths, and the path was right.
+Recorded as **T40** in `06-pitfalls`, fixed in `gitops/worktrees.py` (form without `-b` takes the
+branch name), pinned by `test_acquire_after_release_keeps_the_workspace_branch_tip`.
+
+### 12.2 A real defect: after a refused release the button disappeared
+
+The first CSS hid `#workspace-details` in the `error` state. A dirty worktree therefore left the user
+with an error and **no way to retry** — the real-browser script (`s7_worktree.mjs`) failed on the
+click. Error state now keeps the path and the button visible; only `#workspace-state` and
+`#workspace-empty` are hidden. The D9 table above says "release button only in ready"; the accepted
+behaviour is "visible whenever a workspace is shown, including after an error".
+
+### 12.3 Two shared predicates moved one layer down (so L3 does not import L3)
+
+`worktree.acquire` needs the same two checks `repo.diff` uses: the inbound ref-name shape and "is
+this bound path still a repo". Importing them from `api/repository.py` would be an L3→L3 import,
+which [`02-layers §3`](../../codemap/02-layers.md) forbids. They moved to the layer that owns each
+question:
+
+| Was | Now | Why there |
+|---|---|---|
+| `api/repository.MAX_REF_LENGTH` + `ref_name_is_valid` | `domain/models.REF_NAME_MAX_LENGTH` + `ref_name_ok` | a pure string predicate, no IO — the domain layer's shape |
+| `api/repository.repo_path_is_gone(repo)` | `gitops/repo.is_usable_repo(path)` | it only asks git semantics; it never needed the `Repo` entity |
+
+Behaviour is unchanged (`repo.diff` calls both), and `api/worktrees.py` now imports nothing from
+`api/`.
+
+### 12.4 Budget: the estimate was wrong, here are the actuals
+
+`src/` diff measured with `git diff --numstat origin/main -- src`:
+
+| File | Added | Deleted | Total |
+|---|---|---|---|
+| `api/worktrees.py` (new) | 300 | 0 | 300 |
+| `web/assets.py` | 231 | 0 | 231 |
+| `gitops/worktrees.py` (new) | 226 | 0 | 226 |
+| `storage/paths.py` | 49 | 0 | 49 |
+| `domain/models.py` | 40 | 0 | 40 |
+| `gitops/repo.py` | 32 | 0 | 32 |
+| `api/gateway.py` | 15 | 4 | 19 |
+| `api/app.py` | 10 | 1 | 11 |
+| `api/repository.py` | 5 | 32 | 37 |
+| **Total** | **908** | **37** | **945 / 9 files** |
+
+**945 > 700.** The estimate in §6 (507) was wrong by 1.9×. Composition: two new modules whose
+docstrings carry the decisions (526 lines total, of which ~120 are relocated from `repository.py`/
+`repo.py`), the workspace card (231), and the wiring. Nothing was split after the fact; the honest
+options are (a) accept it as one visible path — allocate → see → release is a single user path and
+splitting it would produce a PR with nothing visible — or (b) recalibrate the number again, as
+`04 §1.2` did for 400 → 700. Both are the maintainer's call; this PR only reports the measurement.
+
+### 12.5 Test names as shipped
+
+§4 listed the planned names. Those that changed while implementing:
+
+| Planned | Shipped |
+|---|---|
+| `::test_acquire_without_base_ref_uses_default_branch` | same, plus `::test_acquire_with_explicit_base_ref_uses_that_commit` (the default-branch case alone cannot prove `baseRef` is used) |
+| — | `::test_acquire_after_release_keeps_the_workspace_branch_tip` (T40's regression) |
+| — | `::test_acquire_into_an_empty_directory_succeeds`, `::test_acquire_when_the_target_path_is_a_file_is_conflict`, `::test_release_on_a_foreign_directory_is_conflict`, `::test_list_on_a_gone_repo_is_repo_not_bound`, `::test_gateway_exposes_the_three_worktree_methods` |
+
+35 cases in `tests/test_worktree.py`; the parametrised repo-gone test covers both "directory deleted"
+and "`.git` deleted" (the T25 shape).

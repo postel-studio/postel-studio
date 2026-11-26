@@ -324,6 +324,42 @@ scripts/gate-codemap.sh: 行 67: /dev/fd/63: 没有那个文件或目录
 **通用**：门禁只有两个方向，要么红，要么绿。**「查不到」必须落在红这一边**；
 落在绿那边的每一次，都是在给下一个人一张假通行证。
 
+### T40 ❌ 分支已存在时仍把 commit id 交给 `worktree add` → 静默变成游离 HEAD（S7 已处理）
+
+`git worktree add` 有两种形态，差别不只是 `-b`，**检出对象也不同**：
+
+| `create_branch` | 命令 | 检出什么 |
+|---|---|---|
+| `True` | `worktree add -b <branch> <path> <start_point>` | `start_point`（commit id） |
+| `False` | `worktree add <path> <branch>` | 分支自己的 tip |
+
+S7 的第一版两种形态都传了 `worktree add <path> <sha>`。于是"回收之后再分配"这条路径上：
+
+```text
+$ git -C demo worktree add /tmp/wt ffcfc715      # 分支 bot/builder/workspace 已经存在
+exit 0                                            # 没有报错
+$ git -C /tmp/wt symbolic-ref --short HEAD
+fatal: 不是符号引用                          ← 游离 HEAD
+$ git -C demo worktree list --porcelain
+worktree /tmp/wt
+HEAD 27999c10                                     ← 基础提交，不是分支的 tip
+                                                  ← `branch` 字段整行消失
+```
+
+分支上已有的提交**看不见了**，`git worktree list` 里那条记录也不再显示分支名——
+而 `worktree.list` 的过滤条件之一正是"记录里得有个分支"，于是页面上连工作区都不显示了。
+**全程零报错**：`git worktree add` 认为它成功了。
+
+**为什么测试第一版没抓到**：写的用例是"分配 → 回收 → 再分配，断言路径相同"，
+而路径确实相同。断言 tip 的那条（`test_acquire_after_release_keeps_the_workspace_branch_tip`）
+是 S7 补的——**只有"在工作区分支上提交过"的用例才能暴露它**。
+
+**正解**：`add_worktree(create_branch=False)` 时把**分支名**交给 git，不传 sha（见
+[gitops](03-modules/gitops.md#写面gitopsworktreespys7)）。`start_point` 只在建分支时使用。
+
+**通用**：一个"幂等"的创建动作，第二次调用必须与第一次**等价**。等价的判据不是
+"命令退出码 0"，而是"产物与第一次一致"——这里一致的是路径，不一致的是 HEAD 与分支。
+
 ---
 
 ## 安全
@@ -820,8 +856,8 @@ $ python -c "from pathlib import Path; Path('a/b/c/f.txt').write_text('x'); impo
 | U10 | `state.db` 的连接**没地方关**（`create_app()` 构造 `RepoStore`，进程退出时由 OS 回收） | 不丢数据（WAL 已 fsync），但"有开必有关"的纪律是破的。将来 `server.serve()` 的 `finally` 应该关它 | **S15 前** | 生命周期是 S15 的主题；「有开必有关」的纪律破着，进程内测试还可能锁库 |
 | U11 | **普通目录放在别人工作区里会被校到那个仓库**（`proj/plain/deep` 与 `proj/src` 路径上不可区分） | 按 D2 的字面语义处理的**近似**。真要解决需要"区分子目录与普通目录"的判据（例如要求子目录里有被跟踪的文件），代价大且会引入误判，本刀不做 | **明确豁免（不修）** | 用户粘普通子目录会被校到父仓库——已作为 D2 的近似记录在案 |
 | U12 | `tmp_path` 属于测试夹具，`repo.bind` 允许绑系统临时目录下的仓库 | 行为正确（用户没理由这么做），但测试里必须注意 T28 | **无需修（行为正确）** | 测试夹具踩坑风险，已写进 T28 提醒 |
-| U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** | **S7（worktree 可见）前** | S7 要在 worktree 上展示 origin/默认分支，字段语义错会直接显示错 |
-| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) | **S7 前**（或明确豁免） | 左栏留一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND` |
+| U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** | ✅ **已裁决（S7）：明确豁免** | **实测（git 2.53）**：`git -C <linked worktree> config --get remote.origin.url` **答得出** origin（共享配置），所以第一条不复现；第二条成立（HEAD 答工作区自己的分支，这是对的）。S7 的工作区卡片只显示**它自己的**分支，不显示 origin / 默认分支，所以本刀不依赖它。到期改 S19（doctor 可以如实报告"这个路径是一个 linked worktree"），不解决的后果：把 worktree 当独立仓库绑定时，左栏的"默认分支"显示的是那条工作区分支名。 |
+| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) | ✅ **已裁决（S7）：明确豁免，到期 S19** | 修它要把 `origin_hash` 从"只用于识别"升格成**匹配键**，还要定两条尚不存在的规则（`NULL` 老行怎么办、两行同 hash 选哪行）——那是数据模型层的一刀，且 04 §6 禁止一个 PR 混两条用户路径。**后果照旧**：移动仓库后左栏留一条打不开的记录、`~/.postel/worktrees/<旧 id>/` 变成孤儿目录（06 §5：永不自动删除，S19 的 doctor 报告）。S7 本身不依赖身份跨移动存活：工作区按用户**实际点到的**那一行（repo_id）建。 |
 | U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。**→ ✅ 结案（S5）**：按 D3.2 的裁决修 —— `run_git` 增加 `decode_errors`（缺省 `strict`），严格模式解码失败抛新异常 `GitOutputUndecodableError`（加进 `GIT_ERRORS`）；`api/repository.py` 把 `repo.branches` / `repo.bind` / `repo.diff` 三条路径一律翻成 `NOT_SUPPORTED` +「仓库含非 UTF-8 的名称，第一版不支持」，不再回 `INTERNAL`。实测触发：`git branch $'bad-\xff'` 之后 `for-each-ref` 原始输出是 `b'bad-\xff\nmain\n'`（严格解码在 position 4 抛 `UnicodeDecodeError`）；JSON 的 lone surrogate 经 `surrogateescape` 会变成真字节、`rev-parse --verify` 真的能解析成功——所以入站也挡（D3.1）。回归：`tests/test_diff.py` D10 第 19/20 行 + 反向注入 D12 #3。 | ✅ **已修（S5）** | — | ref 名回传 git 会变 `BAD_REF`，甚至指向别的 ref——比报错更糟 |
 | U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **S18（空态/错误态与大仓库体检）前** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）；届时裁决：流式读 + 字节上限，或明确豁免并写进 05 安全红线 |
 | U17 | **`bot.list` 惰性播种 + `charter_rev` 未维护**（S6 的两处临时形态）：① `bot.list` 是读方法，却会在该 repo **一个 Bot 都没有**时落一行（D2 的裁决：`bot.create` 是 S8，M1 没有创建入口，而 S6 之前绑定的老仓库只有惰性播种才能自动补上）；② `bots.charter_rev` 列 v3 就建了，但 **M1 不维护**（D5：charter 正文的事实源是 `charter.md`，载荷里的 `charterRev` 现场按内容算；改 charter 的写路径是 S22 的 `charter.set`）。 | **未修（M1 的临时形态，D2/D5 明确记录）** | **到期 S8（创建入口）/ S22（charter 编辑）** | ① `bot.list` 会写盘（落行 + 收紧目录权限）；将来若有并行客户端，重复播种会被 UNIQUE 拒绝，但调用方会看到 `IntegrityError`；② 有人读 `charter_rev` 列会读到过期值——M1 没有任何读路径，S22 必须改由 `charter.set` 维护它。 |
