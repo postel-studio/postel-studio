@@ -44,8 +44,29 @@ fi
 changed=""
 add() { changed="$changed$1"$'\n'; }
 
+# 读改动清单：临时文件 + 失败即退出，**不用**进程替换 `<(…)`。
+#
+# 两个理由（T39）：
+#   1. 进程替换要有 `/dev/fd`。受限容器/精简镜像里没有，重定向直接失败；而失败时
+#      `while … done < <(…)` 一句都不读，`changed` 保持空 —— 门禁于是打印
+#      「✅ 未改代码」把「读不到」当成「没改」。假绿比红更糟。
+#   2. 门禁必须 fail-closed：拿不到清单就退出 1，绝不报 ✅。
+TMP_LIST=$(mktemp) || { echo "❌ 创建临时文件失败，无法判断改动" >&2; exit 1; }
+TMP_ERR="$TMP_LIST.err"
+trap 'rm -f "$TMP_LIST" "$TMP_ERR"' EXIT
+
+collect() { # collect <人话说明> <git 参数…>
+  local what="$1"; shift
+  if ! git "$@" >"$TMP_LIST" 2>"$TMP_ERR"; then
+    echo "❌ 无法读取改动清单（$what）：git $*" >&2
+    sed 's/^/   /' "$TMP_ERR" >&2
+    exit 1
+  fi
+  while IFS= read -r f; do [ -n "$f" ] && add "$f"; done <"$TMP_LIST"
+}
+
 if [ "$MODE" = "staged" ]; then
-  while IFS= read -r f; do [ -n "$f" ] && add "$f"; done < <(git diff --cached --name-only)
+  collect "暂存区" diff --cached --name-only
 else
   # CI 的 pull_request 事件里 origin/HEAD 指向 main，优先用它
   base=""
@@ -57,13 +78,13 @@ else
     fi
   done
   if [ -n "$base" ]; then
-    while IFS= read -r f; do [ -n "$f" ] && add "$f"; done < <(git diff --name-only "$base"...HEAD)
+    collect "相对 $base" diff --name-only "$base"...HEAD
   else
     echo "⚠️  找不到基准分支，只比对未提交改动（建议 --base <ref>）"
   fi
   # 未提交的两段也必须算进来：这是「改完了还没 commit」最常见的时刻
-  while IFS= read -r f; do [ -n "$f" ] && add "$f"; done < <(git diff --cached --name-only)
-  while IFS= read -r f; do [ -n "$f" ] && add "$f"; done < <(git diff --name-only)
+  collect "暂存区" diff --cached --name-only
+  collect "工作区" diff --name-only
 fi
 
 code_hits=""
