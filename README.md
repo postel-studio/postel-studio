@@ -11,7 +11,9 @@ branches, checks and pull requests — not chat replies.
 - **Pluggable agents**: the product is an agent adapter layer, not another agent kernel.
 - **Local execution first**, optional remote sandbox. Git platform agnostic.
 
-> Status: early skeleton (`v0.1`). CLI entry point only; no product features yet.
+> Status: **M1 shipped** (`v0.1`). A local kernel serves a web workbench where you can bind a
+> repository, list its branches, read a branch diff, and read a Bot's charter. Next: M2 (dispatch
+> work to a Bot, review its candidate diffs). One-command acceptance: `uv run python scripts/accept_m1.py`.
 
 ## Install
 
@@ -22,7 +24,17 @@ pip install postel-studio
 ## Layout
 
 ```text
-src/postel_studio/__init__.py    # main() -> prints a greeting
+src/postel_studio/
+├── __init__.py        # CLI entry point (serve / version)
+├── api/               # kernel: HTTP routes, WebSocket gateway, frame codec, services
+├── domain/            # entities and pure functions (Repo, Bot, ids, origin normalisation)
+├── gitops/            # the only place that spawns git (read-only probes)
+├── storage/           # state root, SQLite schema/migrations, file IO
+└── web/               # the single-page workbench (no frontend build chain)
+tests/                 # pytest: real git, real SQLite, real WebSocket frames
+tools/acceptance/      # real-browser acceptance (Chrome + puppeteer-core, not in CI)
+scripts/               # quality gates + M1 end-to-end acceptance
+docs/                  # design notes, slice specs, code map
 ```
 
 ## Code map
@@ -89,6 +101,7 @@ For the code side of the same picture, see the [code map](docs/codemap/).
 
 - Source: https://github.com/postel-studio/postel-studio (private)
 - 中文说明: see [README.zh.md](README.zh.md)
+- Language policy (English artifacts, migration plan): [docs/LANGUAGE.md](docs/LANGUAGE.md)
 
 ## License
 

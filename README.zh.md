@@ -1,7 +1,9 @@
 # Postel Studio
 
 > 以仓库为第一视图的 Agent 工作台。
-> 状态：`v0.1` 设计定稿，开发中（21 个切片，见 [任务拆解](docs/design/04-task-breakdown.md)）
+> 状态：**M1 已交付**（`v0.1`）：本地内核 + 工作台页面，能绑仓库、看分支、看 diff、读 Bot 的 charter。
+> 下一步 M2（给 Bot 派活 → 审它的候选 diff）。一条命令验收：`uv run python scripts/accept_m1.py`。
+> 切片总数为 20（见 [任务拆解](docs/design/04-task-breakdown.md)）。
 
 不是又一个 AI IDE，也不是又一个 Git 客户端，而是 **Agent 时代的 Git 工作台**：
 人在仓库全景里派活、看 diff、做验收，Bot 在仓库里常驻、认领工作、产出候选变更。
