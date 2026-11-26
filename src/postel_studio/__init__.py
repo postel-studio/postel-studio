@@ -21,17 +21,27 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd")
 
     serve_p = sub.add_parser("serve", help="启动本地后端服务")
-    serve_p.add_argument("--host", default="127.0.0.1")
+    serve_p.add_argument("--host", default="127.0.0.1", help="仅允许 127.0.0.1（不可改成 0.0.0.0）")
     serve_p.add_argument("--port", type=int, default=0, help="0 表示自动选择一个空闲端口")
+    serve_p.add_argument("--force", action="store_true", help="锁里的内核仍存活时强制接管（慎用）")
 
     sub.add_parser("version", help="显示版本")
 
     args = parser.parse_args(argv)
 
     if args.cmd == "serve":
-        # M1 才实现；此处显式失败而非静默成功
-        print("serve 尚未实现（见 docs/design/issues/S1-kernel-visible.md）", file=sys.stderr)
-        return 1
+        from postel_studio.api.server import LOOPBACK, serve
+        from postel_studio.storage.paths import KernelBootError
+
+        # 绑定面是硬约束（05-security §1.1），命令行不给绕过的口子
+        if args.host != LOOPBACK:
+            print(f"HOST_NOT_ALLOWED: 只能绑定 {LOOPBACK}，收到 {args.host}", file=sys.stderr)
+            return 2
+        try:
+            return serve(args.port, force=args.force)
+        except KernelBootError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     if args.cmd == "version":
         print(__version__)

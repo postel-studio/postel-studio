@@ -41,7 +41,7 @@
 本地内核不暴露公网。三条硬规则：
 
 1. **绑定 `127.0.0.1`**，绝不 `0.0.0.0`。若用户显式要求远程访问，必须走独立的隧道模块（不在 MVP），且不得复用本地端口。
-2. **每次启动生成一次性连接令牌**（32 字节随机），写入 `server.json`（权限 `600`），客户端必须携带 `Authorization: Bearer <token>` 才能建立 WebSocket。
+2. **每次启动生成一次性连接令牌**（32 字节随机），写入独立文件 `~/.postel/token`（权限 `600`，**不写进 `server.json`**）；`server.json` 只放 `tokenFingerprint`（sha256，供判断文件归属）。客户端必须携带 `Authorization: Bearer <token>` 才能建立 WebSocket。
 3. **令牌随进程退出失效**，不落盘到其他位置，不写入日志。
 
 - 令牌比较必须用**常量时间**比较（`hmac.compare_digest`），防时序侧信道。
@@ -144,7 +144,7 @@
 |---|---|---|
 | Git / PyPI token | `.env`（已被 `.gitignore`） | 由用户机器保证 |
 | AI Provider key | `.env` 或系统凭据管理器 | 同上 |
-| 内核连接令牌 | `server.json` | **`0600`，进程退出即删除** |
+| 内核连接令牌 | `~/.postel/token`（独立文件） | **`0600`，进程退出即删除**；`server.json` 只放 `tokenFingerprint`（sha256） |
 | Bot 记忆中的内容 | `~/.postel/bots/` | `0700` 目录 |
 
 - **凭据绝不进入**：SQLite、日志、UI 帧、错误消息、Git 提交历史、Agent 的环境变量（见 §4.3）。
