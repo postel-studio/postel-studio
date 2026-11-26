@@ -27,7 +27,7 @@ repo.list 长度:            1                         ← 没有第二行（数
 
 这是**数据模型层面**的问题。S3 严格照 D3 实现了，锅在设计文档。
 
-详见 [08-repo-id-stability.md](08-repo-id-stability.md)（决策记录）。
+详见 [08-repo-id-stability.md](../08-repo-id-stability.md)（决策记录）。
 
 ---
 
