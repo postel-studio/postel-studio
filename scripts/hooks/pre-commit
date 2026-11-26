@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# 轻门禁：提交前只跑快的检查（lint + format + codemap + secrets）。
+# 轻门禁：提交前只跑快的检查（lint + format + docs + layers + codemap + secrets）。
 # 完整门禁（mypy + 覆盖率）留给 CI 与 `bash scripts/check.sh`。
 set -uo pipefail
 echo "== pre-commit: 质量门禁 =="
 bash scripts/check.sh lint    || { echo "提交被拦截"; exit 1; }
 bash scripts/check.sh format  || { echo "提交被拦截"; exit 1; }
+bash scripts/check.sh docs    || { echo "提交被拦截（文档链接/锚点/行号/页面 id）"; exit 1; }
+bash scripts/check.sh layers  || { echo "提交被拦截（层依赖：只许向下 import）"; exit 1; }
 bash scripts/check.sh codemap || { echo "提交被拦截（改了代码就要更新 docs/codemap/）"; exit 1; }
 bash scripts/check.sh secrets || { echo "提交被拦截"; exit 1; }

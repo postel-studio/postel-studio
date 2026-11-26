@@ -143,7 +143,7 @@ def test_check_sh_exposes_every_documented_target() -> None:
     只有真的调一次才发现。这里把每个目标都实调一遍（build 太慢，只查存在）。
     """
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    cheap = ["lint", "format", "types", "codemap", "secrets"]
+    cheap = ["lint", "format", "types", "docs", "layers", "codemap", "secrets"]
     for target in cheap:
         assert target in contributing, f"{target} 未写进 CONTRIBUTING 门禁表"
     # 逐个目标调起来，不允许出现「未找到命令」这类未定义函数

@@ -6,7 +6,7 @@
 
 ```bash
 bash scripts/check.sh          # 全部
-bash scripts/check.sh lint     # 单项：lint | format | types | test | codemap | secrets
+bash scripts/check.sh lint     # 单项：lint | format | types | test | docs | layers | codemap | secrets
 bash scripts/check.sh build    # 打包冒烟（不在 all 里：慢，且需要 dist/）
 ```
 
@@ -16,11 +16,13 @@ bash scripts/check.sh build    # 打包冒烟（不在 all 里：慢，且需要
 | format | `ruff format --check` | 是 |
 | types | `mypy --strict` | 是 |
 | test | `pytest --cov`，覆盖率下限 60% | 是 |
+| docs | `scripts/gate-docs.py`：相对链接 / 锚点 / `#L` 行号 / 模块行数表 / 页面 id 一致性 | 是 |
+| layers | `scripts/gate-layers.py`：只许向下 `import`，新模块必须在 LAYERS 里登记 | 是 |
 | codemap | `scripts/gate-codemap.sh`：动了 `src/`、`tests/` 就必须动 `docs/codemap/` | 是 |
 | secrets | 真实凭据形态扫描 + 与 `.env` 逐值比对 | 是 |
 | build | `uv build` + 装进干净虚拟环境跑 `postel-studio version` | 仅 CI + 手动 |
 
-- `pre-commit` 钩子只跑快的几项（lint / format / codemap / secrets），完整门禁留给 CI。
+- `pre-commit` 钩子只跑快的几项（lint / format / docs / layers / codemap / secrets），完整门禁留给 CI。
 - 配置全部在 `pyproject.toml`，CI 用 `uv sync --frozen` 保证依赖可复现。
 
 ## 覆盖率
