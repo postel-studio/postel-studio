@@ -1,5 +1,13 @@
 # 贡献指南
 
+## Language
+
+Repository artifacts are **English**: commit messages, pull request descriptions and new
+documents (S6.6 onward). This file, the design notes and the code map are still being migrated —
+they keep the language they were authored in until translated as a whole. Do not create parallel
+bilingual copies, do not rewrite git history, and never change a number while translating.
+Full policy and migration phases: [`docs/LANGUAGE.md`](docs/LANGUAGE.md).
+
 ## 质量门禁（唯一标准）
 
 本地与 CI 跑同一份脚本，**不允许分叉**：
