@@ -33,6 +33,9 @@
 
 要让**真内核**也读到副本，得用 `python -m pytest`（`-m` 会把 cwd 放进 `sys.path[0]`）。
 第二条注入（`repo.bind` 未注册）因此改成跑**进程内 app** 的测试，而不是端到端那条。
+
+S5 的 5 条注入（D12 表）跨 L0 / L3 / 前端三层：`DIFF_FLAGS` 的两个 flag、`run_git` 的
+缺省 `decode_errors`、`resolve_commit` 的 `^{commit}`、以及页面里 diff 行的渲染方式。
 """
 
 from __future__ import annotations
@@ -230,6 +233,42 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         'run_git(["for-each-ref", f"--format={BRANCH_FORMAT}"], root=root)',
         _target_test("test_only_local_branches_are_listed_after_push", file="test_branches"),
         "D2：不限定 refs/heads/（remote-tracking 会混进分支列表）",
+    ),
+    # ---- S5：diff（D4 / D2 / D3.2 / D9）----
+    (
+        "postel_studio/gitops/repo.py",
+        '    "--no-color",\n',
+        "",
+        _target_test("test_patch_has_no_ansi_when_color_ui_always", file="test_diff"),
+        "D12 #1：DIFF_FLAGS 去掉 --no-color（color.ui=always 时 patch 混入 ANSI）",
+    ),
+    (
+        "postel_studio/gitops/repo.py",
+        '    "--no-ext-diff",\n',
+        "",
+        _target_test("test_patch_ignores_external_diff_driver", file="test_diff"),
+        "D12 #2：DIFF_FLAGS 去掉 --no-ext-diff（diff.external 会让 patch 失败）",
+    ),
+    (
+        "postel_studio/gitops/repo.py",
+        'decode_errors: str = "strict"',
+        'decode_errors: str = "replace"',
+        _target_test("test_branches_non_utf8_refname_is_not_supported", file="test_diff"),
+        "D12 #3：run_git 缺省宽松解码（非 UTF-8 refname 被 mangled 回传而不是 NOT_SUPPORTED）",
+    ),
+    (
+        "postel_studio/gitops/repo.py",
+        'run_git(["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"], root=root)',
+        'run_git(["rev-parse", "--verify", "--end-of-options", ref], root=root)',
+        _target_test("test_bad_refs_are_bad_ref", file="test_diff"),
+        "D12 #4：解析 ref 去掉 ^{commit}（tree id 不再被拒）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        "      row.textContent = lines[i];     // 不可信文本：只进 textContent\n",
+        "      row.innerHTML = lines[i];\n",
+        _target_test("test_page_never_uses_inner_html", file="test_diff"),
+        "D12 #5：diff 行渲染 textContent 改成 innerHTML（不可信文本进 HTML）",
     ),
 )
 

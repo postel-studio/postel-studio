@@ -1,11 +1,12 @@
 # 03 · repository — `src/postel_studio/api/repository.py`
 
-> 层 L3 · 256 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5](../../design/07-api-contract.md)
+> 层 L3 · 405 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5/§4.6](../../design/07-api-contract.md)
 
 ## 职责
 
-`repo.bind` / `repo.list` / `repo.branches` 的**业务编排**：路径 → 校验 → git 探测 → 落库 → 帧载荷
-（S4 的 `branches` 是只读的：`repoId` → 已绑定的 path 当允许根 → git → 帧载荷）。
+`repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的**业务编排**：路径 → 校验 → git
+探测 → 落库 → 帧载荷（S4 的 `branches` 与 S5 的 `diff` 是只读的：`repoId` → 已绑定的 path
+当允许根 → git → 帧载荷；两者都不落库、不缓存）。
 
 **这一层不碰 fastapi**（S3 涉及文件表的要求）。它只接收 `dict` 参数、返回 `dict`，
 把下游异常翻成 07 §1.3 的**稳定错误码**。怎么接上 WebSocket 是 `api/gateway.py` 的事。
@@ -14,20 +15,26 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `NOT_A_REPO` / `BAD_CWD` / `ADAPTER_UNAVAILABLE` / `REPO_NOT_BOUND` | 37-40 | 07 §1.3 的码（**不许新造**） | `bind` / `get` / `branches` |
-| `MSG_*`（9 个） | 43-52 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
-| `BranchPayloads` | 56 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
-| `_fail(code, message)` | 59 | 造 `frames.FrameError`（网关原样转发） | 内部 |
-| `_require_path(params)` | 64 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
-| `_inside_git_dir(root, target)` | 72 | **T29/T31：`root` → `target` 的相对路径里有 `.git` 段 → 不是仓库入口** | `_bindable_root` |
-| `_bindable_root(target)` | 93 | **D2 子目录校正的总判定**（见下） | `bind` |
-| `_split(repo)` | 129 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
-| `RepositoryService` | 144 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
-| `RepositoryService.list()` | 150 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
-| `RepositoryService.bind(params)` | 154 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
-| `RepositoryService._require_repo(params)` | 195 | `repoId` 校验 + 查库 → `Repo`（`INVALID_PARAMS` / `REPO_NOT_BOUND` 的落点） | `get` / `branches` |
-| `RepositoryService.get(params)` | 210 | 按 `repoId` 取一条（`get` 本身暂无帧方法调用） | 暂无生产调用方 |
-| `RepositoryService.branches(params)` | 214 | `repo.branches`：`repoId` → 允许根 → `gitops.list_branches` → `branch[]`（S4 D1/D5） | `gateway.Providers.repo_branches` |
+| `NOT_A_REPO` / `BAD_CWD` / `ADAPTER_UNAVAILABLE` / `REPO_NOT_BOUND` / `BAD_REF` / `NOT_SUPPORTED` | 39-45 | 07 §1.3 的码（**不许新造**；`BAD_REF`/`NOT_SUPPORTED` 是 S5 第一次用） | `bind` / `get` / `branches` / `diff` |
+| `MSG_*`（14 个） | 48-63 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
+| `DEFAULT_MAX_CHARS` / `MIN_MAX_CHARS` / `MAX_MAX_CHARS` | 67-69 | 截断契约值：100k / 1000 / 200k（S5 D6，**不许改**） | `_require_max_chars`、测试 |
+| `MAX_REF_LENGTH` | 71 | ref 名入站长度上限 200（D3.1） | `_require_ref` |
+| `BranchPayloads` | 75 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
+| `_fail(code, message)` | 78 | 造 `frames.FrameError`（网关原样转发） | 内部 |
+| `_require_path(params)` | 83 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
+| `_require_ref(params, field)` | 91 | 入站 ref 的形状校验（S5 D3.1 六条；lone surrogate 用 `encode` 才抓得到） | `diff` |
+| `_require_max_chars(params)` | 118 | `maxChars` 缺省/区间/类型（先排 `bool`，S5 D6） | `diff` |
+| `_inside_git_dir(root, target)` | 133 | **T29/T31：`root` → `target` 的相对路径里有 `.git` 段 → 不是仓库入口** | `_bindable_root` |
+| `_bindable_root(target)` | 154 | **D2 子目录校正的总判定**（见下） | `bind` |
+| `_split(repo)` | 190 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
+| `_repo_path_is_gone(repo)` | 205 | S5 D7 #4：路径没了（目录 / `.git` 被删）→ 先于 ref 判 `REPO_NOT_BOUND`；裸仓库用 `bare_root` 兜住 | `diff` |
+| `RepositoryService` | 224 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
+| `RepositoryService.list()` | 230 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
+| `RepositoryService.bind(params)` | 234 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
+| `RepositoryService._require_repo(params)` | 279 | `repoId` 校验 + 查库 → `Repo`（`INVALID_PARAMS` / `REPO_NOT_BOUND` 的落点） | `get` / `branches` / `diff` |
+| `RepositoryService.get(params)` | 294 | 按 `repoId` 取一条（`get` 本身暂无帧方法调用） | 暂无生产调用方 |
+| `RepositoryService.branches(params)` | 298 | `repo.branches`：`repoId` → 允许根 → `gitops.list_branches` → `branch[]`（S4 D1/D5） | `gateway.Providers.repo_branches` |
+| `RepositoryService.diff(params)` | 346 | `repo.diff`：形状校验 → 路径存活 → 解析两个 ref → stat/patch → 截断 + camelCase 载荷（S5 D1–D8） | `gateway.Providers.repo_diff` |
 
 ## 关键决策与理由
 
@@ -55,6 +62,41 @@
   实测：`tmp_path` 下的普通目录、`/tmp` 本身都会被答"是"，于是"绑定成功"了（T25）。
 - **接受的近似**：第 4 步无法区分 `proj/src`（真子目录）与 `proj/某个普通目录`——两者在路径
   上等价。按 D2 的字面语义一律校到 `proj`。见 [06 §已知未决 U11](../06-pitfalls.md#已知未决问题)。
+
+### S5：`diff` 的顺序就是契约（D7）、格式化在边界（D8）、截断不夹紧（D6）
+
+```python
+# api/repository.py:346 —— 顺序：参数形状 → 资源存在 → ref → 语义
+repo = self._require_repo(params)  # #1 INVALID_PARAMS / #2 REPO_NOT_BOUND
+base = _require_ref(params, "base")  # #3 INVALID_PARAMS（六条形状）
+head = _require_ref(params, "head")
+max_chars = _require_max_chars(params)  # D6：越界/类型错 → INVALID_PARAMS（不夹紧）
+if _repo_path_is_gone(repo):  # #4 REPO_NOT_BOUND：**先于** ref 解析
+    raise _fail(REPO_NOT_BOUND, MSG_REPO_PATH_MISSING)
+base_sha = gitops.resolve_commit(...)  # #5 BAD_REF：不存在 / 不是 commit
+head_sha = gitops.resolve_commit(...)
+stat = gitops.diff_stat(...)  # #6 BAD_REF：三点没有共同祖先
+patch = gitops.diff_patch(...)
+return {
+    "stat": {"filesChanged": ..., "insertions": ..., "deletions": ...},
+    "patch": patch[:max_chars],
+    "truncated": len(patch) > max_chars,
+}
+```
+
+| 裁决 | 为什么 |
+|---|---|
+| **#4 必须先判** | 路径被删时 `rev-parse` 同样失败；不先探测就会把「仓库没了」报成「ref 不存在」——用户会去改 ref，但真正的问题是仓库被删 / 搬走（D7 #4） |
+| 截断与 `camelCase` 只在这一层 | L0 给完整、snake_case 的事实（`DiffStat`）；截断（按**字符**切，允许切在行中间）与字段名转换是边界格式化，两层各自可测（D8） |
+| `stat` 不受截断影响 | 统计描述**完整**差异；让它跟着 `maxChars` 变形等于撒谎（D6） |
+| 空差异是**成功** | `stat 0/0/0` + `patch ""` + `truncated false`——base 与 head 同一 commit 不是错误（D6） |
+| `maxChars` 越界**报错**不夹紧 | 夹紧会让调用方以为拿到了它要的长度（D6） |
+| `max_chars` 类型先排除 `bool` | `isinstance(True, int)` 为真，`maxChars: true` 会被当成 1（D6 点名的边界） |
+| patch 在 stat 之后 | 两者用**同一对已解析的 object id**，描述同一对 commit；stat 成功而 patch 失败只能是"问不出来"（`BAD_REF`） |
+
+错误码（**一个都不新增**，07 §1.3 之内）：`INVALID_PARAMS`（形状）/ `REPO_NOT_BOUND`（repoId
+或路径没了）/ `BAD_REF`（解析不到、无共同祖先）/ `ADAPTER_UNAVAILABLE` / `INTERNAL`（超时）/
+`NOT_SUPPORTED`（非 UTF-8 ref 名）。完整表见 [07 §4.6](../../design/07-api-contract.md)。
 
 ### S4：`branches` 的三态与错误码映射（D4/D5）
 
@@ -93,6 +135,7 @@ return [
 | 不存在 / 是文件 / 不是仓库 | `NOT_A_REPO` | `_bindable_root` 返回 `None` |
 | `git` 不在 `PATH` / 起不来 | `ADAPTER_UNAVAILABLE` | `except GitUnavailableError` |
 | `git` 超时 | `INTERNAL` | `except GitTimeoutError`（**没有** `GIT_TIMEOUT`，D6 明确不造） |
+| 输出含非 UTF-8 的 ref 名（D3.2 / U15） | `NOT_SUPPORTED` | `except GitOutputUndecodableError` |
 | `repoId` 不存在 | `REPO_NOT_BOUND` | `get` |
 
 ### 05 §4.2：错误 message 不回显用户输入
@@ -120,6 +163,13 @@ MSG_NOT_A_REPO: Final = "路径不是 git 仓库"
 
 两次调用的答案理论上可能不同（用户恰好在改配置），只问一次让"算 id 用的 origin"与
 "落库的 origin"一定是同一个值。
+
+### S5 / U15：非 UTF-8 refname 不再报 INTERNAL
+
+`branches` 与 `bind` 都补了 `except gitops.GitOutputUndecodableError → NOT_SUPPORTED`：
+`for-each-ref` / `symbolic-ref` 的输出解不出合法 UTF-8 时回稳定的 `NOT_SUPPORTED` + 一句人话，
+而不是「内部错误，请查看终端」。**不要**改成 `errors="replace"` 糊过去（mangled ref 名回传 git
+会变 `BAD_REF` 甚至指向别的 ref，见 06 U15 / 本文 gitops 页）。
 
 ## 修改须知
 
@@ -164,3 +214,18 @@ MSG_NOT_A_REPO: Final = "路径不是 git 仓库"
 | `test_missing_git_executable_maps_to_adapter_unavailable` | D5：`PATH=""` → `ADAPTER_UNAVAILABLE`（真让 git 找不到，不 mock 解析） |
 | `test_git_timeout_maps_to_internal` | D5：超时 → `INTERNAL`（只在边界注入异常，钉住码映射） |
 | `test_websocket_branches_roundtrip_matches_service_layer` | D7 第 9 行：真 WS 帧 `result.data` 形状与 `seq`，与直调服务层逐字段一致 |
+
+### S5 的差异视图（`tests/test_diff.py`）
+
+| 测试 | 守什么 |
+|---|---|
+| `test_stat_exact_numbers` / `test_three_dot_ignores_later_base_commits` | D10 第 1/2 行：stat 三个数字、三点语义 |
+| `test_stat_counts_binary_file_without_line_counts` / `test_stat_counts_mode_only_change` / `test_rename_counts_as_delete_plus_add` | D10 第 3/4/5 行 / D4/D5 |
+| `test_same_ref_is_empty_diff_not_error` / `test_truncation_boundary_both_sides` | D10 第 6/8 行 / D6 |
+| `test_max_chars_rejects_out_of_range_and_bool`（6 组参数化） | D10 第 9 行 / D6：`0` / `999` / `200001` / `"1000"` / `true` / `1.5` |
+| `test_bad_refs_are_bad_ref` / `test_ref_starting_with_dash_is_rejected` / `test_ref_with_lone_surrogate_is_invalid_params` | D10 第 10/11 行 / D2/D3.1 |
+| `test_patch_has_no_ansi_when_color_ui_always` / `test_patch_ignores_external_diff_driver` / `test_non_utf8_content_is_replaced_not_fatal` | D10 第 12/13/14 行 / D3.3/D4（反向注入 D12 #1/#2 的靶子） |
+| `test_deleted_repo_path_is_repo_not_bound` / `test_unrelated_histories_are_bad_ref` | D10 第 15/16 行 / D7 #4、D1 |
+| `test_non_ascii_path_is_readable_not_escaped` | D10 第 17 行 / D4（`core.quotePath=false`） |
+| `test_ws_repo_diff_matches_service` | D10 第 21 行：真 WS 帧与直调服务层逐字段一致 |
+| 页面契约 7 条（`test_page_*`） | D9 的 DOM/颜色/文案/`innerHTML` 零使用（真实 DOM 归 `tools/acceptance/s5_diff.mjs`） |

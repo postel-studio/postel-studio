@@ -33,6 +33,7 @@ npm install -g puppeteer-core          # 或任意能让 node 解析到它的位
 bash scripts/check.sh                  # 先保证代码是绿的（门禁全过再跑验收）
 node tools/acceptance/s3_bind.mjs      # S3：绑定仓库 → 左栏出现
 node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分支列表
+node tools/acceptance/s5_diff.mjs      # S5：点分支行 → 主区出现统计 + 着色 diff
 ```
 
 脚本自己会做这些事，**不碰你的真实 `~/.postel`**（06-pitfalls T18）：
@@ -102,3 +103,47 @@ node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分�
 | `CHECK 5 切回后列表刷新（出现新分支 hotfix）` | S4 验收 5 |
 | `CHECK D6 …`（初始 idle / role+tabindex / upstream / 选中态 / 键盘 / 断连清空 / 重连重取） | D6 的 DOM 契约 |
 | `CHECK D6 删除仓库后点它 → data-state=error` / `按码映射文案` / `不是「绑定失败」` / `错误后可切到其它仓库恢复` | D6 的失败态（`REPO_NOT_BOUND` 的文案映射 + 错误不是终态） |
+
+## S5 那份（`s5_diff.mjs`）
+
+同一个骨架，验「点分支 → 看到 diff」（D11 的 10 条）：
+
+1. 在临时工作区建**四个真仓库**：`demo-main`（main 在分支点后又提交了 `m.txt`，用来钉三点语义）、
+   `demo-big`（feature 新增 5001 行 → patch > 缺省 `maxChars`，验截断）、`demo-xss`（feature
+   新增文件名 `x<script>alert(1)<script>.txt`，验不可信文本）、`demo-detached`（游离 HEAD，
+   验「不知道默认分支」时不发请求）；
+2. 真内核 + 真 Chrome，填路径绑定四个仓库 → 点 `demo-main` 的仓库行 → 点 `feature` 分支行；
+3. 断言 `#diff[data-state=ready]`、`#diff-stat` **逐字**等于 `2 个文件 · +3 −1`
+   （`·` 是 U+00B7、`−` 是 U+2212，不是 ASCII 连字符）、两个输入框被填成 main/feature；
+4. 着色：`.diff-add` / `.diff-del` / `.diff-hunk` 各 ≥1；`+++ b/` 那行的 class 是
+   `diff-meta` **而不是** `diff-add`（D9 的分类顺序）；
+5. 点**默认分支本身** → 回 `idle` + 「这是默认分支，选择其它分支查看差异」，且不发请求；
+6. 手填 `main` / `feature` 点「对比」→ `ready` + stat 正确；
+7. 键盘：聚焦分支行 + `Enter` → `ready`（与 click 同一条路径）；
+8. 手填不存在的 ref → `error` + 文案「分支或提交不存在」（`ERROR_TEXT.BAD_REF`）；
+9. XSS：`document.querySelector("#diff-patch script")` 为 `null`，且文件名作为**字面文本**
+   出现在 `#diff-patch.textContent` 里；
+10. 大 diff → `#diff-truncated` 可见、文案逐字匹配、`#diff-patch` 非空（渲染成行）；
+11. 表单空值（trim 后任一为空）→ `#diff-error`「请填 base 和 head」且 `data-state` 保持原样；
+12. 游离 HEAD 的仓库点分支 → `idle` + 「不知道默认分支（HEAD 未指向分支），请在上方填两个 ref」，
+    且不发请求（stat/patch 不出现）；
+13. **真的 SIGKILL 内核** → `#diff` 回 `idle` + 「已断开：差异未知」+ 清空 patch/stat。
+
+截图与内核日志落在 `/tmp/postel-s5-acceptance-XXXX/`（结尾打印路径）。脚本还会顺带检查：
+内核日志里没有未脱敏的 ticket、内核没有往三个用户仓库里写东西。
+
+| 输出行 | 对应 |
+|---|---|
+| `CHECK 1 …`（ready / stat 逐字 / 输入框 / 标题 / 选中） | S5 验收 1 |
+| `CHECK 2 …`（add/del/hunk ≥1、`+++ b/` 是 meta） | S5 验收 2（D9 分类顺序） |
+| `CHECK 3 …`（默认分支 → idle + 文案 + 不发请求） | S5 验收 3 的默认分支分支 |
+| `CHECK 4 手填两个 ref 对比` | S5 验收 3（手填） |
+| `CHECK 5 …`（BAD_REF 可读文案、不是空白） | S5 验收 5 |
+| `CHECK 6 …`（截断可见 + 文案逐字 + patch 非空 + stat 不受截断影响） | S5 验收 4 |
+| `CHECK 7 …`（script 元素为 null + 字面文本在 textContent） | S5 验收 3 的 XSS 纪律（D10 第 18 行） |
+| `CHECK 8 …`（聚焦 + Enter → ready） | S5 验收 7 |
+| `CHECK 9 …`（中文文件名/内容可读） | S5 验收 3 的中文内容用例（D9） |
+| `CHECK D9 空表单 …`（「请填 base 和 head」+ state 不变） | D9 交互表（表单空值） |
+| `CHECK D9 游离 HEAD …`（idle +「不知道默认分支」+ 不发请求） | D9 交互表（defaultBranch=null） |
+| `CHECK 10 …`（SIGKILL → idle + 「已断开：差异未知」+ 清空） | S5 验收 6 |
+| 末尾 ticket / 仓库零改动检查 | 05 §4.1（S2 回归点）、S3 验收 5 的同一纪律 |
