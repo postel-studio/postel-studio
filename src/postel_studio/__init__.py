@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "serve":
         # M1 才实现；此处显式失败而非静默成功
-        print("serve 尚未实现（见 issues/I01-kernel-process.md）", file=sys.stderr)
+        print("serve 尚未实现（见 docs/design/issues/S1-kernel-visible.md）", file=sys.stderr)
         return 1
 
     if args.cmd == "version":
