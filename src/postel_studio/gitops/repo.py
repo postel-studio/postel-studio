@@ -104,6 +104,10 @@ def run_git(args: Sequence[str], *, root: Path) -> subprocess.CompletedProcess[s
     后续切片（S4 的分支列表）只要复用本函数，就天然只能操作已绑定的仓库。
     失败一律抛**不含 `root` 文本**的异常——异常会经 `api/repository.py` 变成帧里的
     `message`，而 05 §4.2 要求错误不回显输入值。
+
+    ⚠️ `text=True` 是**严格 UTF-8 解码**：仓库里有非 UTF-8 的 refname 时，stdout 解码会抛
+    `UnicodeDecodeError`（它**不在** `GIT_ERRORS` 里），一路逃到网关变成 `INTERNAL`。
+    S3/S4 都受影响，本刀不修——策略与建议见 06-pitfalls **U15**。
     """
     command = [git_executable(), "-C", str(root), *args]
     try:
