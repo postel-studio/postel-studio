@@ -523,23 +523,26 @@ def test_rebinding_same_path_yields_same_id_and_single_row(
 def test_rebinding_after_origin_added_updates_the_row(
     service: RepositoryService, repo_factory: Callable[..., Path]
 ) -> None:
-    """先无 origin 绑（id = 路径哈希），再 `git remote add origin` 重绑：**不产生第二行**。
+    """**S3.5 验收 2/3**：先无 origin 绑 → `git remote add origin` → 重绑：`repoId` **不变**。
 
-    D3 的原话是"本刀不做迁移，但要记进 codemap 的未决问题——S4 之前必须解决，否则用户加了
-    remote 之后仓库会'变一个'"。这里断言的是**本刀的实际行为**：行数不增（path 唯一），
-    但 id 会变成 URL 哈希——把这个已知的不完美钉成一条可执行的事实，而不是口口相传。
+    ⚠️ 语义在 S3.5 反过来了（06-pitfalls U9）。S3 时代这条断言「id 会从路径哈希变成 URL
+    哈希」——那是缺陷，不是契约。现在断言：id 不变（D1）、`originUrl` 更新、仍是 1 行、
+    且**按步骤 1 记下的旧 id 仍取得到**（验收 3，正是 S4 `repo.branches(repoId)` 的入口）。
+    "加了 origin 后 id 会变"现在由 `test_reverse_checks.py` 的注入守着。
     """
     repo = repo_factory("proj")
-    _git("remote", "add", "origin", "https://github.com/o/proj.git", cwd=repo)
-    from_url = service.bind({"path": str(repo)})
-    _git("remote", "remove", "origin", cwd=repo)
-    from_path = service.bind({"path": str(repo)})
 
-    assert from_url["originUrl"] == "https://github.com/o/proj.git"
-    assert from_path["originUrl"] is None
-    assert from_url["repoId"] != from_path["repoId"], "加了 origin 之后 id 本刀就会变（已知未决）"
-    assert len(service.list()) == 1, "但绝不能变成两行"
-    assert service.list()[0]["repoId"] == from_path["repoId"], "留下的应是最近一次绑定的结果"
+    before = service.bind({"path": str(repo)})  # 步骤 1：无 origin
+    _git("remote", "add", "origin", "https://github.com/o/proj.git", cwd=repo)
+    after = service.bind({"path": str(repo)})  # 步骤 2：加了 origin 再绑同一路径
+
+    assert before["originUrl"] is None
+    assert after["originUrl"] == "https://github.com/o/proj.git", "origin 是可变展示字段，要更新"
+    assert after["repoId"] == before["repoId"], "D1：加了 remote 之后 id 必须不变"
+    assert len(service.list()) == 1, "同一路径绝不能变成两行"
+    assert service.list()[0]["repoId"] == before["repoId"]
+    # 步骤 3：按**旧** id 取，能取到（旧身份没有失效）
+    assert service.get({"repoId": str(before["repoId"])})["path"] == str(repo.resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -582,13 +585,254 @@ def test_schema_is_versioned_and_migration_is_reentrant(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 表第 10 行：origin 归一化 —— https 与 ssh 得到同一个 repo_id（D3 / 06 §2.1 不变量）
+# S3.5 验收（docs/design/issues/S3-5-repo-id-stable.md「验收标准」1-6）
+#
+# S3 的用例守"绑定/去重/形状"；这一节守 **repo_id 稳定性**（D1）、origin 降级（D2）
+# 与 **v1 → v2 的真实迁移**（D3）。
+# ---------------------------------------------------------------------------
+
+# v1 的原始 DDL 写在测试里、**不** import 生产代码的 `_MIGRATIONS[0]`：要证明的是"S3 时代
+# 真实存在于用户盘上的那个库能升上来"。两者是否仍一致由迁移测试里的第一句断言守住。
+_V1_SCHEMA = """
+    CREATE TABLE repos (
+        repo_id        TEXT PRIMARY KEY,
+        path           TEXT NOT NULL UNIQUE,
+        origin_url     TEXT,
+        default_branch TEXT,
+        added_at       REAL NOT NULL
+    );
+"""
+
+
+def _make_v1_database(path: Path, rows: list[tuple[str, str, str | None]]) -> list[str]:
+    """手工建一个 **v1** 的 `state.db`，塞进 `rows`（`repo_id` / `path` / `origin_url`），
+    返回写入的 id 列表作为"升级前"的基线。`user_version` 显式设成 1。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(_V1_SCHEMA)
+        conn.execute("PRAGMA user_version = 1")
+        conn.executemany(
+            "INSERT INTO repos (repo_id, path, origin_url, default_branch, added_at)"
+            " VALUES (?, ?, ?, 'main', ?)",
+            [
+                (repo_id, repo_path, origin, 1.0 + index)
+                for index, (repo_id, repo_path, origin) in enumerate(rows)
+            ],
+        )
+    return [row[0] for row in rows]
+
+
+def _ids_in_database(path: Path) -> list[str]:
+    """直接读库（不经过 `RepoStore`）：迁移后的 id 必须按**存储**对照，不是按读出来的对象。"""
+    with sqlite3.connect(path) as conn:
+        return [
+            str(row[0])
+            for row in conn.execute("SELECT repo_id FROM repos ORDER BY added_at, repo_id")
+        ]
+
+
+def test_v1_database_upgrades_to_v2_without_rewriting_any_repo_id(tmp_path: Path) -> None:
+    """**S3.5 验收 5 / D3（本次审核的重点）**：v1 库 → `RepoStore()`（= migrate）→ v2，
+    `repo_id` **一个都没变**、`user_version == 2`。
+
+    必须"手工用 v1 的 SQL 建库"而不是"新建一个库再看它是 v2"：后者只证明**新库**的建表
+    语句带 `origin_hash`，v2 的 `ALTER TABLE` 是否跑、老行有没有被弄坏、`user_version` 有没有
+    推进，一条都覆盖不到。
+
+    两行覆盖两种历史数据：无 origin 的老行（id 是路径哈希）、**有 origin 的老行**（S3 时代
+    id 是 **URL 哈希**）——后者是 D3 的"已知留痕"，迁移**不**把它重算成路径哈希，
+    最容易在实现时被"顺手统一"掉。
+    """
+    # 夹具与生产代码的 v1 必须一致（否则下面的迁移测试跑在一个**不是 v1** 的库上）
+    assert " ".join(_V1_SCHEMA.split()) == " ".join(state_db._MIGRATIONS[0].split())
+    assert len(state_db._MIGRATIONS) == state_db.SCHEMA_VERSION
+
+    db_file = tmp_path / "state.db"
+    # 有 origin 的那行故意让 repo_id = 旧算法的 URL 哈希，好让"被重算"一眼就能看出来
+    from postel_studio.domain.models import repo_id_for_origin
+
+    url_hash = repo_id_for_origin("https://github.com/o/login-e7c1.git")
+    path_hash_old = "77347b364a59"  # S3 审核实测的路径哈希形态（任意 12 位 hex 都等价）
+    before_ids = _make_v1_database(
+        db_file,
+        [
+            (path_hash_old, "/srv/repos/no-origin", None),
+            (url_hash, "/srv/repos/with-origin", "https://github.com/o/login-e7c1.git"),
+        ],
+    )
+    # 升级前的真实状态：版本是 1，还没有 origin_hash 列
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(repos)")}
+    assert "origin_hash" not in columns, "v1 不该有 origin_hash 列（夹具坏了）"
+
+    with state_db.RepoStore(db_file):  # 打开 = 迁移
+        pass
+
+    after_ids = _ids_in_database(db_file)
+    assert after_ids == before_ids, f"D3：迁移改写了 repo_id（前 {before_ids} / 后 {after_ids}）"
+    assert url_hash in after_ids, "有 origin 的老行必须保持**URL 哈希**原值，不许重算成路径哈希"
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(repos)")}
+        assert "origin_hash" in columns
+        # 老行照旧读得出来（列加了、数据没动）
+        rows = conn.execute(
+            "SELECT repo_id, path, origin_url, origin_hash FROM repos ORDER BY added_at, repo_id"
+        ).fetchall()
+    assert [(row[0], row[1], row[2]) for row in rows] == [
+        (path_hash_old, "/srv/repos/no-origin", None),
+        (url_hash, "/srv/repos/with-origin", "https://github.com/o/login-e7c1.git"),
+    ]
+    assert all(row[3] is None for row in rows), "v2 不回填 origin_hash（见 db.py v2 注释）"
+
+
+def test_migration_is_reentrant_and_a_second_open_changes_nothing(tmp_path: Path) -> None:
+    """**S3.5 验收 6**：v1 库连开两次，第二次不做任何改动（06 §7 的可重入）。
+
+    上一条证明"升得上去"，这条证明"升第二遍不会出事"。
+    """
+    db_file = tmp_path / "state.db"
+    before_ids = _make_v1_database(
+        db_file, [("aaaaaaaaaaaa", "/srv/repos/a", None), ("bbbbbbbbbbbb", "/srv/repos/b", None)]
+    )
+
+    with state_db.RepoStore(db_file) as first:
+        first_ids = [repo.repo_id for repo in first.list()]
+    first_digest = _database_digest(db_file)
+
+    with state_db.RepoStore(db_file) as second:
+        second_ids = [repo.repo_id for repo in second.list()]
+
+    assert first_ids == before_ids == second_ids
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert _database_digest(db_file) == first_digest, "第二次打开改动了库内容"
+
+
+def _database_digest(path: Path) -> str:
+    """整表的确定性摘要（第二次打开必须与第一次逐字段相同）。"""
+    import hashlib
+
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT repo_id, path, origin_url, default_branch, added_at, origin_hash"
+            " FROM repos ORDER BY added_at, repo_id"
+        ).fetchall()
+    return hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()
+
+
+def test_binding_an_existing_v1_row_keeps_its_legacy_id(
+    repo_factory: Callable[..., Path], tmp_path: Path
+) -> None:
+    """D3 的"已知留痕"在**绑定路径**上也成立：v1 老行的 id 不会被新算法改写。
+
+    场景：仓库在 v1 时代被绑过，那行存的是 URL 哈希；升到 v2 后对同一路径再绑一次，新算法
+    算出的路径哈希**不能**覆盖老 id（`upsert` 规则 1 不写 `repo_id`）。否则迁移里保住的 id
+    会在下一次 `bind` 被抹掉。
+
+    这里**不用** `service` / `store` 夹具：它们会各自先建一个**新库**（= v2），而这条要的是
+    真的 v1 库。
+    """
+    db_file = tmp_path / "state.db"
+    repo = repo_factory("proj", origin="https://github.com/o/proj.git")
+    legacy_id = "13632b79027a"  # 旧算法（URL 哈希）留下的 id
+    _make_v1_database(db_file, [(legacy_id, str(repo.resolve()), "https://github.com/o/proj.git")])
+
+    with state_db.RepoStore(db_file) as store:
+        payload = RepositoryService(store).bind({"path": str(repo)})
+        stored = store.get(legacy_id)
+
+    assert payload["repoId"] == legacy_id, "老行的 id 必须保留（D1/D3）"
+    assert stored is not None and stored.repo_id == legacy_id
+
+
+def test_double_bind_is_idempotent_row_and_id(
+    service: RepositoryService, repo_factory: Callable[..., Path], store: state_db.RepoStore
+) -> None:
+    """**测试要求·幂等**：连续两次 `bind` 同一路径 → 行数不变、id 不变、内容不变。"""
+    repo = repo_factory("proj")
+
+    first = service.bind({"path": str(repo)})
+    second = service.bind({"path": str(repo)})
+
+    assert first["repoId"] == second["repoId"]
+    assert len(store.list()) == 1
+    with sqlite3.connect(store.path) as raw:
+        assert raw.execute("SELECT COUNT(*) FROM repos").fetchone()[0] == 1
+        assert raw.execute("SELECT repo_id FROM repos").fetchone()[0] == first["repoId"]
+
+
+def test_origin_hash_tracks_origin_changes_while_repo_id_does_not(
+    service: RepositoryService, repo_factory: Callable[..., Path], store: state_db.RepoStore
+) -> None:
+    """D2 的分工：`origin_hash` **可变**（识别字段），`repo_id` **不可变**（身份）。
+
+    S3 时代两者压在同一个值上，于是"origin 变 → 身份变"。现在加/改/删 remote 只动
+    `origin_hash` 与展示用的 `origin_url`。
+    """
+    repo = repo_factory("proj")
+
+    no_origin = service.bind({"path": str(repo)})
+    _git("remote", "add", "origin", "https://github.com/o/p.git", cwd=repo)
+    with_https = service.bind({"path": str(repo)})
+    stored_https = store.list()[0]
+    _git("remote", "set-url", "origin", "git@github.com:o/p.git", cwd=repo)  # 换成 ssh 写法
+    with_ssh = service.bind({"path": str(repo)})
+    stored_ssh = store.list()[0]
+
+    assert no_origin["repoId"] == with_https["repoId"] == with_ssh["repoId"], "id 不变（D1）"
+    assert stored_ssh.repo_id == no_origin["repoId"]
+    assert stored_ssh.origin_hash is not None
+    from postel_studio.domain.models import origin_hash
+
+    assert stored_https.origin_hash == stored_ssh.origin_hash, "https 与 ssh 是同一个远端（D2）"
+    assert stored_ssh.origin_hash == origin_hash("git@github.com:o/p.git")
+
+
+def test_unbound_legacy_id_is_still_reachable_after_origin_change(
+    service: RepositoryService, repo_factory: Callable[..., Path]
+) -> None:
+    """验收 3 的第二形态：**按最早那次绑定得到的 id** 取，永远取得到（不是"最近一次"）。
+
+    用户视角：加/改/删 remote 之后，会话里缓存的 `repoId` 都不会变 `REPO_NOT_BOUND`
+    （S4 的 `repo.branches(repoId)` 依赖这一条）。
+    """
+    repo = repo_factory("proj")
+    original = service.bind({"path": str(repo)})["repoId"]
+
+    for operation in (
+        ("remote", "add", "origin", "https://github.com/o/p.git"),
+        ("remote", "set-url", "origin", "git@github.com:o/p.git"),
+        ("remote", "remove", "origin"),
+    ):
+        _git(*operation, cwd=repo)
+        service.bind({"path": str(repo)})
+        assert service.get({"repoId": str(original)})["repoId"] == original, operation
+
+
+# ---------------------------------------------------------------------------
+# 表第 10 行：origin 归一化 —— https 与 ssh 是同一个**远端**（origin_hash 相同，id 不同）
+# (S3.5 验收 4；含义与 S3 时代不同，见用例 docstring)
 # ---------------------------------------------------------------------------
 
 
 def test_https_and_ssh_origins_share_the_same_repo_id(
     repo_factory: Callable[..., Path], tmp_path: Path
 ) -> None:
+    """**S3.5 验收 4**：https / ssh 两种 origin → `repo_id` **不同**、`origin_hash` 相同。
+
+    ⚠️ S3.5 之后这条用例的**含义变了两处**（08-repo-id-stability §4 验收 4）：
+
+    1. S3 时代它断言两个**不同路径**的仓库因为 URL 归一化而**同 id**。那其实是"id 由 URL 决定"
+       的证据——正是要修的缺陷。现在 id 只看路径，两个不同路径的仓库**必然不同 id**；
+    2. "https 与 ssh 是同一个远端"这件事改由 `origin_hash` 承载（D2）。所以真正**测 URL
+       归一化**的断言在这里：两种写法 → 同一个 `origin_hash`。
+
+    帧层不暴露 `origin_hash`（07 §4.2 的载荷没有它，本刀不改协议），所以在 `RepoStore` 层
+    断言（验收 4 原文允许）。
+    """
     https = repo_factory("https", origin="https://github.com/o/p.git")
     ssh = repo_factory("ssh", origin="git@github.com:o/p.git")
 
@@ -596,9 +840,14 @@ def test_https_and_ssh_origins_share_the_same_repo_id(
         service = RepositoryService(store)
         first = service.bind({"path": str(https)})
         second = service.bind({"path": str(ssh)})
+        stored = {repo.path: repo for repo in store.list()}
 
-    assert first["repoId"] == second["repoId"]
+    assert first["repoId"] != second["repoId"], "id 只看路径：两个不同路径 → 不同 id"
     assert len(str(first["repoId"])) == 12
+    assert len(str(second["repoId"])) == 12
+    # D2：归一化之后两种传输方式是**同一个远端**，这件事记在 origin_hash 上
+    hashes = {repo.origin_hash for repo in stored.values()}
+    assert len(hashes) == 1 and None not in hashes, f"origin_hash 应相同：{hashes}"
 
 
 def test_repo_id_normalisation_edge_cases() -> None:
