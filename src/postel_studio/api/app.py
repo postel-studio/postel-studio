@@ -33,11 +33,14 @@ def health() -> dict[str, object]:
     }
 
 
-def create_app(ws_path: str = gateway.GATEWAY_PATH) -> FastAPI:
+def create_app(
+    ws_path: str = gateway.GATEWAY_PATH, *, host: str = "127.0.0.1", port: int = 0
+) -> FastAPI:
     """构造内核的 HTTP 应用。
 
-    `ws_path` 由 `server.py` 生成（`/gateway/<路径令牌>`）并写进 `server.json` 的 `wsPath`：
-    浏览器不需要它（从页面 meta 的 ticket 换连接），非浏览器客户端据它拼 URL。
+    `ws_path` 由 `server.py` 生成（`/gateway/<状态根哈希>`）并写进 `server.json` 的 `wsPath`。
+    `host`/`port` 是**这个进程真实在听的地址**：`/api/where` 回显它们，前端重连时据此判断
+    自己是不是还连着同一个内核（D7）。默认值只给测试/进程内集成用，`server.py` 总是显式传。
     """
     app = FastAPI(title="Postel Studio Kernel", docs_url=None, redoc_url=None, openapi_url=None)
     tickets = gateway.TicketRegistry()
@@ -61,5 +64,16 @@ def create_app(ws_path: str = gateway.GATEWAY_PATH) -> FastAPI:
     def health_route() -> dict[str, object]:
         return health()
 
-    gateway.install(app, ws_path, tickets)
+    @app.get("/api/where")
+    def where_route() -> dict[str, object]:
+        """内核自己的位置（D7）：`host`/`port`/`wsPath`/`pid`。
+
+        **不读 `server.json`**——那份文件可能已被新内核覆盖，也可能已删；这里回的是**本进程
+        真实在听的绑定**（由 `server.py` 传进来），所以「问到的地址」永远指向答话的这个内核。
+        只含地址类信息，不含 token / ticket，故与 `/` 一样不需要认证。
+        """
+        return {"host": host, "port": port, "wsPath": ws_path, "pid": os.getpid()}
+
+    # health() 在这里定义、注入给网关：网关不反向 import 本模块，环被消掉而不是被绕开。
+    gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
     return app

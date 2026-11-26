@@ -80,6 +80,7 @@ INDEX_HTML: Final = """<!doctype html>
       <button id="reconnect" type="button">重连</button>
     </span>
   </header>
+  <p id="note" style="display:none; margin:-8px 0 18px; font-size:13px; color:#d29922;"></p>
   <div id="content">
     <dl>
       <dt>version</dt><dd>%%VERSION%%</dd>
@@ -107,14 +108,6 @@ INDEX_HTML: Final = """<!doctype html>
   var beatTimer = null;   // 心跳定时器
   var connectTimer = null;
   var awaitingBeatId = null;
-  // 整页重载是一次性兜底：同一个页面里只允许重载一次，防止「取票失败 ↔ 重载」死循环。
-  // 用 sessionStorage 记（页面重载后 JS 变量会重置，记不住）。
-  var RELOAD_KEY = "postel.reloaded";
-
-  // 握手成功就把「已重载」标记清掉：下次断连时兜底还能再用一次。
-  // 注意 `sessionStorage` 是按 origin（含端口）隔离的：端口变了就是另一个 storage，
-  // 所以不能靠它跨端口传递状态（见交付说明「重连与端口」一节）。
-  function clearReloadMark() { sessionStorage.removeItem(RELOAD_KEY); }
 
   function setState(state, text) {
     statusEl.dataset.state = state;
@@ -123,6 +116,10 @@ INDEX_HTML: Final = """<!doctype html>
     button.disabled = false;
     content.classList.toggle("stale", state !== "connected");
   }
+
+  // 「怎么办」提示：只在需要人工介入时出现（端口变了 / 内核没起来），连上就清掉。
+  var noteEl = document.getElementById("note");
+  function setNote(text) { noteEl.textContent = text; noteEl.style.display = text ? "" : "none"; }
 
   function clearTimers() {
     if (beatTimer) { clearInterval(beatTimer); beatTimer = null; }
@@ -169,14 +166,27 @@ INDEX_HTML: Final = """<!doctype html>
   // 页面里内嵌的 ticket 是一次性的：连过一次就作废。重连必须重新拿一个页面（`/` 不需要
   // 凭据，每次渲染签发新 ticket）。取不到说明内核可能还没起来，就保持「已断开」。
   function freshTicket() {
-    return fetch("/", { cache: "no-store" })
-      .then(function (r) { if (!r.ok) { throw new Error("HTTP " + r.status); } return r.text(); })
+    return fetch("/api/where", { cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) { throw new Error("HTTP " + r.status); }
+        return r.json();
+      })
+      .then(function (w) {
+        // 这是 HTTP 路由，回**裸对象**（与 `/api/health` 一致，不套帧包络 {data,seq}）
+        if (!w || !w.port || !w.wsPath) { throw new Error("where 响应不完整"); }
+        // 端口变了 → 现在答话的是**另一个**内核，本页面的旧地址已经没用了。
+        // 浏览器没有途径自动发现新端口（那是服务发现的活，S2 不做），所以如实报断。
+        if (String(w.port) !== location.port) { throw new Error("PORT_CHANGED"); }
+        metaPath.content = w.wsPath;
+        return fetch("/", { cache: "no-store" }).then(function (r) {
+          if (!r.ok) { throw new Error("HTTP " + r.status); }
+          return r.text();
+        });
+      })
       .then(function (page) {
         var doc = new DOMParser().parseFromString(page, "text/html");
         var t = doc.querySelector('meta[name="postel-handshake"]');
-        var p = doc.querySelector('meta[name="postel-ws-path"]');
-        if (!t || !t.content || !p || !p.content) { throw new Error("页面缺少 ticket"); }
-        metaPath.content = p.content;
+        if (!t || !t.content) { throw new Error("页面缺少 ticket"); }
         return t.content;
       });
   }
@@ -195,7 +205,7 @@ INDEX_HTML: Final = """<!doctype html>
     ws.onopen = function () {
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
       awaitingBeatId = null;
-      clearReloadMark();
+      setNote("");
       setState("connected", "已连接");
       startHeartbeat();
     };
@@ -211,10 +221,9 @@ INDEX_HTML: Final = """<!doctype html>
     clearTimers();
     setTimeout(function () {
       freshTicket().then(connect).catch(function () {
-        button.disabled = false;
-        if (sessionStorage.getItem(RELOAD_KEY)) { fail(); return; }  // 已重载过一次
-        sessionStorage.setItem(RELOAD_KEY, "1");
-        location.reload();     // 兜底：整页重载拿全新 ticket
+        // 不重载页面：端口变了的话重载也还是旧地址，只会骗人。
+        fail();
+        setNote("内核已换端口或未启动，请从启动它的终端重新打开地址");
       });
     }, RECONNECT_DELAY_MS);
   }

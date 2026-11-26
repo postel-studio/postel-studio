@@ -87,6 +87,8 @@ def test_page_has_reconnect_button(kernel: Kernel):
     assert ">重连<" in page
     # 断连时态才显示：CSS 缺省 display:none，JS 只在 disconnected 时放开
     assert re.search(r"#reconnect\s*\{[^}]*display:\s*none", page) is not None
+    # 放开时必须显式给一个值：`style.display = ""` 会**回退到 CSS 的 none**（实测踩过）
+    assert 'button.style.display = state === "disconnected" ? "inline-block" : "none"' in page
 
 
 # ---------------------------------------------------------------------------
@@ -366,14 +368,28 @@ def test_forged_ticket_is_rejected_with_403(kernel: Kernel):
     assert exc.value.response.status_code == 403
 
 
-def test_ws_path_is_random_and_differs_from_token(kernel: Kernel):
-    """D1：`wsPath` 是**另一个**随机值（32 字节 hex），与 `token` 文件里的令牌不同。"""
+def test_ws_path_is_stable_hash_and_differs_from_token(kernel: Kernel):
+    """D7：`wsPath` = `/gateway/<状态根 sha256 前 16 hex>`，**不是**凭据、与 token 无关。"""
     ws_path = str(kernel.info["wsPath"])
     token = (kernel_home(kernel) / "token").read_text(encoding="utf-8")
 
-    assert re.fullmatch(r"/gateway/[0-9a-f]{64}", ws_path), ws_path
-    assert ws_path.rsplit("/", 1)[-1] != token
-    assert token not in ws_path
+    assert re.fullmatch(r"/gateway/[0-9a-f]{16}", ws_path), ws_path
+    assert token[:16] not in ws_path
+
+
+def test_ws_path_survives_restart_and_differs_per_state_root(home: Path):
+    """D7 的两条硬断言：重启前后 `wsPath` 相同；不同 `POSTEL_HOME` 的 `wsPath` 不同。"""
+    with Kernel(home) as first:
+        before = str(first.info["wsPath"])
+    with Kernel(home) as second:  # 同一状态根，进程换了
+        after = str(second.info["wsPath"])
+
+    assert before == after, f"重启后 wsPath 变了：{before} → {after}"
+
+    other_home = home.parent / f"{home.name}-other"
+    other_home.mkdir()
+    with Kernel(other_home) as elsewhere:
+        assert str(elsewhere.info["wsPath"]) != before
 
 
 def kernel_home(kernel: Kernel) -> Path:
@@ -388,6 +404,87 @@ def test_page_does_not_carry_the_long_term_token(kernel: Kernel):
 
     assert token not in page
     assert "tokenFingerprint" not in page
+
+
+def test_ticket_never_reaches_kernel_logs(kernel: Kernel):
+    """05 §4.1 硬约束：「凭据绝不进入日志」。票虽一次性，但**内核自己**的输出里不能有它。
+
+    这条是 R2 的回归锁。它不是「我们打算这么做」，而是**读内核进程的真实输出**：
+    连一次网关（这一刻 uvicorn 会打「WebSocket …?ticket=… [accepted]」），然后把内核
+    stdout+stderr 整个读出来，断言 ticket 前 16 个字符**一次都不出现**。
+
+    取前 16 字符而不是全串：任何把 ticket 打出来的地方都会带足够多的前缀，除非有人
+    专门按 16 字符截断（那也不是「泄漏整串」，且不现实）。
+    """
+    ticket, _ = kernel.fetch_page()
+    prefix = ticket[:16]
+    assert len(prefix) == 16
+
+    asyncio.run(_echo(kernel.ws_url(ticket)))  # 一次真实握手，触发访问日志
+
+    output = _drain_kernel_output(kernel)  # 关掉内核，把两条流读完
+    assert prefix not in output, (
+        f"内核输出里出现了 ticket 前缀 {prefix}：\n{_leak_lines(output, prefix)}"
+    )
+
+
+def _leak_lines(output: str, needle: str) -> str:
+    """把命中的行摘出来（脱敏：只留出现位置的前后 40 字符），便于定位是哪个 logger 干的。"""
+    hits = []
+    for line in output.splitlines():
+        if needle in line:
+            idx = line.index(needle)
+            hits.append("  …" + line[max(0, idx - 40) : idx + 8] + "…<REDACTED>…")
+    return "\n".join(hits)
+
+
+def _drain_kernel_output(kernel: Kernel) -> str:
+    """关掉内核并把 stdout + stderr 读到 EOF（日志是缓冲的，不等退出可能读不全）。"""
+    assert kernel.proc.stdout is not None and kernel.proc.stderr is not None
+    kernel.stop()
+    out = kernel.proc.stdout.read()
+    err = kernel.proc.stderr.read()
+    return out + err
+
+
+# ---------------------------------------------------------------------------
+# D7 · /api/where：内核自己的位置（前端重连时据此发现「是不是还在同一个地址」）
+# ---------------------------------------------------------------------------
+
+
+def test_where_reports_this_kernels_real_binding(kernel: Kernel):
+    """`/api/where` 回的是**本进程真实在听的** host/port 与 `wsPath`，不是 `server.json` 的复述。
+
+    验证「不是读 server.json」的办法：跑起来之后把 `server.json` 删掉，再问 `/api/where`——
+    如果它读文件，这里就该 500 或返回空；它回得出来，说明数据来自进程内的绑定。
+    """
+    payload = kernel.get("/api/where").json()
+
+    assert payload["host"] == "127.0.0.1"
+    assert payload["port"] == kernel.port  # 就是 server.json 里那个端口（内核自己分配的）
+    assert payload["wsPath"] == kernel.ws_path
+    assert payload["pid"] == kernel.proc.pid
+
+    (kernel_home(kernel) / "server.json").unlink()  # 删掉文件，证明不是读它
+    again = kernel.get("/api/where").json()
+    assert again == payload
+
+
+def test_where_has_no_credentials(kernel: Kernel):
+    """与 `/` 同理：不需要认证，也不回任何凭据（token / ticket）。"""
+    token = (kernel_home(kernel) / "token").read_text(encoding="utf-8")
+    resp = kernel.get("/api/where")
+    body = resp.text
+
+    assert resp.status_code == 200
+    assert token not in body
+    assert set(resp.json()) == {"host", "port", "wsPath", "pid"}
+    assert kernel.get("/api/where").json()["pid"] == kernel.proc.pid
+
+
+def test_where_path_is_not_under_gateway_prefix(kernel: Kernel):
+    """`/api/where` 必须走 HTTP，不受网关路径约束（它就是一个 GET 路由）。"""
+    assert kernel.get("/api/where").status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +503,33 @@ def test_reconnect_after_disconnect_works_without_restart(kernel: Kernel):
 
     assert frame["ok"] is True
     assert frame_seq(frame) == 1  # 新连接 = 新计数器
+
+
+# ---------------------------------------------------------------------------
+# D7 · 前端「端口变了」的诚实收口
+# ---------------------------------------------------------------------------
+
+
+def test_frontend_reports_port_change_and_does_not_guess(kernel: Kernel):
+    """端口变了时前端**不去猜**新地址：不重载页面，直接把状态设为已断开并给明确文案。
+
+    为什么用文本断言：这条行为只能在浏览器里跑，pytest 检查的是「代码里确实这么写了」
+    （D7 要求「不要声称任何重启都能重连」，所以这里连 URL 拼接的兜底都不允许有）。
+    """
+    page = kernel.get("/").text
+
+    assert "/api/where" in page  # 先问内核自己：答话的是不是还是同一个端口
+    assert 'throw new Error("PORT_CHANGED")' in page
+    assert "内核已换端口或未启动，请从启动它的终端重新打开地址" in page
+    # 不许有「整页重载换个地址再试」的猜测式兜底
+    assert "location.reload()" not in page
+
+
+def test_frontend_still_uses_same_origin_first(kernel: Kernel):
+    """同源 `fetch("/api/where")` 优先：端口没变时这条链直接成功，不需要任何跨端口手段。"""
+    page = kernel.get("/").text
+
+    assert 'fetch("/api/where"' in page
 
 
 # ---------------------------------------------------------------------------

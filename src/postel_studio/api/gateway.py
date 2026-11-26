@@ -17,6 +17,7 @@ import logging
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
@@ -75,25 +76,30 @@ class ConnectionState:
         return self.seq
 
 
+@dataclass(frozen=True)
+class Providers:
+    """从 `app` 侧注入的能力（消环用：`app` import 本模块，本模块不得反向 import `app`）。"""
+
+    health: Callable[[], dict[str, object]]
+
+
 def active_connection_count() -> int:
     """当前已 accept 的网关连接数（只读）。断开后必须归零，这是 D5 的可观测点。"""
     with _ACTIVE_LOCK:
         return len(_ACTIVE)
 
 
-def dispatch(method: str, params: dict[str, object]) -> object:
+def dispatch(method: str, params: dict[str, object], providers: Providers) -> object:
     """方法表。**新增方法就在这里加一行**，别处不要长出分派逻辑。"""
     if method == "system.echo":  # 通道自检（07 §2.1）：原样回显，不读不写状态，不得有业务语义
         return params
     if method == "system.health":
-        from postel_studio.api.app import health  # 函数体内导入：app 顶部导入网关，会成环
-
-        return health()
+        return providers.health()
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 
-def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry) -> None:
-    """把网关挂到 app 上。`gateway_path` 形如 `/gateway/<一次性路径令牌>`（`wsPath`）。"""
+def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry, providers: Providers) -> None:
+    """把网关挂到 app 上；`gateway_path` 形如 `/gateway/<路径哈希>`（`wsPath`）。"""
 
     @app.websocket(gateway_path)
     async def handler(ws: WebSocket) -> None:
@@ -107,7 +113,7 @@ def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry) -> None:
         conn_id = id(ws)
         state = ConnectionState()
         with _ACTIVE_LOCK:
-            _ACTIVE[conn_id] = state
+            _ACTIVE[conn_id] = state  # 登记（D5），finally 里删
         try:
             while True:
                 try:
@@ -115,8 +121,7 @@ def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry) -> None:
                 except (WebSocketDisconnect, ClientDisconnect):
                     break  # 客户端掉线：正常退出路径（ClientDisconnect = 发帧时发现对端已没）
                 if len(text.encode("utf-8")) > frames.MAX_FRAME_BYTES:
-                    # 超限帧不可信（05 §3.1「关闭连接并记录」）：不回 res，直接关
-                    logger.warning("拒绝超大帧，关闭连接")
+                    logger.warning("拒绝超大帧，关闭连接")  # 05 §3.1：不回 res，直接关
                     await ws.close(code=CLOSE_FRAME_INVALID)
                     break
                 try:
@@ -128,7 +133,7 @@ def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry) -> None:
                     await ws.send_text(frames.encode_error(exc.reply_id, exc.code, exc.message))
                     continue
                 try:
-                    data = dispatch(frame.method, frame.params)
+                    data = dispatch(frame.method, frame.params, providers)
                 except frames.FrameError as exc:  # 含 UNKNOWN_METHOD
                     await ws.send_text(frames.encode_error(frame.id, exc.code, exc.message))
                     continue
@@ -139,8 +144,7 @@ def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry) -> None:
                 await ws.send_text(
                     frames.encode_response(frame.id, seq=state.take_seq(), data=data)
                 )
-        finally:
-            # 客户端掉线 / 异常 / 服务端主动关三条路都走这里（D5），不许只在正常路径删
+        finally:  # 掉线 / 异常 / 服务端主动关三条路都走这里（D5），不许只在正常路径删
             with _ACTIVE_LOCK:
                 _ACTIVE.pop(conn_id, None)
             logger.info("网关连接关闭，当前活动连接 %d", active_connection_count())
