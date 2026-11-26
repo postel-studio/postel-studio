@@ -165,6 +165,11 @@
  "error":{"code":"NOT_A_REPO","message":"路径不是 git 仓库","field":"path"}}
 ```
 
+> **`repoId` 是稳定的**（S3.5 D1，见 [08-repo-id-stability.md](08-repo-id-stability.md)）：
+> 仍是 12 位十六进制，由**第一次绑定的绝对路径**决定，写入后**永不改变**——加/改/删 remote、
+> 重绑同一路径都不会让它变。客户端可以把它当长期缓存的身份用（`bot_id`、分支列表都挂在它上面）。
+> 唯一会变的情形是仓库被移动到新路径。
+
 ### 4.2 `repo.diff`
 
 ```json

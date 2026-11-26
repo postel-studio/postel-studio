@@ -111,14 +111,15 @@
 | 用户路径 | 左栏输入框粘绝对路径 → 点「绑定」→ 左栏出现「名称 / 默认分支」 |
 | 前端入口 | `web/assets.py:266` `submitBind()`（真 `<form>`，回车也可） |
 | 方法表 | `api/gateway.py:109` `dispatch()` 的 `repo.bind` 分支 |
-| 业务编排 | `api/repository.py:115` `RepositoryService.bind()` |
+| 业务编排 | `api/repository.py:143` `RepositoryService.bind()` |
 | 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
 | **`.git` 判定** | `api/repository.py:61` `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
 | **子目录校正** | `api/repository.py:_bindable_root()`（D2，见 06 T25） |
 | 探测 | `gitops/repo.py:149` `origin_url()`、`:163` `default_branch()` |
-| id | `domain/models.py:100` `repo_id()` |
-| 落库 | `storage/db.py:151` `RepoStore.upsert()` |
-| 由谁守住 | `tests/test_bind.py`：**44 个 `def test_` → 51 个用例**（5+4 个参数化各展开），真实 git + 真 SQLite；端到端 `test_websocket_bind_then_list_returns_the_repo` |
+| id | `domain/models.py:124` `repo_id(path)`——**只看路径**，写后永不更新（S3.5 D1，U9 已结案） |
+| origin 识别 | `domain/models.py:111` `origin_hash()` → `repos.origin_hash`（D2；帧层**不暴露**） |
+| 落库 | `storage/db.py:163` `RepoStore.upsert()`（同路径不产第二行；`repo_id` 只 INSERT 时写） |
+| 由谁守住 | `tests/test_bind.py`：**52 个 `def test_` → 59 个用例**（参数化展开），真实 git + 真 SQLite；S3.5 加的稳定性/迁移用例见 `storage-db.md`；端到端 `test_websocket_bind_then_list_returns_the_repo` |
 | ⚠️ UI 行为 | pytest 里只有文本断言；验收 1–4 由 `node tools/acceptance/s3_bind.mjs` 在真实 Chrome 里跑（T9） |
 
 ### C12 · 左栏仓库列表（`repo.list`）
@@ -128,8 +129,8 @@
 | 用户路径 | 页面加载 / 重连成功后自动拉一次 |
 | 前端 | `web/assets.py:257` `loadRepos()` → `:237` `renderRepos()` |
 | 方法表 | `api/gateway.py:111` |
-| 业务 | `api/repository.py:111` `RepositoryService.list()` |
-| 读库 | `storage/db.py:131` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
+| 业务 | `api/repository.py:139` `RepositoryService.list()` |
+| 读库 | `storage/db.py:145` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
 | 由谁守住 | `test_bind.py::test_list_returns_array_payload_with_camel_case_keys`、`::test_data_survives_reopening_the_store` |
 
 ### C13 · 「没连上」与「没有仓库」可区分（D1）

@@ -1,6 +1,6 @@
 # 03 · repository — `src/postel_studio/api/repository.py`
 
-> 层 L3 · 192 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1](../../design/07-api-contract.md)
+> 层 L3 · 196 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1](../../design/07-api-contract.md)
 
 ## 职责
 
@@ -23,7 +23,7 @@
 | `RepositoryService` | 133 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
 | `RepositoryService.list()` | 139 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
 | `RepositoryService.bind(params)` | 143 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
-| `RepositoryService.get(params)` | 180 | 按 `repoId` 取（`REPO_NOT_BOUND` 语义的落点；S4 的入口） | 暂无帧方法调用 |
+| `RepositoryService.get(params)` | 184 | 按 `repoId` 取（`REPO_NOT_BOUND` 语义的落点；S4 的入口） | 暂无帧方法调用 |
 
 ## 关键决策与理由
 

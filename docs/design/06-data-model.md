@@ -32,13 +32,19 @@ Repo ──1:N── Bot ──1:N── Task ──0..1── Candidate
 
 | 字段 | 类型 | 约束 | 说明 |
 |---|---|---|---|
-| `repo_id` | TEXT PK | 12 位十六进制 | `sha256(归一化 origin URL)[:12]`；无 origin 时用绝对路径 |
+| `repo_id` | TEXT PK | 12 位十六进制 | `sha256(第一次绑定时 resolve 后的绝对路径)[:12]`，**写后永不更新**（S3.5 D1） |
 | `path` | TEXT UNIQUE | 绝对路径，已 `resolve()` | 本地仓库根 |
-| `origin_url` | TEXT NULL | — | 归一化前的原始值（仅展示用） |
+| `origin_url` | TEXT NULL | — | 归一化前的原始值（仅展示用，可变） |
+| `origin_hash` | TEXT NULL | — | `sha256(归一化 origin URL)[:12]`；**只用于识别"同一远端"**，不参与主键/外键（S3.5 D2） |
 | `default_branch` | TEXT NULL | — | 探测结果 |
 | `added_at` | REAL | — | Unix 时间戳 |
 
-**不变量**：`repo_id` 对同一仓库的 https / ssh 两种 URL 必须相同（归一化后再哈希）。
+**不变量**（S3.5 改写，见 [08-repo-id-stability.md](08-repo-id-stability.md)）：
+
+1. `repo_id` 一经写入**永不改变**（加/改/删 remote、换分支、换 HEAD、fetch 都不影响它）。
+2. 同一仓库的 https / ssh 两种 URL 归一化后**哈希相同**——但它记录在 `origin_hash`，
+   用途是**识别"这两个绑定是不是同一个远端仓库"**（例如将来做去重提示），不参与主键。
+3. `repo_id` 由**绑定时的一次性计算**得到，算法见第 1 行；只有仓库被移动到新路径时才会变。
 
 ### 2.2 Bot
 

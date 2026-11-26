@@ -391,8 +391,10 @@ c.execute(SQL, ("bbb", "/p", "https://u", "main", 2.0))
 都没有 → `INSERT`。三行 SQL，每步都能单独读懂。
 
 **别再踩**：把 `upsert` 改回单条 `INSERT … ON CONFLICT` 之前，先跑
-`test_rebinding_after_origin_added_updates_the_row`。如果将来改了 D3 的 id 算法（U9），
-这条测试也要跟着改——因为它断言的是**当前 id 会变**，不是"id 永远不变"。
+`test_rebinding_after_origin_added_updates_the_row`。
+
+> **S3.5 更新**：这条测试的语义已经反过来了——现在断言的是 **id 不变**（U9 已修，见 T32 与
+> 08 §6）。所以 `upsert` 按 path 命中的那条 `UPDATE` **不许**再写 `repo_id`。
 
 ### T27 ❌ 断连时的空列表会撒谎（已修）
 
@@ -514,6 +516,42 @@ if any(part == ".git" for part in relative.parts):
 **别再踩**：写任何"改代码再看结果"的机制，**先写一条证明机制真的生效的用例**。
 没这条用例，反向验证本身就是最容易被镀金的东西（和 06 顶部的通用教训是同一件事）。
 
+### T32 ❌ 反向验证只能红一半：「删除任一处保护」**注不出** U9（S3.5 踩到）
+
+**现象**：给 U9（`repo_id` 加 origin 就变）写反向验证时，按直觉注入了两处各自的缺陷——
+"把 id 算法改回 URL 哈希"、"让 `upsert` 覆盖 `repo_id`"——结果**两条注入之后，验收 2/3 的
+用例全是绿的**。第一反应是"测试漏了"，实际不是。
+
+**原因**：U9 需要**两处同时存在**才复现：
+
+| 状态 | 验收 2/3 的用例 | 为什么 |
+|---|---|---|
+| (a) 算法依赖 origin **且** (b) `upsert` 覆盖 id（= S3 的真实代码） | **红** | 加 origin → 算出新 id → 覆盖进库 |
+| 只有 (a)：算法依赖 origin | 绿 | 规则 1 不写 `repo_id`，算出的 URL 哈希被丢弃 |
+| 只有 (b)：`upsert` 覆盖 id | 绿 | 新算法对**同一路径**算出的 id 本来就相同，覆盖了也是同一个值 |
+
+S3.5 修完之后两处都被修好，于是单独回退任意一处都不会让 id 变——这不是测试的问题，
+是**两道锁各自独立成立**。能红的注入只有 (a)+(b) 的完整形态。
+
+**怎么处理的**：`tests/test_reverse_checks.py` 里加了 `COMPOSITE_INJECTIONS`（一条注入可改
+多个文件片段，只用于 (a)+(b)）；单独两半各写成 `test_each_half_of_u9_alone_*`，**断言它们
+仍然绿**，并在 docstring 里写清"为什么绿"。
+
+**顺带抓到的两个"红错原因"**（都固化进了机制）：
+
+1. 注入 `(b)` 时只改 SQL 没改参数元组 → 测试红在
+   `sqlite3.ProgrammingError: Incorrect number of bindings supplied` 上。这次"变红"什么也
+   没证明。现在 `_RUNTIME_BREAKAGES` 会把这类红判失败。
+2. 锚点静默失配：S3.5 改完 `db.py` 后，旧 T26 那条注入的锚点（`UPDATE repos SET repo_id = ?,
+   …`）**在源码里已经不存在**，`old in text` 检查若只做一次 `assert` 而不数字数，会让这条
+   注入退化成空操作而**永远绿**。现在 `_apply_patches` 要求 `text.count(old) == 1`。
+
+**别再踩**：
+- 写反向验证之前先问一句："这个缺陷是**一处**代码造成的，还是**两处**缺一不可？"
+- 一处缺陷 → 单点注入；两处 → 组合注入 + 把"单独一半仍然绿"也写成用例。
+- **"注入之后测试是绿的"有两种解释**：测试漏了，或者**另一半在兜底**。先证明是哪一种，
+  别急着把测试改红。
+
 ---
 
 ## 已知未决问题
@@ -528,11 +566,12 @@ if any(part == ".git" for part in relative.parts):
 | U6 | 版本号有 `pyproject.toml` 与 `__init__.py` 两个副本 | S20 自动化 |
 | U7 | `encode_event()` 从未被调用 | 形状已定，无调用方测试 |
 | U8 | codemap 门禁只判「动没动地图」，不判「动得对不对」 | 内容质量靠 review；一点办法没有之前如实承认 |
-| U9 | **仓库加了 origin 之后 `repo_id` 会变**（D3 的已知让步）：界面/后续切片挂在 id 上会"丢失"这个仓库 | **S4 之前必须解决**（D3 原文）。方案未定：迁移旧 id？还是把 id 拆成"稳定 id + 展示 id"？本刀只保证**不产生第二行** |
+| U9 | **仓库加了 origin 之后 `repo_id` 会变**（S3 的已知让步）：界面/后续切片挂在 id 上会"丢失"这个仓库 | ✅ **已修（S3.5）。**怎么修的：`repo_id` 改成 `sha256(绑定时的绝对路径)`、**只在 INSERT 时算一次**，`upsert` 按 path 命中时不再写它（D1）；origin 的哈希降级成新列 `origin_hash`，只识别"同一远端"、不参与主键（D2）；schema v1→v2 只加列、**不重写任何历史 id**（D3）。详见 [08 §6](../design/08-repo-id-stability.md) 与本文 §T32。 |
 | U10 | `state.db` 的连接**没地方关**（`create_app()` 构造 `RepoStore`，进程退出时由 OS 回收） | 不丢数据（WAL 已 fsync），但"有开必有关"的纪律是破的。将来 `server.serve()` 的 `finally` 应该关它 |
 | U11 | **普通目录放在别人工作区里会被校到那个仓库**（`proj/plain/deep` 与 `proj/src` 路径上不可区分） | 按 D2 的字面语义处理的**近似**。真要解决需要"区分子目录与普通目录"的判据（例如要求子目录里有被跟踪的文件），代价大且会引入误判，本刀不做 |
 | U12 | `tmp_path` 属于测试夹具，`repo.bind` 允许绑系统临时目录下的仓库 | 行为正确（用户没理由这么做），但测试里必须注意 T28 |
-| U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（id 退化成路径哈希）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** |
+| U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** |
+| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 之后对它查分支会报错。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) |
 
 ---
 
