@@ -61,7 +61,7 @@
 | `assets.py` 的 `#repos[data-state]` 机制 | 06 T8/T27、D1 的验收 | 断连时显示空列表 = 撒谎 |
 | `assets.py` 的 `ERROR_TEXT` | 07 §1.3 的码、`error_text_json()`；S4 补了 `REPO_NOT_BOUND`、分支面板另用 `BRANCH_ERROR_FALLBACK` | 错误显示成「绑定失败」或码本身；分支面板答「绑定失败」 |
 | `assets.py` 左栏的 DOM 结构 / 数据来源 | **`node tools/acceptance/s3_bind.mjs`**（真实浏览器） | pytest 看不出来（T9） |
-| `tests/test_reverse_checks.py` 的注入锚点 | 被改的那段源码一旦变形，锚点就找不到（会红，不是静默） | 反向验证失效——但**是响的** |
+| `tests/test_reverse_checks.py` 的注入锚点 | 被改的那段源码一旦变形，锚点就找不到（会红，不是静默）；S5 的 5 条（D12 表）分别钉 `DIFF_FLAGS` 的两个 flag / `run_git` 缺省 `decode_errors` / `resolve_commit` 的 `^{commit}` / diff 行的 `textContent` | 反向验证失效——但**是响的** |
 
 ---
 
