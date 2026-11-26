@@ -1,6 +1,6 @@
 # 03 · assets — `src/postel_studio/web/assets.py`
 
-> 层 L4 · 465 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
+> 层 L4 · 683 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
 > ⚠️ **本模块是 Code Map 里覆盖最薄的一块**：JS 的 DOM 行为没有自动化测试。见 §测试。
 
 ## 职责
@@ -8,32 +8,49 @@
 一个 Python 字符串常量（HTML + CSS + 内联 JS），加一个填占位符的函数。
 **不引入前端构建链**（S1 禁止事项，D6 不变）。
 
+S4 起主区有「分支」面板（D6 的 DOM 契约）：左栏仓库行可选中（鼠标 + 键盘）→ 发
+`repo.branches` → 渲染分支列表 / 空态 / 错误 / 断连回 idle。
+
 ## 符号表
 
 | 符号 | 行 | 做什么 |
 |---|---|---|
-| `HEARTBEAT_INTERVAL_MS` | 29 | `1000`，心跳间隔 |
-| `RECONNECT_DELAY_MS` | 30 | `500`，点重连到发起的延迟 |
-| `REQUIRED_PARAMS` | 33 | 全部占位符元组（9 个） |
-| `ERROR_TEXT` | 47 | 07 §1.3 错误码 → 用户可读中文（S3 左栏用） |
-| `ERROR_TEXT_FALLBACK` | 54 | 表外的码走这句通用文案 |
-| `INDEX_HTML` | 56 | 页面本体 |
-| `error_text_json()` | 428 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
-| `render_index(...)` | 437 | 填占位符 |
+| `HEARTBEAT_INTERVAL_MS` | 38 | `1000`，心跳间隔 |
+| `RECONNECT_DELAY_MS` | 39 | `500`，点重连到发起的延迟 |
+| `REQUIRED_PARAMS` | 42 | 全部占位符元组（9 个；S4 没加新占位符） |
+| `ERROR_TEXT` | 56 | 07 §1.3 错误码 → 用户可读中文（S3 左栏 + S4 分支面板共用；S4 补了 `REPO_NOT_BOUND`） |
+| `ERROR_TEXT_FALLBACK` | 66 | 表外的码走这句通用文案（**只给绑定表单**；分支面板有自己那句） |
+| `INDEX_HTML` | 68 | 页面本体 |
+| `error_text_json()` | 646 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
+| `render_index(...)` | 655 | 填占位符 |
 
 页面内新增的 DOM / JS（S3 左栏仓库区）：
 
 | 元素/函数 | 行 | 做什么 |
 |---|---|---|
-| `<section id="repos" data-state="loading">` | 157 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
-| `#bind-form` / `#bind-path` / `#bind-button` | 159-162 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
-| `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 164-167 | 错误 / 连接状态 / 列表 / 空态 |
-| `setRepoState(state, text)` | 217 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**） |
-| `errorText(code)` | 231 | 错误码 → 文案（**不看 message**） |
-| `renderRepos(list)` | 237 | 一行 = 名称 + 「默认分支 X」 |
-| `loadRepos()` | 257 | 连上后发 `repo.list` |
-| `submitBind()` | 266 | 发 `repo.bind`，成功/失败各自收口 |
-| `request(method, params, done)` | 314 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
+| `<section id="repos" data-state="loading">` | 218 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
+| `#bind-form` / `#bind-path` / `#bind-button` | 220-223 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
+| `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 225-228 | 错误 / 连接状态 / 列表 / 空态 |
+| `setRepoState(state, text)` | 291 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**）；非 connected 时把分支面板重置回 idle |
+| `errorText(code)` | 310 | 错误码 → 文案（**不看 message**；绑定表单用） |
+| `renderRepos(list)` | 318 | 一行 = 名称 + 「默认分支 X」；`li` 可选中（`tabindex` / `role=button` / `data-selected`），重建后恢复选中标记 |
+| `loadRepos()` | 366 | 连上后发 `repo.list` |
+| `submitBind()` | 484 | 发 `repo.bind`，成功/失败各自收口 |
+| `request(method, params, done)` | 532 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
+
+S4 新增的分支面板（D6）：
+
+| 元素/函数 | 行 | 做什么 |
+|---|---|---|
+| `<section id="branches" data-state="idle">` | 208 | 主区分支面板，位置在 `#content` 之后；初始 idle |
+| `#branches-title` / `#branches-state` / `#branches-error` / `#branch-list` / `#branch-empty` | 209-213 | 标题 / 状态文案 / 错误 / 列表 / 空态（DOM 契约，id 不许改） |
+| `BRANCH_ERROR_FALLBACK` | 275 | 分支面板**自己的**兜底「读取分支列表失败」（不用 `ERROR_TEXT_FALLBACK`） |
+| `branchErrorText(code)` | 382 | 错误码 → 中文；表外走分支自己的兜底 |
+| `resetBranches(state, text)` | 390 | 清空列表 + 回指定 state；断连时 `idle` + 「已断开：分支列表未知」 |
+| `applyRepoSelection()` | 401 | 左边行 `data-selected="true"`（选中标记只在这一个函数里打/清） |
+| `renderBranches(list)` | 416 | 一行 = `.branch-name` / `.branch-sha` / `.branch-upstream`（有才建）/ `.branch-current`（仅当前） |
+| `loadBranches()` | 446 | 发 `repo.branches`；用 `branchRequestToken` 丢弃过期回包 |
+| `selectRepo(repoId, name)` | 476 | 选中仓库：更新选中态 + 更新标题 + 取分支 |
 
 页面里 JS 用的常量（`assets.py:95-97`）：
 
@@ -138,6 +155,47 @@ S2 初版有一个 `location.protocol === "https:"` 的病态分支，**从未�
 `repo.bind` 成功后**重读** `repo.list`（而不是把返回值插进列表）：重复绑定靠这条路自然去重，
 顺序也由服务端决定（`added_at`）。
 
+### S4：主区分支面板（D6）——「点仓库 → 看到里面有什么」
+
+DOM 契约（**id / `data-state` 值 / 类名都是契约，浏览器验收按这些点**）：
+
+```html
+<section id="branches" data-state="idle" aria-live="polite">
+  <h2 id="branches-title">分支</h2>
+  <p id="branches-state">从左侧选择一个仓库</p>
+  <p id="branches-error" role="alert" hidden></p>
+  <ul id="branch-list"></ul>
+  <p id="branch-empty" hidden>这个仓库还没有任何分支（空仓库）。</p>
+</section>
+```
+
+| 规则 | 实现 |
+|---|---|
+| `data-state` 四值 | `idle`（未选/断开）/ `loading` / `ready` / `error`；显隐全由 CSS 规则决定（T8） |
+| 标题 | `#branches-title.textContent`：未选「分支」，选中后「分支 · <name>」（**不拼 HTML**） |
+| 每行 | `li[data-branch-name]` 含 `.branch-name` / `.branch-sha`（8 位）/ `.branch-current`（文本「当前」，仅当前分支）/ `.branch-upstream`（有 upstream **才创建**，`null` 不建 span） |
+| 空仓库 | `ready` + `#branch-empty` 可见 + `#branch-list` 空——不是 error，不是空白 |
+| 失败 | `error` + `#branches-error` 显示**按码映射**的中文（复用 `ERROR_TEXT`） |
+| 断连 | 回 `idle`、清空列表、`#branches-state` =「已断开：分支列表未知」——不留旧数据装新鲜 |
+| 重连 | 选中仓库的 id **保留**；`setState(connected)` → `loadRepos()` → `renderRepos()` 里自动 `loadBranches()` |
+| 选中仓库消失 | 回 `idle` 并清空（`renderRepos` 里 `stillListed` 判定） |
+
+四条实现细节，改的时候别破坏：
+
+1. **左栏仓库行是按钮**（D6）：`tabindex="0"` + `role="button"`，`click` 与 `Enter`/`Space`
+   都调 `selectRepo()`；`Space` 要 `preventDefault()`（否则页面滚动）。选中标记是
+   `data-selected="true"`，样式（绿字 + 左侧竖条）挂在属性上，**不在 JS 里改颜色**。
+2. **`renderRepos` 是整体重建的**：重建后必须重新打 `data-selected`（`applyRepoSelection()`），
+   否则每次 `repo.list`（绑定/重连）都会把选中样式冲掉——D6 点名要求恢复。
+3. **错误兜底分两套**：绑定表单用 `ERROR_TEXT_FALLBACK`（「绑定失败」）；分支面板用
+   `BRANCH_ERROR_FALLBACK`（「读取分支列表失败」）。把绑定那句放到分支面板上是错的
+   （S4 实施时管理层补的裁决）。两套都**按码**映射，不读服务端 `message`。
+4. **过期回包**：`branchRequestToken` 在每次请求 / 重置时 +1，回调里 token 不匹配就丢弃。
+   否则"快速点 A→B→A"时 A 的旧回包可能覆盖 B 的结果。
+
+**所有进 DOM 的文本都用 `textContent`**（仓库名/分支名/upstream 是用户数据），全页零
+`innerHTML`——`test_page_never_builds_dom_with_innerhtml` 是这条的静态守卫。
+
 ## 修改须知
 
 | 如果你要… | 还必须 |
@@ -148,7 +206,10 @@ S2 初版有一个 `location.protocol === "https:"` 的病态分支，**从未�
 | 让页面调新的 HTTP 路由 | 注意 `/api/*` 返回**裸对象**，不套 `{data,seq}` 帧包络 |
 | 在页面里放凭据 | **禁止**。只有一次性 ticket，且 60 秒失效 |
 | 加左栏分区（Bot 在上 / 仓库在下，03-ui-spec §2） | 现在**只有仓库区**，没有 Bot 区（S3 不做 Bot）；加 Bot 区时 `#repos` 的 `data-state` 机制可以复用 |
-| 改 `ERROR_TEXT` | `render_index` 会重新序列化；真实浏览器里验一遍（T9） |
+| 改 `ERROR_TEXT` | `render_index` 会重新序列化；真实浏览器里验一遍（T9）。S4 补了 `REPO_NOT_BOUND`（S3 漏的），删掉它分支面板会显示「读取分支列表失败」 |
+| 改 `#branches` 的 DOM 结构 / `data-state` 语义 / 行内类名 | **D6 是契约**；`node tools/acceptance/s4_branches.mjs` 与 `test_branches.py` 的页面契约用例会红 |
+| 改左栏仓库行的交互（选中 / 键盘） | D6：`click` 与 `Enter`/`Space` 都要能选；`renderRepos` 重建后要恢复 `data-selected`；真实浏览器里验一遍 |
+| 把分支面板的错误兜底改成 `ERROR_TEXT_FALLBACK` | **禁止**：那句是绑定场景的「绑定失败」（S4 实施裁决） |
 | 让前端直接读 git / 开新 HTTP 路由 | **禁止**（S3 D1）：数据一律走 WS 帧 |
 
 ## 测试
@@ -195,3 +256,24 @@ bash scripts/check.sh && node tools/acceptance/s3_bind.mjs
 1. 允许一个 **dev-only** 的 Node 依赖跑 headless 验收，标记 `@pytest.mark.slow`；
 2. 把状态机抽成纯函数（无 DOM 依赖）并在 Python 里用 JS 引擎跑——成本更高；
 3. 用 `httpx` + `websockets` 模拟内核被杀，再用静态分析断言状态转移完整——**证明力很弱，不建议**。
+
+### S4 的页面契约与真实浏览器验收
+
+新增的 pytest 用例都在 `tests/test_branches.py`（**文本断言**，只能证明"意图存在"，见上面 T9 的警告）：
+
+| 测试 | 守什么 |
+|---|---|
+| `test_page_declares_branch_panel_dom_contract` | D6 的 7 个 id / `data-state="idle"` / `role="alert"` / 空态文案 |
+| `test_page_branch_panel_visibility_is_css_driven` | `#branches[data-state=…]` 的 CSS 规则 + JS 只改 `dataset.state` |
+| `test_page_branch_error_text_has_its_own_fallback` | `REPO_NOT_BOUND` 在 `ERROR_TEXT` 里 + 分支面板用 `BRANCH_ERROR_FALLBACK`（不是「绑定失败」） |
+| `test_page_repo_rows_are_keyboard_selectable` | `tabIndex = 0` / `role="button"` / `Enter`+`Space` 的 keydown |
+| `test_page_never_builds_dom_with_innerhtml` | 全页没有 `innerHTML`（文本一律 `textContent`） |
+
+真实行为由 **`node tools/acceptance/s4_branches.mjs`** 验（真 Chrome + 真内核 + 真 git：
+2 个仓库、点行、读 DOM、CDP 断网看重连；**跳过而不失败**，不进依赖、不进 CI）。
+改左栏/分支面板的 DOM、状态机或数据来源，**必须**重跑它：
+
+```bash
+bash scripts/check.sh
+node tools/acceptance/s4_branches.mjs
+```

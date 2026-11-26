@@ -16,6 +16,15 @@ S3 起左栏出现「仓库」区（03-ui-spec §2：左栏上 Bot / 下 仓库�
   只有在连接就绪且 `repo.list` 真的返回空数组时才显示「还没有绑定仓库」（D1 的可观测后果）。
 - 错误是**可读中文**（`NOT_A_REPO` → 「不是 git 仓库」），由错误**码**映射，不看 `message`。
   错误码不在表里时显示通用文案 —— 不把服务端 `message` 直接塞进页面（05 §4.2 的同一精神）。
+
+S4 起主区出现「分支」面板（D6 的 DOM 契约）：点左栏仓库行 → `repo.branches` → 分支列表。
+四条约束：
+
+- 左栏仓库行**键盘可达**：`tabindex="0"` + `role="button"`，`click` 与 `Enter`/`Space` 都能选中。
+- 显隐**只由 CSS** 的 `#branches[data-state=…]` 决定，JS 只改 `data-state`（T8 的教训）。
+- 断连回 `idle` 并**清空列表**（不许留旧数据装新鲜）；重连且仍有选中仓库时自动重取。
+- 分支面板的错误兜底**不用** `ERROR_TEXT_FALLBACK`（那是绑定场景的「绑定失败」），
+  面板自己给「读取分支列表失败」；`ERROR_TEXT` 复用，按错误码映射。
 """
 
 from __future__ import annotations
@@ -50,6 +59,9 @@ ERROR_TEXT: Final = {
     "INVALID_PARAMS": "路径参数不合法",
     "ADAPTER_UNAVAILABLE": "内核找不到 git 命令",
     "INTERNAL": "内核处理失败，请查看启动它的终端",
+    # S4：repo.branches 会回这个码（repoId 查不到 / 绑定的路径已不是仓库）。
+    # S3 的绑定表单用不到它，但码表是全局的，别让分支面板走到「绑定失败」兜底。
+    "REPO_NOT_BOUND": "仓库未绑定或已不存在",
 }
 ERROR_TEXT_FALLBACK: Final = "绑定失败"
 
@@ -116,8 +128,15 @@ INDEX_HTML: Final = """<!doctype html>
     border-radius: 6px; }
   /* 列表与状态栏各管一件事：data-state 决定谁在场，`display` 在 CSS 里写死 */
   #repo-list { list-style: none; margin: 12px 0 0; padding: 0; }
-  #repo-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid #1f2430; }
+  #repo-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid #1f2430;
+    cursor: pointer; }
   #repo-list li:first-child { border-top: none; }
+  #repo-list li:hover { background: #1a1f2a; }
+  /* S4：仓库行是可操作的按钮（D6），必须能看出"选中了"与"焦点在"。
+     选中态只认 data-selected 属性（DOM 契约），样式挂在这个属性上。 */
+  #repo-list li[data-selected="true"] { background: #1a1f2a; box-shadow: inset 2px 0 #3fb950; }
+  #repo-list li[data-selected="true"] .repo-name { color: #3fb950; }
+  #repo-list li:focus-visible { outline: 1px solid #58627a; outline-offset: 2px; }
   .repo-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .repo-meta { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
   #repo-empty { margin: 12px 0 0; font-size: 13px; color: #8b95a7; }
@@ -133,6 +152,38 @@ INDEX_HTML: Final = """<!doctype html>
   #repos[data-state="disconnected"] #repos-error,
   #repos[data-state="disconnected"] #note-repos { display: none; }
   #note-repos { margin: 10px 0 0; font-size: 12px; color: #8b95a7; }
+  /* 主区分支面板（S4 D6）。与 #repos 同一套机制：JS 只改 data-state / hidden，
+     显隐规则全部在这里（06-pitfalls T8：不要逐个 style.display）。 */
+  #branches { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #branches h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .08em;
+    color: #8b95a7; text-transform: uppercase; }
+  #branches-state { margin: 6px 0 0; font-size: 13px; color: #8b95a7; }
+  #branches-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px;
+    color: #ffb4ab; background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
+    border-radius: 6px; }
+  #branch-list { list-style: none; margin: 12px 0 0; padding: 0; }
+  #branch-list li { display: flex; align-items: baseline; gap: 10px; padding: 7px 0;
+    font-size: 14px; border-top: 1px solid #1f2430; }
+  #branch-list li:first-child { border-top: none; }
+  .branch-name { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .branch-sha { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+    color: #8b95a7; }
+  .branch-upstream { font-size: 12px; color: #8b95a7; }
+  .branch-current { margin-left: auto; padding: 1px 8px; font-size: 12px; color: #0f1115;
+    background: #3fb950; border-radius: 999px; }
+  #branch-empty { margin: 12px 0 0; font-size: 13px; color: #8b95a7; }
+  /* 状态 → 可见性。idle / loading 只显示 #branches-state；error 只显示 #branches-error；
+     ready 才允许 #branch-list 与（空仓库时的）#branch-empty 出现（D6）。 */
+  #branches[data-state="idle"] #branch-list,
+  #branches[data-state="idle"] #branch-empty,
+  #branches[data-state="idle"] #branches-error,
+  #branches[data-state="loading"] #branch-list,
+  #branches[data-state="loading"] #branch-empty,
+  #branches[data-state="loading"] #branches-error,
+  #branches[data-state="ready"] #branches-state,
+  #branches[data-state="error"] #branches-state,
+  #branches[data-state="error"] #branch-list,
+  #branches[data-state="error"] #branch-empty { display: none; }
 </style>
 </head>
 <body>
@@ -152,6 +203,15 @@ INDEX_HTML: Final = """<!doctype html>
       <dt>stateRoot</dt><dd>%%STATE_ROOT%%</dd>
     </dl>
   </div>
+  <!-- 主区分支面板（S4 D6）：位置在 #content 之后，不重排既有布局。
+       初始 idle（还没选仓库）；显隐全部由上面的 #branches[data-state=…] 规则决定。 -->
+  <section id="branches" data-state="idle" aria-live="polite">
+    <h2 id="branches-title">分支</h2>
+    <p id="branches-state">从左侧选择一个仓库</p>
+    <p id="branches-error" role="alert" hidden></p>
+    <ul id="branch-list"></ul>
+    <p id="branch-empty" hidden>这个仓库还没有任何分支（空仓库）。</p>
+  </section>
   <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
        「还没有仓库」（S3 D1：空 与 没连上 必须可区分）。 -->
   <section id="repos" data-state="loading" aria-live="polite">
@@ -203,6 +263,20 @@ INDEX_HTML: Final = """<!doctype html>
   var repoList = document.getElementById("repo-list");
   var repoEmpty = document.getElementById("repo-empty");
 
+  // 分支面板元素（S4 D6）
+  var branchesEl = document.getElementById("branches");
+  var branchesTitle = document.getElementById("branches-title");
+  var branchesState = document.getElementById("branches-state");
+  var branchesError = document.getElementById("branches-error");
+  var branchList = document.getElementById("branch-list");
+  var branchEmpty = document.getElementById("branch-empty");
+  // 分支面板**自己的**兜底：按码映射之外的码显示这句。**不要**用 ERROR_TEXT_FALLBACK——
+  // 那是绑定表单的「绑定失败」，在分支面板里答"绑定失败"是错的。
+  var BRANCH_ERROR_FALLBACK = "读取分支列表失败";
+  var selectedRepoId = null;      // 当前选中的仓库（断连时保留：重连后自动重取，D6）
+  var selectedRepoName = "";
+  var branchRequestToken = 0;     // 只认最后一次分支请求的回包（切仓库/断连时让旧回包作废）
+
   function setState(state, text) {
     statusEl.dataset.state = state;
     statusText.textContent = text;
@@ -225,6 +299,11 @@ INDEX_HTML: Final = """<!doctype html>
     reposError.hidden = true;
     bindInput.disabled = true;
     bindButton.disabled = true;
+    // S4 D6：断连/重连中分支面板回 idle 并**清空列表**——不许留着旧数据装新鲜。
+    // 选中仓库保留（不清 selectedRepoId）：重连后 renderRepos 会沿 loadRepos 同一条路径重取。
+    resetBranches("idle", state === "disconnected"
+      ? "已断开：分支列表未知"
+      : "正在连接内核…");
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -233,25 +312,55 @@ INDEX_HTML: Final = """<!doctype html>
   function showRepoError(text) { reposError.textContent = text; reposError.hidden = false; }
   function clearRepoError() { reposError.textContent = ""; reposError.hidden = true; }
 
-  // 一行仓库：名称 + 默认分支（验收 1 要求两个都要显示）
+  // 一行仓库：名称 + 默认分支（验收 1 要求两个都要显示）。
+  // S4 起整行可选中（D6）：tabindex + role=button，click 与 Enter/Space 都能选，
+  // 选中时 data-selected="true"。文本一律 textContent（仓库名是用户数据）。
   function renderRepos(list) {
     repoList.textContent = "";               // 先清空再重建，避免旧行残留
     for (var i = 0; i < list.length; i++) {
       var repo = list[i] || {};
+      var repoId = String(repo.repoId || "");
+      var repoName = String(repo.name || "（未命名）");
       var li = document.createElement("li");
-      li.dataset.repoId = String(repo.repoId || "");
+      li.dataset.repoId = repoId;
+      li.tabIndex = 0;                       // 键盘可达：Tab 能聚焦，Enter/Space 能选
+      li.setAttribute("role", "button");
       var name = document.createElement("span");
       name.className = "repo-name";
-      name.textContent = String(repo.name || "（未命名）");
+      name.textContent = repoName;
       var meta = document.createElement("span");
       meta.className = "repo-meta";
       meta.textContent = "默认分支 " + (repo.defaultBranch || "（未知）");
       li.appendChild(name);
       li.appendChild(meta);
+      // 闭包捕获当前行的 id/name：回调里不能用循环变量（var 是函数作用域）
+      (function (rowId, rowName) {
+        li.addEventListener("click", function () { selectRepo(rowId, rowName); });
+        li.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+            ev.preventDefault();             // 防 Space 滚动页面
+            selectRepo(rowId, rowName);
+          }
+        });
+      }(repoId, repoName));
       repoList.appendChild(li);
     }
     // 只有「真的拿到了一个（可能为空的）列表」时才能说「还没有仓库」
     repoEmpty.hidden = list.length !== 0;
+    // 列表是整体重建的：**必须恢复选中标记**，否则每次 repo.list 都会把选中样式冲掉（D6）。
+    var stillListed = false;
+    for (var j = 0; j < list.length; j++) {
+      if (String((list[j] || {}).repoId || "") === selectedRepoId) { stillListed = true; break; }
+    }
+    if (!stillListed) {
+      // 选中的仓库从列表里消失（解绑 / 换了库）：回 idle 并清空（D6）
+      selectedRepoId = null;
+      selectedRepoName = "";
+      resetBranches("idle", "从左侧选择一个仓库");
+      return;
+    }
+    applyRepoSelection();
+    loadBranches();   // 重连且仍有选中仓库 → 与 loadRepos 同一条路径自动重取（D6）
   }
 
   function loadRepos() {
@@ -261,6 +370,115 @@ INDEX_HTML: Final = """<!doctype html>
       if (err) { showRepoError("读取仓库列表失败（" + err + "）"); return; }
       renderRepos(Array.isArray(data) ? data : []);
     })) { showRepoError("连接尚未就绪"); }
+  }
+
+  // -------------------------------------------------------------------------
+  // 分支面板（S4 D6）。三条纪律：
+  //   1. 显隐只由 CSS 的 `#branches[data-state=…]` 决定，这里只改 data-state 与 hidden（T8）；
+  //   2. 断连时回 idle 并清空（resetBranches），选中仓库保留给重连自动重取；
+  //   3. 快速切仓库时旧回包不能覆盖新结果（branchRequestToken）。
+  // -------------------------------------------------------------------------
+
+  function branchErrorText(code) {
+    return ERROR_TEXT[code] || BRANCH_ERROR_FALLBACK;   // 表外的码不显示"绑定失败"
+  }
+
+  function branchesTitleText() {
+    return selectedRepoId ? ("分支 · " + selectedRepoName) : "分支";
+  }
+
+  function resetBranches(state, text) {
+    branchRequestToken += 1;            // 让在途请求的回包作废
+    branchesEl.dataset.state = state;
+    branchesTitle.textContent = branchesTitleText();
+    branchesState.textContent = text;
+    branchList.textContent = "";
+    branchesError.textContent = "";
+    branchesError.hidden = true;
+    branchEmpty.hidden = true;
+  }
+
+  function applyRepoSelection() {
+    var rows = repoList.querySelectorAll("li[data-repo-id]");
+    for (var i = 0; i < rows.length; i++) {
+      if (selectedRepoId !== null && rows[i].dataset.repoId === selectedRepoId) {
+        rows[i].dataset.selected = "true";
+        rows[i].setAttribute("aria-current", "true");
+      } else {
+        delete rows[i].dataset.selected;
+        rows[i].removeAttribute("aria-current");
+      }
+    }
+  }
+
+  // 一行分支：.branch-name / .branch-sha（8 位）/ .branch-current（仅当前，文本「当前」）/
+  // .branch-upstream（**有** upstream 才创建；null 时连 span 都不建，不放占位符）。
+  function renderBranches(list) {
+    branchList.textContent = "";
+    for (var i = 0; i < list.length; i++) {
+      var branch = list[i] || {};
+      var li = document.createElement("li");
+      li.dataset.branchName = String(branch.name || "");
+      var name = document.createElement("span");
+      name.className = "branch-name";
+      name.textContent = String(branch.name || "");
+      var sha = document.createElement("span");
+      sha.className = "branch-sha";
+      sha.textContent = String(branch.sha || "");
+      li.appendChild(name);
+      li.appendChild(sha);
+      if (branch.upstream) {
+        var upstream = document.createElement("span");
+        upstream.className = "branch-upstream";
+        upstream.textContent = "上游 " + String(branch.upstream);
+        li.appendChild(upstream);
+      }
+      if (branch.isCurrent) {
+        var current = document.createElement("span");
+        current.className = "branch-current";
+        current.textContent = "当前";
+        li.appendChild(current);
+      }
+      branchList.appendChild(li);
+    }
+  }
+
+  function loadBranches() {
+    if (selectedRepoId === null) { return; }
+    var repoId = selectedRepoId;
+    var token = ++branchRequestToken;
+    branchesTitle.textContent = branchesTitleText();
+    branchesEl.dataset.state = "loading";
+    branchesState.textContent = "正在读取分支…";
+    branchList.textContent = "";        // 换仓库时先清掉上一个仓库的分支，不混着显示
+    branchesError.textContent = "";
+    branchesError.hidden = true;
+    branchEmpty.hidden = true;
+    var id = request("repo.branches", { repoId: repoId }, function (err, data) {
+      if (token !== branchRequestToken) { return; }   // 过期回包：切了仓库或已断连
+      if (err) {
+        branchesEl.dataset.state = "error";
+        branchesError.textContent = branchErrorText(err);
+        branchesError.hidden = false;
+        return;
+      }
+      var rows = Array.isArray(data) ? data : [];
+      renderBranches(rows);
+      branchesEl.dataset.state = "ready";
+      // 空仓库：ready + 空态（**不是** error、**不是**空白，D6）
+      branchEmpty.hidden = rows.length !== 0;
+    });
+    if (id === null) {                  // 连接没就绪：不装成"这个仓库没有分支"
+      if (token === branchRequestToken) { resetBranches("idle", "连接尚未就绪"); }
+    }
+  }
+
+  function selectRepo(repoId, name) {
+    if (!repoId) { return; }
+    selectedRepoId = repoId;
+    selectedRepoName = name;
+    applyRepoSelection();
+    loadBranches();
   }
 
   function submitBind() {
