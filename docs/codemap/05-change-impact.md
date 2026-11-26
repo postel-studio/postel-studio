@@ -126,7 +126,8 @@ CI 里 `origin/main` 存在的前提是 `fetch-depth: 0`——浅克隆下它会
 ## 提交前自查（30 秒版）
 
 ```bash
-git diff --stat                      # 触及文件数与行数（预算 ≤12 文件 / ≤400 行）
+git diff --stat -- src/              # 预算**只计 src/**：≤12 文件 / ≤400 行（04 §1.1 口径）
+git diff --stat                      # 全量看一眼：tests/docs 不计入上限，但不该有空 diff 的 src 改动
 git diff main -- tests/test_server_boot.py tests/conftest.py   # 不该有改动
 bash scripts/check.sh                # 全绿
 ```
