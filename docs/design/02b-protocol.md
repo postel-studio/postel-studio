@@ -22,7 +22,9 @@
 ### 2.1 传输
 
 - WebSocket，默认 `ws://127.0.0.1:<port>/gateway`。
-- 端口由内核在启动时写入 `~/.postel/server.json`（`{host, port, pid}`，权限 600），客户端据此发现。
+- 端口由内核在启动时写入 `~/.postel/server.json`（权限 `600`），客户端据此发现。字段：
+  `host` / `port` / `pid` / `apiVersion` / `version` / `stateRoot` / `tokenFingerprint`。
+  **令牌本体不在其中**，见 `05-security.md` §4.1。
 - 单连接多路复用；每帧一个 JSON 对象。
 
 ### 2.2 三种帧

@@ -17,10 +17,21 @@ def test_no_subcommand_prints_help_and_succeeds(capsys: pytest.CaptureFixture[st
     assert "serve" in capsys.readouterr().out
 
 
-def test_serve_is_explicitly_unimplemented(capsys: pytest.CaptureFixture[str]) -> None:
-    """未实现的功能必须明确失败，不能静默返回 0（否则 M1 验收会被假通过）。"""
-    assert main(["serve"]) == 1
-    assert "尚未实现" in capsys.readouterr().err
+def test_serve_rejects_out_of_range_port(capsys: pytest.CaptureFixture[str]) -> None:
+    """非法参数必须显式失败（非 0 且给稳定错误码），不能挂起或静默成功。
+
+    S1 已实现 `serve`，原来「serve 尚未实现 → 返回 1」的断言随之失效；
+    这条改为守住同一条精神：**坏输入必须明确失败**。
+    """
+    assert main(["serve", "--port", "-1"]) == 1
+    err = capsys.readouterr().err
+    assert "PORT_INVALID" in err
+
+
+def test_serve_rejects_non_loopback_host(capsys: pytest.CaptureFixture[str]) -> None:
+    """绑定面是硬约束（05-security §1.1）：`0.0.0.0` 必须被 CLI 拦下，而不是照单绑定。"""
+    assert main(["serve", "--host", "0.0.0.0"]) == 2
+    assert "HOST_NOT_ALLOWED" in capsys.readouterr().err
 
 
 @pytest.mark.slow
