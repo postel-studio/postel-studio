@@ -626,23 +626,29 @@ PY
 
 ## 已知未决问题
 
-| # | 问题 | 状态 |
-|---|---|---|
-| U1 | `test_overwrites_stale_lock_when_pid_is_dead` 偶发失败（`FileNotFoundError: server.json`），S2 期间出现 1 次，之后连跑 12 轮未复现 | **未定位根因**。怀疑与 SIGKILL 掉的子进程/端口残留有关，无证据 |
-| U2 | ticket 每次渲染 `/` 都签发、60s 才清一次、**无内存上限** | 正常使用无碍，但没有上限就是没有上限。已裁决不修 |
-| U3 | 一次重连会打两次 HTTP（`/api/where` + `/`）→ 留下 1 个未用 ticket | 不影响正确性，票据生成量比预期高一倍 |
-| U4 | 页面从 `localhost:` 而非 `127.0.0.1:` 打开时未测试 | 端口比较仍成立，但该 variant 未验证 |
-| U5 | 层依赖检查未进门禁（见 [02-layers §4](02-layers.md#4-可执行检查)） | 规则靠 review |
-| U6 | 版本号有 `pyproject.toml` 与 `__init__.py` 两个副本 | S20 自动化 |
-| U7 | `encode_event()` 从未被调用 | 形状已定，无调用方测试 |
-| U8 | codemap 门禁只判「动没动地图」，不判「动得对不对」 | 内容质量靠 review；一点办法没有之前如实承认 |
-| U9 | **仓库加了 origin 之后 `repo_id` 会变**（S3 的已知让步）：界面/后续切片挂在 id 上会"丢失"这个仓库 | ✅ **已修（S3.5）。**怎么修的：`repo_id` 改成 `sha256(绑定时的绝对路径)`、**只在 INSERT 时算一次**，`upsert` 按 path 命中时不再写它（D1）；origin 的哈希降级成新列 `origin_hash`，只识别"同一远端"、不参与主键（D2）；schema v1→v2 只加列、**不重写任何历史 id**（D3）。详见 [08 §6](../design/08-repo-id-stability.md) 与本文 §T32。 |
-| U10 | `state.db` 的连接**没地方关**（`create_app()` 构造 `RepoStore`，进程退出时由 OS 回收） | 不丢数据（WAL 已 fsync），但"有开必有关"的纪律是破的。将来 `server.serve()` 的 `finally` 应该关它 |
-| U11 | **普通目录放在别人工作区里会被校到那个仓库**（`proj/plain/deep` 与 `proj/src` 路径上不可区分） | 按 D2 的字面语义处理的**近似**。真要解决需要"区分子目录与普通目录"的判据（例如要求子目录里有被跟踪的文件），代价大且会引入误判，本刀不做 |
-| U12 | `tmp_path` 属于测试夹具，`repo.bind` 允许绑系统临时目录下的仓库 | 行为正确（用户没理由这么做），但测试里必须注意 T28 |
-| U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** |
-| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) |
-| U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。 |
+**S4.5 起的规则**：每项必须有「到期切片」——到那一刀开工前，要么修掉，要么明确豁免并写清后果。
+没有到期的未决项等于「永远不会解决」，不允许存在。依赖某个 U 项的切片**不得先开工**（[09 §1.4](../design/09-slice-dod.md)）。
+
+**flaky 政策**：连续 3 次尝试仍无法复现的失败 → 标记 quarantine（不进主套件）+ 写下环境与种子，
+并在本项到期前修掉；**禁止静默重试**把不稳定的测试「修绿」。
+
+| # | 问题 | 状态 | 到期（必须裁决的切片） | 不解决会怎样 |
+|---|---|---|---|---|
+| U1 | `test_overwrites_stale_lock_when_pid_is_dead` 偶发失败（`FileNotFoundError: server.json`），S2 期间出现 1 次，之后连跑 12 轮未复现 | **未定位根因**。怀疑与 SIGKILL 掉的子进程/端口残留有关，无证据 | **S15（重启恢复）前** | S15 主体就是重启/锁路径，flaky 会让它分不清「改坏了」还是「本来就不稳」 |
+| U2 | ticket 每次渲染 `/` 都签发、60s 才清一次、**无内存上限** | 正常使用无碍，但没有上限就是没有上限。已裁决不修 | **M3 上线前** | 长期运行内存单调增长；配合 U3 放大 |
+| U3 | 一次重连会打两次 HTTP（`/api/where` + `/`）→ 留下 1 个未用 ticket | 不影响正确性，票据生成量比预期高一倍 | **M3 上线前**（或明确豁免） | 票据生成量翻倍，与 U2 同一条内存方向 |
+| U4 | 页面从 `localhost:` 而非 `127.0.0.1:` 打开时未测试 | 端口比较仍成立，但该 variant 未验证 | **M1 验收（S14）前** | M1 验收若从 `localhost:` 打开，结论建立在未验证的变体上 |
+| U5 | 层依赖检查未进门禁（见 [02-layers §4](02-layers.md#4-可执行检查)） | ✅ **已修（S4.5）**：`scripts/gate-layers.py` 进门禁（`check.sh layers` + CI），且**新模块不登记层就失败**，不再靠 review。文档里那段片段已退役 | ✅ **已修（S4.5）** | 规则靠 review，新模块可静默向上 import——已被 `scripts/gate-layers.py` 收走 |
+| U6 | 版本号有 `pyproject.toml` 与 `__init__.py` 两个副本 | S20 自动化 | **S20（发版）前** | 两个版本号副本，发版时必然出现「包上是 A、运行时是 B」 |
+| U7 | `encode_event()` 从未被调用 | 形状已定，无调用方测试 | **S12（收件箱推送）前** | 推送路径的第一处真实使用会暴露形状问题，越晚发现改动越大 |
+| U8 | codemap 门禁只判「动没动地图」，不判「动得对不对」 | **部分结掉（S4.5）**：机械可判的部分（相对链接 / 锚点 / `#L` 行号 / 模块行数表 / 页面 id 一致性）已由 `scripts/gate-docs.py` 进门禁；**文字内容质量仍靠 review**，这一半如实承认没办法 | ✅ **部分结掉（S4.5）** | 机械可判的部分已进门禁；**文字内容质量仍靠 review**，如实承认 |
+| U9 | **仓库加了 origin 之后 `repo_id` 会变**（S3 的已知让步）：界面/后续切片挂在 id 上会"丢失"这个仓库 | ✅ **已修（S3.5）。**怎么修的：`repo_id` 改成 `sha256(绑定时的绝对路径)`、**只在 INSERT 时算一次**，`upsert` 按 path 命中时不再写它（D1）；origin 的哈希降级成新列 `origin_hash`，只识别"同一远端"、不参与主键（D2）；schema v1→v2 只加列、**不重写任何历史 id**（D3）。详见 [08 §6](../design/08-repo-id-stability.md) 与本文 §T32。 | ✅ **已修（S3.5）** | — |
+| U10 | `state.db` 的连接**没地方关**（`create_app()` 构造 `RepoStore`，进程退出时由 OS 回收） | 不丢数据（WAL 已 fsync），但"有开必有关"的纪律是破的。将来 `server.serve()` 的 `finally` 应该关它 | **S15 前** | 生命周期是 S15 的主题；「有开必有关」的纪律破着，进程内测试还可能锁库 |
+| U11 | **普通目录放在别人工作区里会被校到那个仓库**（`proj/plain/deep` 与 `proj/src` 路径上不可区分） | 按 D2 的字面语义处理的**近似**。真要解决需要"区分子目录与普通目录"的判据（例如要求子目录里有被跟踪的文件），代价大且会引入误判，本刀不做 | **明确豁免（不修）** | 用户粘普通子目录会被校到父仓库——已作为 D2 的近似记录在案 |
+| U12 | `tmp_path` 属于测试夹具，`repo.bind` 允许绑系统临时目录下的仓库 | 行为正确（用户没理由这么做），但测试里必须注意 T28 | **无需修（行为正确）** | 测试夹具踩坑风险，已写进 T28 提醒 |
+| U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** | **S7（worktree 可见）前** | S7 要在 worktree 上展示 origin/默认分支，字段语义错会直接显示错 |
+| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) | **S7 前**（或明确豁免） | 左栏留一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND` |
+| U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。 | **S5 前**（引入 ref 参数） | ref 名回传 git 会变 `BAD_REF`，甚至指向别的 ref——比报错更糟 |
 
 ---
 

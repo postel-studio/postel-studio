@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 统一质量门禁。本地与 CI 跑同一份，不允许分叉。
 # 用法：bash scripts/check.sh        （全部）
-#       bash scripts/check.sh lint   （只跑某项：lint|format|types|test|codemap|secrets|build）
+#       bash scripts/check.sh lint   （只跑某项：lint|format|types|test|docs|layers|codemap|secrets|build）
 set -uo pipefail
 
 FAILED=0
@@ -20,6 +20,11 @@ gate_lint()   { uv run ruff check .; }
 gate_format() { uv run ruff format --check .; }
 gate_types()  { uv run mypy; }
 gate_test()   { uv run pytest --cov --cov-report=term-missing; }
+# 文档门禁：相对链接 / 锚点 / #L 行号 / 模块行数表 / 页面 id 一致性（S4.5）
+# 为什么单列一项：这些错 ruff/mypy/pytest 都不会报，只能靠人眼——而它每一刀都在发生
+gate_docs() { uv run python scripts/gate-docs.py; }
+# 层依赖门禁：只许向下 import + 新模块必须登记层（S4.5 结掉 06 U5）
+gate_layers() { uv run python scripts/gate-layers.py; }
 # 代码地图保鲜：src/ 或 tests/ 变了，docs/codemap/ 也必须变
 gate_codemap() { bash scripts/gate-codemap.sh; }
 # 打包冒烟：证明产物可安装可运行（与 CI 的 wheel 步骤一致）。慢，不在 all 里。
@@ -63,6 +68,8 @@ case "${1:-all}" in
   format) run "format" gate_format ;;
   types)  run "types"  gate_types ;;
   test)   run "test"   gate_test ;;
+  docs)    run "docs"    gate_docs ;;
+  layers)  run "layers"  gate_layers ;;
   secrets) run "secrets" gate_secrets ;;
   codemap) run "codemap" gate_codemap ;;
   build)   run "build"   gate_build ;;
@@ -71,6 +78,8 @@ case "${1:-all}" in
     run "format" gate_format
     run "types"  gate_types
     run "test"   gate_test
+    run "docs"   gate_docs
+    run "layers" gate_layers
     run "codemap" gate_codemap
     run "secrets" gate_secrets
     ;;

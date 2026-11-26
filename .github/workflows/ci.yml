@@ -40,6 +40,14 @@ jobs:
       - name: Tests with coverage
         run: uv run pytest --cov --cov-report=term-missing
 
+      # 文档门禁：链接 / 锚点 / #L 行号 / 模块行数表 / 页面 id 一致性（S4.5）
+      - name: Docs freshness
+        run: uv run python scripts/gate-docs.py
+
+      # 层依赖门禁：只能向下 import + 新模块必须登记（结掉 06 U5）
+      - name: Layer rules
+        run: uv run python scripts/gate-layers.py
+
       # 改了 src/ 或 tests/ 就必须更新 docs/codemap/，否则地图开始撒谎
       - name: Code map freshness
         run: bash scripts/check.sh codemap

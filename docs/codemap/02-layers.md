@@ -124,40 +124,32 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 
 ## 4. 可执行检查
 
-规则不落成检查就会腐烂。下面的代码片段用于人工或 CI 复核**向上依赖**：
+规则不落成检查就会腐烂——**S4.5 起它不再是文档片段，已经进门禁**：`scripts/gate-layers.py`
+（`bash scripts/check.sh layers`，CI 也跑）把下表编码成机器可查的规则。
 
-```bash
-# 检查是否出现「向上 import」（L0/L1 不应 import L2+；S3 的新模块也在表里）
-uv run python - <<'PY'
-import ast, pathlib, sys
-UP = {
-    "storage/paths.py":      ("api/", "web/", "gitops"),
-    "api/frames.py":         ("app", "gateway", "server", "web/", "repository"),
-    "api/server.py":         ("web/",),
-    "domain/models.py":      ("api/", "gitops", "storage", "web/"),
-    "gitops/repo.py":        ("api/", "web/", "storage/", "domain/"),
-    "storage/db.py":         ("api/", "web/", "gitops"),
-    # L3 的 repository 只许向下；它尤其不许 import fastapi（S3 涉及文件表的要求）
-    "api/repository.py":     ("app", "gateway", "server", "web/", "fastapi", "starlette", "uvicorn"),
-}
-bad = []
-for rel, forbidden in UP.items():
-    path = pathlib.Path("src/postel_studio") / rel
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            for f in forbidden:
-                if f in node.module or any(f in (a.name or "") for a in node.names):
-                    bad.append(f"{rel}:{node.lineno} → {node.module}")
-for b in bad: print("违例:", b)
-sys.exit(1 if bad else 0)
-PY
-```
+| 模块 | 不许 import |
+|---|---|
+| `storage/paths.py`、`storage/db.py` | `api` / `web` / `gitops` |
+| `domain/models.py` | `api` / `web` / `gitops` / `storage` |
+| `gitops/repo.py` | `api` / `web` / `storage` / `domain` |
+| `api/frames.py`（L1，纯数据变换） | 上面全部 + `fastapi` / `starlette` / `uvicorn` / `websockets` / `subprocess` / `sqlite3` |
+| `api/server.py`（L2） | `repository` / `web` / `storage.db` |
+| `api/app.py` | `api/server.py`（反向会成环） |
+| `api/gateway.py` | `api/app.py`（T14：能力靠 `Providers` 注入）/ `api/server.py` / `repository` / `web` / `storage` / `gitops` / `domain` |
+| `api/repository.py` | `app` / `gateway` / `server` / `web` / `fastapi` / `starlette` / `uvicorn` |
+| `web/assets.py`（L4） | `api`（被 app import，反向即环） |
 
-**注意**：上面只查了「明显向上」的边。`paths → __version__` 那条是**故意允许**的
-（因为 `__version__` 是包级常量而不是一层），所以不在 forbiddin 列表里。
+两条比旧片段更严的地方：
 
-> 这份检查目前是**文档里的片段**，没有进 `scripts/check.sh`。若层数继续变多，应把它固化进
-> 门禁（届时需要新增 `scripts/check_layers.py`）。
+1. **`import x` 与 `from x import y` 都查**，且 `from postel_studio.api import app` 会展开成
+   `postel_studio.api.app` 再比对——只比对 `node.module` 会漏掉这条最常见的越界写法。
+2. **新模块必须登记层**：`src/postel_studio/` 下新增任何 `.py` 而没在
+   `scripts/gate-layers.py` 的 `LAYERS` 里登记，门禁直接失败（不登记 = 没有规则）。
+
+**注意**：`paths → __version__` 那条是**故意允许**的（`__version__` 是包级常量而不是一层），
+所以不在任何 forbiddin 列表里。
+
+文档里的旧片段已退役（留着会被误当成"已经在跑"）。改层规则时改脚本，别改这里。
 
 ## 5. 未来会新增的层（S3+）
 
