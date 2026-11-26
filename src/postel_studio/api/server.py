@@ -17,6 +17,7 @@ pid 属于自己的（`--force` 接管时不能删对方的锁）；令牌随进
 from __future__ import annotations
 
 import contextlib
+import copy
 import os
 import secrets
 import signal
@@ -32,6 +33,7 @@ import uvicorn
 
 from postel_studio import __version__
 from postel_studio.api.app import API_VERSION, create_app
+from postel_studio.api.gateway import GATEWAY_PATH
 from postel_studio.storage.paths import (
     KernelBootError,
     acquire_lock,
@@ -102,6 +104,18 @@ def serve(port: int = 0, *, force: bool = False) -> int:
         release_lock(lock)
 
 
+def log_config() -> dict[str, object]:
+    """uvicorn 缺省 logging 配置 + 一条给内核自己的 logger 的挂载（理由见 `_run` 里的注释）。
+
+    只动 `postel_studio` 这一支：`propagate=False` 防止与 root 重复输出。
+    """
+    config: dict[str, object] = copy.deepcopy(dict(uvicorn.config.LOGGING_CONFIG))
+    loggers = config.get("loggers")
+    assert isinstance(loggers, dict)
+    loggers["postel_studio"] = {"handlers": ["default"], "level": "INFO", "propagate": False}
+    return config
+
+
 def _install_signal_handlers() -> None:
     """把 SIGTERM 与 SIGINT 统一成「优雅停止」，Ctrl+C 走同一条路。
 
@@ -131,6 +145,9 @@ def _run(root: Path, sock: socket.socket) -> int:
     _BUILDING.set()
     token = secrets.token_hex(32)
     token_file = write_token(token)
+    # 网关路径前缀：与 `token` **不同**的另一个随机值，每次启动重新生成。它只用来避免
+    # 「固定路径被别的页面直接连」，本身不是凭据（浏览器真正的通行证是页面里的 ticket）。
+    ws_path = f"{GATEWAY_PATH}/{secrets.token_hex(32)}"
     write_server_info(
         {
             "host": host,
@@ -139,6 +156,7 @@ def _run(root: Path, sock: socket.socket) -> int:
             "apiVersion": API_VERSION,
             "version": __version__,
             "stateRoot": str(root),
+            "wsPath": ws_path,
             # 令牌本体**不进** server.json（05-security §1.1 要求写明文令牌；S1 还没有
             # WebSocket 客户端可发 Bearer，写进去只会多一处长期凭据）。这里只放指纹，
             # 供退出时判断「这份 server.json 是不是我写的」。详见交付说明的偏离项。
@@ -154,7 +172,11 @@ def _run(root: Path, sock: socket.socket) -> int:
     print("Ctrl+C 停止", flush=True)
 
     config = uvicorn.Config(
-        create_app(),
+        create_app(ws_path),
+        # uvicorn 的缺省 logging 配置里**没有 root logger 项**：不挂流处理器，我们自己模块
+        # 的 logger 会一路静默（INFO/WARNING 都不会出现在 stderr）。所以把内核的 logger
+        # 显式接到 uvicorn 的 `default` 流处理器上，级别随 `log_level` 一起定。
+        log_config=log_config(),
         log_level="info",
         access_log=False,
         lifespan="off",
