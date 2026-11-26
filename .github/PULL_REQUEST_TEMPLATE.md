@@ -31,7 +31,7 @@ One sentence: what does the user do → what do they see?
 
 ## Budget (see [`04-task-breakdown.md §1.1`](docs/design/04-task-breakdown.md); counts `src/` only)
 
-- `src/`: N files / +A −B (limits: 12 files / 700 lines)
+- `src/`: N files / +A −B (limits: 12 files / 1000 lines)
 - Full `git diff --stat`:
 
 ## Not done / not verified (**separate the two**)
