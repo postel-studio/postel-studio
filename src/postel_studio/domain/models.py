@@ -129,3 +129,40 @@ def repo_id(path: str) -> str:
     `origin_hash`，那是另一个字段（D2）。
     """
     return repo_id_for_path(path)
+
+
+# ---------------------------------------------------------------------------
+# Bot（S6，06 §2.2）：实体 + 名字白名单 + 复合主键。**纯函数，无 IO**（与 Repo 同一纪律）。
+# ---------------------------------------------------------------------------
+
+# 06 §2.2 白名单：首字母小写、其余小写字母/数字/连字符，总长 1..32。
+BOT_NAME_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+# M1 恒为 L1（06 §2.2 默认值）；改权限是 M2 的 bot.set_permission，本刀不做。
+BOT_PERMISSION_DEFAULT: Final = "L1"
+
+
+@dataclass(frozen=True, slots=True)
+class Bot:
+    """一个仓库下的 Bot（06 §2.2）。`bot_id` 是复合主键 `{repo_id}/{name}`。
+
+    `charter_rev` 列先建但 **M1 不维护**（D5：charter 正文的事实源是文件，帧载荷里的
+    `charterRev` 由 `api/bots.py` 现场按内容算）。落库时写播种那一刻的值，之后允许过期。
+    """
+
+    bot_id: str
+    repo_id: str
+    name: str
+    permission: str
+    agent_kind: str | None
+    charter_rev: int
+    created_at: float
+
+
+def bot_name_ok(name: str) -> bool:
+    """名字白名单（06 §2.2）。路径安全的第一道锁：`storage.paths` 进路径前必须过它。"""
+    return BOT_NAME_RE.fullmatch(name) is not None
+
+
+def bot_id(repo_id: str, name: str) -> str:
+    """复合主键 `{repo_id}/{name}`（06 §2.2）——**唯一的拼接处**，别处不要手写格式。"""
+    return f"{repo_id}/{name}"

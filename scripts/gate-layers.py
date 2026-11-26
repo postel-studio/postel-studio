@@ -80,6 +80,8 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "postel_studio.gitops",
         "postel_studio.domain",
     ),
+    # S6：Bot 业务编排。只是 L3 的又一个 handler 模块：不许反向碰页面（D7）。
+    "api/bots.py": ("postel_studio.web",),
     "api/repository.py": (
         "postel_studio.api.app",
         "postel_studio.api.gateway",

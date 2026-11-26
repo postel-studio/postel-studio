@@ -16,8 +16,9 @@ from fastapi.responses import HTMLResponse
 
 from postel_studio import __version__
 from postel_studio.api import gateway
+from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
-from postel_studio.storage.db import RepoStore
+from postel_studio.storage.db import BotStore, RepoStore
 from postel_studio.storage.paths import state_root
 from postel_studio.web.assets import render_index
 
@@ -51,6 +52,8 @@ def create_app(
     # 网关因此不需要 import 任何业务/存储模块（06-pitfalls T14 的修法，别改回反向 import）。
     store = RepoStore()
     repositories = RepositoryService(store)
+    # S6：Bot 的元数据在同一份 state.db 的另一张表（v3），charter 在状态根的文件里。
+    bots = BotService(BotStore(), store)
 
     def index() -> HTMLResponse:
         page = render_index(
@@ -91,6 +94,8 @@ def create_app(
             repo_list=repositories.list,
             repo_branches=repositories.branches,  # S4
             repo_diff=repositories.diff,  # S5
+            bot_list=bots.list,  # S6
+            memory_charter_get=bots.charter_get,  # S6
         ),
     )
     return app

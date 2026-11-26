@@ -23,12 +23,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
-from postel_studio.domain.models import Repo
+from postel_studio.domain.models import Bot, Repo
 from postel_studio.storage.paths import _chmod, ensure_state_root, state_db_file
 
 # 06-data-model §7：user_version 是 schema 版本。
-# v1 = S3 的初始 schema（只有 repos）；v2 = S3.5 加的 `origin_hash`（D2）。
-SCHEMA_VERSION: Final = 2
+# v1 = S3 的初始 schema（只有 repos）；v2 = S3.5 加的 `origin_hash`（D2）；
+# v3 = S6 加的 `bots` 表（D7：只加表、不动 repos）。
+SCHEMA_VERSION: Final = 3
 
 # ---------------------------------------------------------------------------
 # 迁移（每个版本一个函数，索引即版本号；新增版本=往后 append，不改历史）
@@ -53,6 +54,21 @@ _MIGRATIONS: Final[tuple[str, ...]] = (
     # 且**只碰 `origin_hash`，不碰 `repo_id`**（D3）。
     """
     ALTER TABLE repos ADD COLUMN origin_hash TEXT;
+    """,
+    # v3（S6 D7）：**只加 `bots` 表，不动 `repos`**。`charter_rev` 先建列但 M1 不维护它
+    # （D5：charter 正文的事实源是文件；写路径是 S22 的 charter.set）。外键照 06 §2.2：
+    # Bot 随仓库删除级联（记忆目录不删，保留可审计——06 §2.2 的不变量）。
+    """
+    CREATE TABLE bots (
+        bot_id      TEXT PRIMARY KEY,
+        repo_id     TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        permission  TEXT NOT NULL DEFAULT 'L1',
+        agent_kind  TEXT,
+        charter_rev INTEGER NOT NULL DEFAULT 0,
+        created_at  REAL NOT NULL,
+        UNIQUE (repo_id, name)
+    );
     """,
 )
 
@@ -259,3 +275,82 @@ def open_store(path: Path | None = None) -> Iterator[RepoStore]:
         yield store
     finally:
         store.close()
+
+
+# `bots` 的列清单只写一份（同 `_COLUMNS` 的理由：一处改、处处一致）。
+_BOT_COLUMNS: Final = "bot_id, repo_id, name, permission, agent_kind, charter_rev, created_at"
+
+
+class BotStore:
+    """`bots` 表的读写（S6 v3 新增）。与 `RepoStore` 同款：自开关连接、一把锁串行化。
+
+    `insert` 不吞 `sqlite3.IntegrityError`：重复主键 / 重名是**调用方**该显式处理的错，
+    静默覆盖会让"D2 只播种一次"失去证据。
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._conn = open_state_db(path)
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        """关闭连接（`with` 退出时也走这里）。幂等。"""
+        with self._lock:
+            self._conn.close()
+
+    def __enter__(self) -> BotStore:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def list_for_repo(self, repo_id: str) -> list[Bot]:
+        """某个仓库的全部 Bot，按 `created_at, bot_id` 稳定排序（确定性输出）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_BOT_COLUMNS} FROM bots WHERE repo_id = ? ORDER BY created_at, bot_id",
+                (repo_id,),
+            ).fetchall()
+        return [_row_to_bot(row) for row in rows]
+
+    def get(self, bot_id: str) -> Bot | None:
+        """按复合主键取；不存在返回 `None`（帧层翻成 `INVALID_PARAMS`，D6）。"""
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_BOT_COLUMNS} FROM bots WHERE bot_id = ?", (bot_id,)
+            ).fetchone()
+        return None if row is None else _row_to_bot(row)
+
+    def insert(self, bot: Bot) -> Bot:
+        """插入一个新 Bot 并返回落库后的记录（成功返回入参；失败抛异常）。"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"INSERT INTO bots ({_BOT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    bot.bot_id,
+                    bot.repo_id,
+                    bot.name,
+                    bot.permission,
+                    bot.agent_kind,
+                    bot.charter_rev,
+                    bot.created_at,
+                ),
+            )
+        return bot
+
+
+def _row_to_bot(row: sqlite3.Row) -> Bot:
+    """`sqlite3.Row` → `Bot`。类型收敛集中在这里，别处不再直接碰 Row。"""
+    raw_rev = row["charter_rev"]
+    raw_created = row["created_at"]
+    raw_agent = row["agent_kind"]
+    assert isinstance(raw_rev, int) and not isinstance(raw_rev, bool)
+    assert isinstance(raw_created, int | float) and not isinstance(raw_created, bool)
+    return Bot(
+        bot_id=str(row["bot_id"]),
+        repo_id=str(row["repo_id"]),
+        name=str(row["name"]),
+        permission=str(row["permission"]),
+        agent_kind=str(raw_agent) if isinstance(raw_agent, str) else None,
+        charter_rev=raw_rev,
+        created_at=float(raw_created),
+    )

@@ -17,6 +17,11 @@ S3 起左栏出现「仓库」区（03-ui-spec §2：左栏上 Bot / 下 仓库�
 - 错误是**可读中文**（`NOT_A_REPO` → 「不是 git 仓库」），由错误**码**映射，不看 `message`。
   错误码不在表里时显示通用文案 —— 不把服务端 `message` 直接塞进页面（05 §4.2 的同一精神）。
 
+S6 起左栏出现「Bots」区、主区出现只读的「Charter」面板：点仓库行 → `bot.list` 列出该仓库
+的 Bot（M1 由内核惰性播种 `builder`）→ 点 Bot 行 → `memory.charter.get` 显示 charter 全文与
+记忆目录绝对路径（D8 的 DOM 契约）。charter 是**用户可编辑文本 = 不可信**，全文只进一个
+`<pre>` 的 `textContent`。四态与 token 纪律与分支/差异面板同源。
+
 S4 起主区出现「分支」面板（D6 的 DOM 契约）：点左栏仓库行 → `repo.branches` → 分支列表。
 四条约束：
 
@@ -73,6 +78,7 @@ INDEX_HTML: Final = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <meta name="postel-ws-path" content="%%WS_PATH%%">
 <meta name="postel-handshake" content="%%HANDSHAKE_TICKET%%">
 <title>Postel Studio · 连接状态</title>
@@ -230,6 +236,47 @@ INDEX_HTML: Final = """<!doctype html>
   #diff[data-state="error"] #diff-stat,
   #diff[data-state="error"] #diff-patch,
   #diff[data-state="error"] #diff-truncated { display: none; }
+  /* 左栏 Bots 区与主区 charter 面板（S6 D8）。与 #branches/#diff 同一套机制：显隐只由
+     `data-state` 与 hidden 属性决定，JS 不碰 style.display（T8）。charter 全文用 pre-wrap，
+     不设固定宽度、不假设中文宽度（等宽 + 自身滚动）。 */
+  #bots, #charter { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #bots h2, #charter h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600;
+    letter-spacing: .08em; color: #8b95a7; text-transform: uppercase; }
+  #bots-state, #charter-state, #bot-empty { margin: 8px 0 0; font-size: 13px; color: #8b95a7; }
+  #bots-error, #charter-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px;
+    color: #ffb4ab; background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
+    border-radius: 6px; }
+  #bot-list { list-style: none; margin: 12px 0 0; padding: 0; }
+  #bot-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid #1f2430; cursor: pointer; }
+  #bot-list li:first-child { border-top: none; }
+  #bot-list li:hover { background: #1a1f2a; }
+  #bot-list li[data-selected="true"] { background: #1a1f2a; box-shadow: inset 2px 0 #3fb950; }
+  #bot-list li:focus-visible { outline: 1px solid #58627a; outline-offset: 2px; }
+  .bot-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .bot-permission { display: inline-block; margin-right: 6px; padding: 0 6px; font-size: 11px;
+    color: #8b95a7; border: 1px solid #39404f; border-radius: 999px; }
+  .bot-charter-summary { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
+  #bots[data-state="idle"] #bot-list,
+  #bots[data-state="idle"] #bot-empty,
+  #bots[data-state="loading"] #bot-list,
+  #bots[data-state="loading"] #bot-empty,
+  #bots[data-state="ready"] #bots-state,
+  #bots[data-state="error"] #bots-state,
+  #bots[data-state="error"] #bot-list,
+  #bots[data-state="error"] #bot-empty { display: none; }
+  #charter-memory { margin: 8px 0 0; font-size: 13px; color: #8b95a7;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
+  #charter-content { margin: 10px 0 0; max-height: 60vh; overflow: auto;
+    white-space: pre-wrap; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; line-height: 1.6; }
+  #charter[data-state="idle"] #charter-memory,
+  #charter[data-state="idle"] #charter-content,
+  #charter[data-state="loading"] #charter-memory,
+  #charter[data-state="loading"] #charter-content,
+  #charter[data-state="ready"] #charter-state,
+  #charter[data-state="error"] #charter-state,
+  #charter[data-state="error"] #charter-memory,
+  #charter[data-state="error"] #charter-content { display: none; }
 </style>
 </head>
 <body>
@@ -273,6 +320,24 @@ INDEX_HTML: Final = """<!doctype html>
     <p id="diff-truncated" hidden>已截断：差异太大，只显示前一部分</p>
     <p id="diff-stat" hidden></p>
     <pre id="diff-patch" hidden></pre>
+  </section>
+  <!-- 主区 charter 面板（S6 D8）：位置在 #diff 之后，不重排既有布局。charter 是用户可
+       编辑文本 = 不可信：全文只进一个 <pre> 的 textContent（绝不拼 HTML）。 -->
+  <section id="charter" data-state="idle" aria-live="polite">
+    <h2 id="charter-title">Charter</h2>
+    <p id="charter-state">点左侧的 Bot 查看它的 charter</p>
+    <p id="charter-error" role="alert" hidden></p>
+    <p id="charter-memory" hidden></p>
+    <pre id="charter-content" hidden></pre>
+  </section>
+  <!-- 左栏 Bots 区（S6 D8）：在 #repos 之前（03-ui-spec §2：左栏上 Bot / 下仓库）。
+       初始 idle：没选仓库之前不装成「这个仓库没有 Bot」。 -->
+  <section id="bots" data-state="idle" aria-live="polite">
+    <h2 id="bots-title">Bots</h2>
+    <p id="bots-state">选择一个仓库查看它的 Bot</p>
+    <p id="bots-error" role="alert" hidden></p>
+    <ul id="bot-list"></ul>
+    <p id="bot-empty" hidden>这个仓库还没有 Bot。</p>
   </section>
   <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
        「还没有仓库」（S3 D1：空 与 没连上 必须可区分）。 -->
@@ -357,6 +422,29 @@ INDEX_HTML: Final = """<!doctype html>
   var selectedBranchName = null;  // 当前点选的分支行（分支列表重建后恢复 data-selected）
   var diffRequestToken = 0;       // 只认最后一次 diff 请求的回包（同 branchRequestToken）
 
+  // Bots 区与 charter 面板（S6 D8）
+  var botsEl = document.getElementById("bots");
+  var botsState = document.getElementById("bots-state");
+  var botsError = document.getElementById("bots-error");
+  var botList = document.getElementById("bot-list");
+  var botEmpty = document.getElementById("bot-empty");
+  var charterEl = document.getElementById("charter");
+  var charterTitle = document.getElementById("charter-title");
+  var charterState = document.getElementById("charter-state");
+  var charterError = document.getElementById("charter-error");
+  var charterMemory = document.getElementById("charter-memory");
+  var charterContent = document.getElementById("charter-content");
+  var BOT_HINT = "选择一个仓库查看它的 Bot";
+  var CHARTER_HINT = "点左侧的 Bot 查看它的 charter";
+  // 两个面板**自己的**兜底：表外的码不显示绑定场景的「绑定失败」（同分支/差异面板）。
+  var BOT_ERROR_FALLBACK = "读取 Bot 列表失败";
+  var CHARTER_ERROR_FALLBACK = "读取 charter 失败";
+  var selectedBotId = null;       // 选中的 Bot 与 repo 强绑定（D8）；切仓库/断连时清
+  var selectedBotName = "";
+  var botMemoryPaths = {};        // botId → memoryPath（来自 bot.list；charter.get 不回它）
+  var botRequestToken = 0;        // 只认最后一次 bot.list 的回包（快速切仓库）
+  var charterRequestToken = 0;    // 只认最后一次 charter 请求的回包
+
   function setState(state, text) {
     statusEl.dataset.state = state;
     statusText.textContent = text;
@@ -391,6 +479,10 @@ INDEX_HTML: Final = """<!doctype html>
       : "正在连接内核…");
     // S5 D9：差异面板同一纪律——断连回 idle + 「已断开：差异未知」+ 清空，不留旧 diff。
     resetDiff("idle", state === "disconnected" ? "已断开：差异未知" : "正在连接内核…");
+    // S6 D8：Bots 与 charter 两个面板一起回 idle 并清空（不留旧 charter）。选中的 Bot
+    // 与 repo 强绑定，不清 selectedBotId：重连后由 renderBots 重放（D8）。
+    resetBots("idle", state === "disconnected" ? "已断开：Bot 列表未知" : "正在连接内核…");
+    resetCharter("idle", state === "disconnected" ? "已断开：charter 未知" : "正在连接内核…");
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -446,12 +538,17 @@ INDEX_HTML: Final = """<!doctype html>
       // 选中的仓库从列表里消失（解绑 / 换了库）：回 idle 并清空（D6）
       selectedRepoId = null;
       selectedRepoName = "";
+      selectedBotId = null;
+      selectedBotName = "";
       resetBranches("idle", "从左侧选择一个仓库");
       resetDiff("idle", DIFF_HINT);   // S5 D9：差异面板一起清空，不留上一个仓库的对比
+      resetBots("idle", BOT_HINT);    // S6 D8：Bots 与 charter 一起回 idle（选中的 Bot 随仓库消失）
+      resetCharter("idle", CHARTER_HINT);
       return;
     }
     applyRepoSelection();
     loadBranches();   // 重连且仍有选中仓库 → 与 loadRepos 同一条路径自动重取（D6）
+    loadBots();       // S6 D8：重连仍选中仓库 → 重取 bot.list（charter 面板不清空）
   }
 
   function loadRepos() {
@@ -734,6 +831,182 @@ INDEX_HTML: Final = """<!doctype html>
     requestDiff(base, head);
   }
 
+  // -------------------------------------------------------------------------
+  // Bots 与 charter（S6 D8）。三条纪律与分支/差异面板同源：
+  //   1. 显隐只由 CSS 的 `#bots[data-state=…]` / `#charter[data-state=…]` 与 hidden 决定；
+  //   2. 切仓库 / 断连：两个面板都回 idle 并清空（不留旧 charter 装新鲜）；
+  //   3. 快速切换时旧回包不能覆盖新结果（botRequestToken / charterRequestToken）。
+  // charter 全文只进 textContent：它是用户可编辑文本，等于不可信输入（05 §4.2 同一精神）。
+  // -------------------------------------------------------------------------
+
+  function botErrorText(code) {
+    return ERROR_TEXT[code] || BOT_ERROR_FALLBACK;
+  }
+
+  function charterErrorText(code) {
+    // INVALID_PARAMS 在 charter 场景 = botId 查不到（D6）；不显示 S3 绑定场景的「路径参数不合法」。
+    if (code === "INVALID_PARAMS") { return "找不到这个 Bot"; }
+    return ERROR_TEXT[code] || CHARTER_ERROR_FALLBACK;
+  }
+
+  function charterTitleText() {
+    return selectedBotId ? ("Charter · " + selectedBotName) : "Charter";
+  }
+
+  function resetBots(state, text) {
+    botRequestToken += 1;                 // 让在途请求的回包作废
+    botsEl.dataset.state = state;
+    botsState.textContent = text;
+    botList.textContent = "";
+    botsError.textContent = "";
+    botsError.hidden = true;
+    botEmpty.hidden = true;
+  }
+
+  function applyBotSelection() {
+    var rows = botList.querySelectorAll("li[data-bot-id]");
+    for (var i = 0; i < rows.length; i++) {
+      if (selectedBotId !== null && rows[i].dataset.botId === selectedBotId) {
+        rows[i].dataset.selected = "true";
+        rows[i].setAttribute("aria-current", "true");
+      } else {
+        delete rows[i].dataset.selected;
+        rows[i].removeAttribute("aria-current");
+      }
+    }
+  }
+
+  // 一行 Bot：名字 + 权限徽标 + 职责摘要（charter 第一段；空 charter 是「尚未填写职责」）。
+  // 整行可选中（D8）：tabindex + role=button，click 与 Enter/Space 同一条路径。
+  function renderBots(list) {
+    botList.textContent = "";
+    for (var i = 0; i < list.length; i++) {
+      var bot = list[i] || {};
+      var rowId = String(bot.botId || "");
+      var rowName = String(bot.name || "（未命名）");
+      var li = document.createElement("li");
+      li.dataset.botId = rowId;
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      (function (botId, botName) {
+        li.addEventListener("click", function () { selectBot(botId, botName); });
+        li.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+            ev.preventDefault();           // 防 Space 滚动页面
+            selectBot(botId, botName);
+          }
+        });
+      }(rowId, rowName));
+      var name = document.createElement("span");
+      name.className = "bot-name";
+      name.textContent = rowName;
+      var badge = document.createElement("span");
+      badge.className = "bot-permission";
+      badge.textContent = String(bot.permission || "");
+      var summary = document.createElement("span");
+      summary.className = "bot-charter-summary";
+      summary.textContent = String(bot.charterSummary || "");
+      // D8：记忆目录来自 bot.list 的 memoryPath（memory.charter.get 只回 content/rev）。
+      botMemoryPaths[rowId] = String(bot.memoryPath || "");
+      li.appendChild(name);
+      li.appendChild(badge);
+      li.appendChild(summary);
+      botList.appendChild(li);
+    }
+    // 只有「真的拿到了一个（可能为空的）列表」时才能说「这个仓库还没有 Bot」
+    botEmpty.hidden = list.length !== 0;
+    var stillListed = false;
+    for (var j = 0; j < list.length; j++) {
+      if (String((list[j] || {}).botId || "") === selectedBotId) { stillListed = true; break; }
+    }
+    if (!stillListed) {
+      // 选中的 Bot 从列表里消失：回 idle 并清空（D8）；不动 repo 层的选中状态
+      selectedBotId = null;
+      selectedBotName = "";
+      resetCharter("idle", CHARTER_HINT);
+      return;
+    }
+    applyBotSelection();
+    // 断连重置过面板（选中 Bot 仍与 repo 绑定）：重连后把 charter 重放回来。**不清空**
+    // 已显示的 charter——重放只在 idle 时发生（D8 的「不清空」）。
+    if (charterEl.dataset.state === "idle" && selectedBotId !== null) {
+      loadCharter(selectedBotId, selectedBotName);
+    }
+  }
+
+  function loadBots() {
+    if (selectedRepoId === null) { resetBots("idle", BOT_HINT); return; }
+    var repoId = selectedRepoId;
+    var token = ++botRequestToken;
+    botsEl.dataset.state = "loading";
+    botsState.textContent = "正在读取 Bot…";
+    botList.textContent = "";
+    botsError.textContent = "";
+    botsError.hidden = true;
+    botEmpty.hidden = true;
+    request("bot.list", { repoId: repoId }, function (err, data) {
+      if (token !== botRequestToken) { return; }   // 过期回包：切了仓库或已断连
+      if (err) {
+        botsEl.dataset.state = "error";
+        botsError.textContent = botErrorText(err);  // 按码映射，不看 message
+        botsError.hidden = false;
+        return;
+      }
+      renderBots(Array.isArray(data) ? data : []);
+      botsEl.dataset.state = "ready";
+    });
+  }
+
+  function resetCharter(state, text) {
+    charterRequestToken += 1;
+    charterEl.dataset.state = state;
+    charterTitle.textContent = charterTitleText();
+    charterState.textContent = text;
+    charterError.textContent = "";
+    charterError.hidden = true;
+    charterMemory.textContent = "";
+    charterMemory.hidden = true;
+    charterContent.textContent = "";
+    charterContent.hidden = true;
+  }
+
+  function loadCharter(botId, botName) {
+    var token = ++charterRequestToken;
+    charterEl.dataset.state = "loading";
+    charterTitle.textContent = "Charter · " + botName;
+    charterState.textContent = "正在读取 charter…";
+    charterError.textContent = "";
+    charterError.hidden = true;
+    charterMemory.textContent = "";
+    charterMemory.hidden = true;
+    charterContent.textContent = "";
+    charterContent.hidden = true;
+    request("memory.charter.get", { botId: botId }, function (err, data) {
+      if (token !== charterRequestToken) { return; }  // 过期回包：切了仓库/Bot 或已断连
+      if (err) {
+        charterEl.dataset.state = "error";
+        charterError.textContent = charterErrorText(err);
+        charterError.hidden = false;
+        return;
+      }
+      var payload = data || {};
+      charterEl.dataset.state = "ready";
+      // D9：显示绝对路径原样（状态根可被 POSTEL_HOME 覆盖，伪装 ~ 是假话）。
+      charterMemory.textContent = "记忆目录：" + String(botMemoryPaths[botId] || "");
+      charterMemory.hidden = false;
+      charterContent.textContent = String(payload.content == null ? "" : payload.content);
+      charterContent.hidden = false;
+    });
+  }
+
+  function selectBot(botId, botName) {
+    if (!botId) { return; }
+    selectedBotId = botId;
+    selectedBotName = botName;
+    applyBotSelection();
+    loadCharter(botId, botName);
+  }
+
   function selectRepo(repoId, name) {
     if (!repoId) { return; }
     selectedRepoId = repoId;
@@ -742,6 +1015,11 @@ INDEX_HTML: Final = """<!doctype html>
     // S5 D9：切仓库 → 差异面板回 idle 并清空 patch/stat/error/选中行，标题跟着仓库名变。
     // 显式重选同一个仓库也会清空（用户正在看的对比就此结束，不静默留着旧结果）。
     resetDiff("idle", DIFF_HINT);
+    // S6 D8：切仓库 → 选中的 Bot 作废，charter 面板回 idle 并清空；Bots 区按新仓库重取。
+    selectedBotId = null;
+    selectedBotName = "";
+    resetCharter("idle", CHARTER_HINT);
+    loadBots();
     loadBranches();
   }
 

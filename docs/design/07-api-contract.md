@@ -316,6 +316,79 @@
 > **只到 `<a>...<b>`**：不支持 pathspec（`-- path`）、不开 rename 检测（重命名 = 一删一增）、
 > 不做语法高亮（只按行着色，前端的事）。
 
+
+### 4.7 `bot.list`（S6：左栏的 Bot）
+
+```json
+// 请求：repoId 是已绑定仓库的 12 位 id
+{"type":"req","id":"c7","method":"bot.list","params":{"repoId":"adec6540a725"}}
+// 成功：data 是**数组**；M1 每个仓库恰好一个预置 Bot（第一次 bot.list 时惰性播种）
+{"type":"res","id":"c7","ok":true,
+ "result":{"data":[{"botId":"adec6540a725/builder","repoId":"adec6540a725","name":"builder",
+                    "permission":"L1","agentKind":null,"charterRev":3254720643,
+                    "charterSummary":"尚未填写职责",
+                    "memoryPath":"/home/u/.postel/bots/adec6540a725/builder"}],
+           "seq":18}}
+```
+
+`bot` 载荷（**恰好 8 个字段，不多不少**，S6 D1）：
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `botId` | string | `{repoId}/{name}`（06 §2.2 的复合主键） |
+| `repoId` | string | 12 位 hex |
+| `name` | string | 06 §2.2 白名单 `^[a-z][a-z0-9-]{0,31}$` |
+| `permission` | string | M1 恒为 `"L1"`（06 §2.2 默认；改权限是 M2） |
+| `agentKind` | string \| **null** | M1 是 **`null`（未选择）**：S9 之前没有任何通道被验证过，编一个适配器名等于宣称"已支持"（04 §6 禁止） |
+| `charterRev` | number | 见 §4.8：`int(sha256(charter 内容)[:8], 16)` |
+| `charterSummary` | string | charter 第一个正文段落的摘要（>80 字符截断加 `…`）；没有正文时 `"尚未填写职责"` |
+| `memoryPath` | string | **绝对路径**：`<状态根>/bots/<repoId>/<name>`（不伪装 `~`，S6 D9） |
+
+**惰性播种（S6 D2）**：`bot.create` 是 S8，M1 没有创建入口。`bot.list` 发现该 repo
+**一个 Bot 都没有**时，创建预置 Bot（`builder` / `L1` / `agentKind=null`）并创建记忆空间；
+**已有任何 Bot 绝不新建**（连调两次仍是 1 个）。这是 M1 的临时形态：一个读方法会落一行
+（06 U17，到期 S8）。
+
+错误码（**不许新增码**，07 §1.3 之内）：
+
+| 情形 | 码 |
+|---|---|
+| `repoId` 缺失 / 非字符串 / 空 | `INVALID_PARAMS` |
+| `repoId` 查不到 | `REPO_NOT_BOUND` |
+| 记忆目录 / charter 读失败（权限、磁盘满） | `INTERNAL` |
+
+> **不探测仓库路径是否还在**：Bot 元数据在 `state.db`、charter 在状态根，与仓库目录是否存在
+> 无关——仓库被删了，仍应能读到它给 Bot 写的 charter（审计材料）。只有 `repoId` 查不到才报
+> `REPO_NOT_BOUND`。
+
+### 4.8 `memory.charter.get`（S6：charter 全文）
+
+```json
+{"type":"req","id":"c8","method":"memory.charter.get","params":{"botId":"adec6540a725/builder"}}
+{"type":"res","id":"c8","ok":true,
+ "result":{"data":{"content":"# builder\n\n## 身份\n\n…","rev":3254720643},"seq":19}}
+```
+
+`data` 载荷（**恰好两个字段**）：
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `content` | string | charter 全文（可能是空串；M1 的播种会先写入空白骨架） |
+| `rev` | number | `int(sha256(content.encode("utf-8")).hexdigest()[:8], 16)`——整数、随内容变、无状态 |
+
+**内容的事实源是文件**（`<状态根>/bots/<repoId>/<name>/charter.md`，权限 `0600`），**不落库**
+（06 §8）。DB 的 `bots.charter_rev` 列先建但 M1 不维护（写路径是 S22 的 `charter.set`，06 U17）。
+目录缺失时自愈（缺什么建什么）；**已存在的 charter 绝不覆盖**（用户编辑不可丢）。读失败
+（权限 / 磁盘）→ `INTERNAL`。
+
+错误码：
+
+| 情形 | 码 |
+|---|---|
+| `botId` 缺失 / 非字符串 | `INVALID_PARAMS` |
+| `botId` 格式合法但查不到（含路径穿越企图） | `INVALID_PARAMS`（文案「找不到这个 Bot」；07 §1.3 没有更贴的码，M1 不擅自扩码表） |
+| charter 读失败（权限、磁盘满） | `INTERNAL` |
+
 ---
 
 ## 5. 兼容与演进

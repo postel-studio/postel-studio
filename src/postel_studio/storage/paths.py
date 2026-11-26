@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Final
 
+from postel_studio.domain.models import bot_name_ok
+
 ENV_HOME: Final = "POSTEL_HOME"
 SERVER_FILE: Final = "server.json"
 LOCK_FILE: Final = "kernel.lock"
@@ -201,3 +203,71 @@ def release_lock(path: Path) -> None:
     """只删自己的锁（`--force` 接管存活内核时不能把对方的锁删掉）。"""
     if read_lock_pid(path) == os.getpid():
         path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Bot 的记忆空间（S6 D3）：<状态根>/bots/<repo_id>/<name>/{charter.md, memory/, sessions/}
+#
+# 权限是安全约束（05 §4.1）：目录 0700、文件 0600。**必须显式 chmod**——umask 022 下
+# `mkdir(mode=0o700)` 只有叶子吃到 mode、父级是 0755，`write_text` 建出来是 0644（T38）。
+# 所以：每层建完显式收紧，写 charter 用 `atomic_write`（mkstemp 0600），不用 write_text。
+# ---------------------------------------------------------------------------
+
+BOTS_DIR: Final = "bots"
+CHARTER_FILE: Final = "charter.md"
+MEMORY_DIR: Final = "memory"
+SESSIONS_DIR: Final = "sessions"
+# D4 的骨架：**空白待填**，不预设任何业务职责（禁止事项）。末尾一个换行。
+CHARTER_TEMPLATE: Final = """# {name}
+
+## 身份
+
+## 职责
+
+## 边界
+
+## 工作方式
+"""
+
+
+def bots_root() -> Path:
+    """`<状态根>/bots`（**不创建**）：Bot 的记忆只在状态根下，绝不写进用户仓库。"""
+    return state_root() / BOTS_DIR
+
+
+def bot_memory_dir(repo_id: str, name: str) -> Path:
+    """`<状态根>/bots/<repo_id>/<name>`（**不创建**）。
+
+    名字进路径前必须过白名单；再断言 `resolve()` 之后仍在 `bots_root()` 之下（D3 的纵深
+    防御：白名单已足够，但将来有人放宽白名单时这一条还拦得住路径穿越）。
+    """
+    if not bot_name_ok(name):
+        raise ValueError(f"bot 名字不合法：{name!r}")
+    path = bots_root() / repo_id / name
+    if not path.resolve().is_relative_to(bots_root()):
+        raise ValueError(f"bot 记忆路径越出 bots 根：{path}")
+    return path
+
+
+def ensure_memory_space(repo_id: str, name: str) -> Path:
+    """**缺什么建什么**，返回记忆目录；`charter.md` 已存在就**只读不写**（幂等，D2/D3）。"""
+    target = bot_memory_dir(repo_id, name)
+    for path in (
+        ensure_state_root(),
+        bots_root(),
+        target.parent,
+        target,
+        target / MEMORY_DIR,
+        target / SESSIONS_DIR,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        _chmod(path, DIR_MODE)  # 显式收紧：umask 让 mkdir 的默认 mode 变松（T38）
+    charter = target / CHARTER_FILE
+    if not charter.exists():  # D3：已存在就不动，绝不覆盖用户编辑
+        atomic_write(charter, CHARTER_TEMPLATE.format(name=name).encode("utf-8"))
+    return target
+
+
+def read_charter(repo_id: str, name: str) -> str:
+    """读 charter 正文（UTF-8）。文件不存在时抛 `FileNotFoundError`，由调用方决定语义。"""
+    return (bot_memory_dir(repo_id, name) / CHARTER_FILE).read_text(encoding="utf-8")

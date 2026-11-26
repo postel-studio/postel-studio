@@ -13,6 +13,7 @@
   │ L3  api/gateway.py    协议与认证              │
   │     api/app.py        路由表 + 装配           │
   │     api/repository.py 仓库业务编排（S3）      │  不碰 fastapi
+  │     api/bots.py       Bot 与 charter 编排（S6）│  不碰 fastapi
   ├─────────────────────────────────────────────┤
   │ L2  api/server.py     进程生命周期            │  唯一拥有 socket / 信号
   ├─────────────────────────────────────────────┤
@@ -28,6 +29,7 @@
 
 **S3 新增三块**：`gitops/`（子进程）、`storage/db.py`（SQLite）、`domain/`（纯模型），
 以及 L3 的 `api/repository.py`（业务编排）。它们都是**新层，遵守同一张表**。
+**S6 只加了同层的一个新模块**：`api/bots.py`（L3，与 repository 同款：不碰 fastapi）。
 
 **规则一句话：只能向下 import，不能向上；同层之间尽量不 import（唯一例外见 §3）。**
 
@@ -41,6 +43,7 @@ graph TD
     GW["api/gateway.py<br/>网关"]
     FR["api/frames.py<br/>帧编解码"]
     RS["api/repository.py<br/>仓库业务编排"]
+    BT["api/bots.py<br/>Bot 与 charter（S6）"]
     AS["web/assets.py<br/>页面"]
     DB["storage/db.py<br/>state.db"]
     PA["storage/paths.py<br/>状态根/文件 IO"]
@@ -62,6 +65,10 @@ graph TD
     RS --> DB
     RS --> GO
     RS --> DM
+    BT --> DB
+    BT --> PA
+    BT --> DM
+    BT --> FR
     DB --> PA
     DB --> DM
     PA -.->|"函数内 import<br/>(版本号)"| CLI
@@ -86,7 +93,12 @@ graph TD
 | `repository → domain`（S3） | `Repo` 与 `repo_id` | 否 |
 | `repository → frames`（S3） | 抛 `FrameError`（纯数据错误类型） | 否 |
 | `db → paths`（S3） | 取 `state.db` 路径（唯一事实源） | 否 |
-| `db → domain`（S3） | 行 ↔ `Repo` | 否 |
+| `db → domain`（S3） | 行 ↔ `Repo` / `Bot` | 否 |
+| `app → bots`（S6） | 构造 `BotStore` + `BotService` 注入网关 | 否 |
+| `bots → db`（S6） | `BotStore` 读写 `bots` 表 | 否 |
+| `bots → paths`（S6） | 记忆空间（`ensure_memory_space` / `read_charter`）、`memoryPath` | 否 |
+| `bots → domain`（S6） | `Bot` / `bot_id` / 权限默认值 | 否 |
+| `bots → frames`（S6） | 抛 `FrameError`（与 repository 同款） | 否 |
 | **`gateway → repository`** | **不存在，也不许有**：网关只收到 `Providers` 里的两个函数 | — |
 
 ### 2.0 S3 的分层要点：`repository` 在 L3，但它不认识 fastapi
@@ -137,6 +149,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | `api/app.py` | `api/server.py`（反向会成环） |
 | `api/gateway.py` | `api/app.py`（T14：能力靠 `Providers` 注入）/ `api/server.py` / `repository` / `web` / `storage` / `gitops` / `domain` |
 | `api/repository.py` | `app` / `gateway` / `server` / `web` / `fastapi` / `starlette` / `uvicorn` |
+| `api/bots.py`（S6，L3） | `web`（被 app 装配、被 gateway 注入调用；碰页面就是反向） |
 | `web/assets.py`（L4） | `api`（被 app import，反向即环） |
 
 两条比旧片段更严的地方：
@@ -160,10 +173,11 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 |---|---|---|
 | ~~`git/`~~ → **已出现**：`gitops/`（S3） | L0（碰磁盘/子进程） | `api/repository.py` |
 | ~~`store/`~~ → **已出现**：`storage/db.py`（S3，**有意不叫 `store/`**：`RepoStore` 是类名，包名会让"store 模块"和"store 对象"混淆） | L0 | `api/app.py`、`api/repository.py` |
-| 后续 bot/task/candidate 表 | 加到 `storage/db.py` 的 `_MIGRATIONS` | |
+| ~~后续 bot 表~~ → **已出现**（S6）：`bots` | `storage/db.py` 的 `_MIGRATIONS` v3 | `api/bots.py` |
+| 后续 task/candidate 表 | 加到 `storage/db.py` 的 `_MIGRATIONS` | |
 | `agent/`（ACP 客户端、子进程） | L0 | |
 | `permission/`（纯函数判定） | L1（**无 IO**） | 执行前 |
-| `memory/`（charter 与上下文注入） | L0 | |
+| ~~`memory/`（charter 与上下文注入）~~ → **S6 拆成两处**：charter 文件 IO 在 `storage/paths.py`（L0）、编排在 `api/bots.py`（L3） | 不新增包 | `storage/paths.py`、`api/bots.py` |
 | 新的 `api/*.py` handler 模块 | L3 | app/gateway |
 
 **关键约束（来自 05-security）**：`permission/` 必须是**纯函数、无 IO**，且判定发生在执行之前。
@@ -179,5 +193,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 - **禁止**在 `gateway.dispatch()` 里写 `if agent == "opencode"` 这类具体 Agent 分支
   （04-task-breakdown §6 全局禁令）。
 - **禁止** `api/repository.py` import fastapi / starlette / uvicorn（S3 涉及文件表的要求）。
+- **禁止** `api/bots.py` import `web`（S6 的 `LAYERS` 登记只有这一条禁令）：页面由 `app` 渲染，
+  业务编排不产出任何面向用户的 HTML。
 - **禁止** `domain/` 碰 IO（不 `open`、不 `subprocess`、不 `sqlite3`）：它无依赖才能被一行断言。
 - **禁止** 在 `gitops/` 之外再写 `subprocess.run([... "git" ...])`：允许根（D4）只有一处实现。

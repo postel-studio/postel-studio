@@ -7,16 +7,17 @@
 | 层 | 模块页 | 源文件 | 行数 | 一句话 |
 |---|---|---|---|---|
 | L0 | [entry](entry.md) | `src/postel_studio/__init__.py` | 55 | CLI 入口，解析 `serve` / `version` |
-| L0 | [paths](paths.md) | `src/postel_studio/storage/paths.py` | 203 | 状态根、锁、原子写、权限 |
-| L0 | [domain](domain.md) | `src/postel_studio/domain/models.py` | 131 | `Repo` 实体、origin 归一化、`repo_id`（**无 IO**） |
+| L0 | [paths](paths.md) | `src/postel_studio/storage/paths.py` | 273 | 状态根、锁、原子写、权限、Bot 记忆空间（S6） |
+| L0 | [domain](domain.md) | `src/postel_studio/domain/models.py` | 168 | `Repo` / `Bot` 实体、origin 归一化、`repo_id`（**无 IO**） |
 | L0 | [gitops](gitops.md) | `src/postel_studio/gitops/repo.py` | 468 | git 只读探测（子进程，含 S4 分支列表 + S5 diff）——**唯一起 git 的地方** |
-| L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 261 | `state.db`、schema 迁移、`RepoStore` |
+| L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 356 | `state.db`、schema 迁移（v3）、`RepoStore` / `BotStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 256 | 进程生命周期、信号、日志 |
-| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 96 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store 并注入 |
-| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 174 | WS 认证与帧分派（6 个方法） |
+| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 101 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store/service 并注入 |
+| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 181 | WS 认证与帧分派（8 个方法） |
 | L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 405 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的业务编排（**不碰 fastapi**） |
+| L3 | [bots](bots.md) | `src/postel_studio/api/bots.py` | 181 | `bot.list` / `memory.charter.get` 的业务编排（惰性播种 + charter 摘要/rev，**不碰 fastapi**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 121 | 帧编解码，纯函数 |
-| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 948 | 页面 HTML + 内联 JS（S3 左栏仓库区 + S4 分支面板 + S5 差异面板） |
+| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 1226 | 页面 HTML + 内联 JS（S3 左栏仓库区 + S4 分支面板 + S5 差异面板 + S6 Bots/charter 面板） |
 
 **必须有但我还没单列的**（内容已在别处）：
 
