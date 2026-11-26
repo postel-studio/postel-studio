@@ -14,9 +14,9 @@
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 256 | 进程生命周期、信号、日志 |
 | L3 | [app](app.md) | `src/postel_studio/api/app.py` | 95 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store 并注入 |
 | L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 169 | WS 认证与帧分派（5 个方法） |
-| L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 249 | `repo.bind` / `repo.list` / `repo.branches` 的业务编排（**不碰 fastapi**） |
+| L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 256 | `repo.bind` / `repo.list` / `repo.branches` 的业务编排（**不碰 fastapi**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 121 | 帧编解码，纯函数 |
-| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 465 | 页面 HTML + 内联 JS（含 S3 的左栏仓库区） |
+| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 683 | 页面 HTML + 内联 JS（S3 左栏仓库区 + S4 主区分支面板） |
 
 **必须有但我还没单列的**（内容已在别处）：
 

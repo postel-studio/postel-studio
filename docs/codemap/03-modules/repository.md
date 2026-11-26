@@ -1,6 +1,6 @@
 # 03 · repository — `src/postel_studio/api/repository.py`
 
-> 层 L3 · 249 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5](../../design/07-api-contract.md)
+> 层 L3 · 256 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5](../../design/07-api-contract.md)
 
 ## 职责
 

@@ -28,9 +28,9 @@ S4 起主区有「分支」面板（D6 的 DOM 契约）：左栏仓库行可选
 
 | 元素/函数 | 行 | 做什么 |
 |---|---|---|
-| `<section id="repos" data-state="loading">` | 218 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
-| `#bind-form` / `#bind-path` / `#bind-button` | 220-223 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
-| `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 225-228 | 错误 / 连接状态 / 列表 / 空态 |
+| `<section id="repos" data-state="loading">` | 217 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
+| `#bind-form` / `#bind-path` / `#bind-button` | 219-222 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
+| `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 224-227 | 错误 / 连接状态 / 列表 / 空态 |
 | `setRepoState(state, text)` | 291 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**）；非 connected 时把分支面板重置回 idle |
 | `errorText(code)` | 310 | 错误码 → 文案（**不看 message**；绑定表单用） |
 | `renderRepos(list)` | 318 | 一行 = 名称 + 「默认分支 X」；`li` 可选中（`tabindex` / `role=button` / `data-selected`），重建后恢复选中标记 |
