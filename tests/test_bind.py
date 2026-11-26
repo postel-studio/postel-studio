@@ -556,7 +556,8 @@ def test_bind_uses_git_in_a_way_that_cannot_prompt(
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert "GIT_DIR" not in env and "GIT_WORK_TREE" not in env
-    assert gitops.GIT_TIMEOUT_SECONDS > 0
+    assert isinstance(gitops.GIT_TIMEOUT_SECONDS, float)
+    assert 0 < gitops.GIT_TIMEOUT_SECONDS <= 5.0  # D5：必须有超时，且不超过 5 秒
 
     # 真的跑一次，确认带环境变量也照样能工作（不是"配了但被覆盖"）
     repo = repo_factory("proj")
