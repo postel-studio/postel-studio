@@ -1,6 +1,7 @@
 # 决策记录：`repo_id` 的稳定性（S3 遗留，S4 前必须落地）
 
-> 状态：**已裁决，待实施**（S3 审核时发现，S3 本身不修）
+> 状态：**已裁决 · 已落地**（S3.5 实施；S3 审核时发现，S3 本身不修）。
+> D1 有一个已知副作用「仓库被移动到新路径会产生第二行」，**未修**，见 §7。
 > 上游：[06-data-model.md](06-data-model.md) §2.1、[07-api-contract.md](07-api-contract.md) §4.1
 > 来源：[issues/S3-bind-repo.md](issues/S3-bind-repo.md) D3、codemap 06-pitfalls U9
 
@@ -117,13 +118,13 @@ PRAGMA user_version = 2;
 
 | 改什么 | 文件 |
 |---|---|
-| `repo_id()` 改为只算路径哈希 | `src/postel_studio/domain/models.py` |
-| 新增 `origin_hash()` | 同上 |
-| `upsert` 改成"已存在则不覆盖 repo_id" | `src/postel_studio/storage/db.py` |
-| schema v2 + 迁移 | 同上 |
-| 06 §2.1 字段表 + 不变量改写 | `docs/design/06-data-model.md` |
-| 07 §4.1 示例（`repoId` 语义不变，但要说明它稳定） | `docs/design/07-api-contract.md` |
-| 测试：加 remote 后 id 不变、旧 id 仍可查 | `tests/test_bind.py` |
+| ✅ `repo_id()` 改为只算路径哈希（签名收成 `repo_id(path)`） | `src/postel_studio/domain/models.py` |
+| ✅ 新增 `origin_hash()`（复用 `normalize_origin`） | 同上 |
+| ✅ `upsert` 改成"已存在则不覆盖 repo_id" | `src/postel_studio/storage/db.py` |
+| ✅ schema v2（`ALTER TABLE … ADD COLUMN origin_hash`）+ 迁移 | 同上 |
+| ✅ 06 §2.1 字段表 + 不变量改写 | `docs/design/06-data-model.md` |
+| ✅ 07 §4.1 示例（`repoId` 语义不变，但注明它稳定） | `docs/design/07-api-contract.md` |
+| ✅ 测试：加 remote 后 id 不变、旧 id 仍可查、v1→v2 真库迁移 | `tests/test_bind.py` |
 
 **属于哪一刀**：建议作为 S3 的一个小补丁（S3.5）单独提 PR，**不要**塞进 S4。
 理由是 S4 会依赖 `repo_id` 的语义，先把它钉死再做分支列表，S4 的审查会简单很多。
@@ -150,3 +151,58 @@ S3 的验收标准（1–5）已经全部满足，`repo_id` 变化**在 S3 的�
 
 **但它是硬阻塞**：S4 只要有 `repo.branches(repoId)`，这个问题就变成用户可见的失败。所以
 **S4 的规格里必须先引用本文**。
+
+---
+
+## 6. 落地记录（S3.5）
+
+- **裁决落地**：D1/D2/D3 全部按本文实现，**未重写任何已有 `repo_id`**（D3）。
+- **落地后实测的一个事实**（本文没预见到，值得记下）：U9 这个缺陷要**两处**同时成立才复现
+  ——(a) 绑定算出的 id 依赖 origin，**并且** (b) `upsert` 覆盖已存在行的 `repo_id`。
+  S3.5 修完之后，单独把任一处改回旧行为，验收 2/3 的用例**都不会红**：
+  只保留 (b) 时新算法对同一路径算出的 id 本来就相同；只保留 (a) 时规则 1 不覆盖 id。
+  所以反向验证只能注入 (a)+(b) 的完整形态，而单独两半各写成"必须仍然绿"的用例——
+  见 `tests/test_reverse_checks.py` 的 `COMPOSITE_INJECTIONS` / `_ONLY_*` 与 06-pitfalls T32。
+- **已知留痕（D3）**：v1 时代绑过、且有 origin 的仓库，其 `repo_id` 是**URL 哈希**而不是
+  路径哈希。它已经稳定（不会再变），**不要**为了"统一"去重算。
+- **老行 `origin_hash` 为 NULL**：迁移不回填（收益只是让去重提示多覆盖几条历史记录，
+  风险是迁移本身出错）。要做请单独一刀，且只碰 `origin_hash`。
+
+---
+
+## 7. 已知副作用：仓库被移动到新路径（D1 的代价，未修）
+
+D1 不是免费的：`repo_id = sha256(绑定时绝对路径)[:12]`，所以**仓库被移动到新路径后 id 会变**。
+本文 §2 的裁决里已把它列为"已知代价"，S3.5 落地时实测到了它**在行为上的完整形态**，
+比"id 会变"更难看——它会把同一仓库变成**两条记录**：
+
+```text
+绑定 /repo-a（有 origin）        → repoId = 8b02f80ff6e2
+mv /repo-a /repo-b
+绑定 /repo-b                     → repoId = bb89f185a3c0
+repo.list                        → 两行：
+  ('/repo-a', '8b02f80ff6e2')   ← path 已不存在（僵尸行）
+  ('/repo-b', 'bb89f185a3c0')
+```
+
+**根因**：`RepoStore.upsert` 的规则 2 是"没有 `path` 行、但 `repo_id` 已存在 → `UPDATE` 那行的
+`path`（仓库被移动/改名）"。在 S3 的算法下这条规则正好兜住移动场景：id 来自 origin，移动后
+origin 不变 → `repo_id` 已存在 → 一行被更新。D1 之后 `repo_id = hash(path)`，**"id 存在但
+path 不存在"几乎不可达**（只可能是 v1 遗留的 URL 哈希行），于是移动场景从"更新一行"退化成
+"插入一行"，旧行留成僵尸。**这是 D1 的副作用，不是实现 bug**——但用户会看见它。
+
+**影响**：左栏多一条打不开的坏记录；S4 起 `repo.branches(repoId)` 会对它报错；
+S19 的 doctor 应该能发现"path 不存在"。目前**没有修**，见 06-pitfalls U14。
+
+**建议修法（未实施，需裁决）**：现在有 `origin_hash` 了，可以在"按 `path` 没命中、按
+`repo_id` 也没命中"时，用 `origin_hash` 找一行 **`path` 已不存在**的记录，`UPDATE` 它的
+`path`（**保留 `repo_id`**——id 是身份，不因路径变而变，正是 D1 的精神）。
+
+要注意这不是一行代码的事，有两个前提：
+
+1. 它把 `origin_hash` 从"只用于去重提示"升格成**匹配键**，与 D2「不参与主键/外键」有张力；
+2. `origin_hash` 为 `NULL` 的老行（v1 迁移后未回填）匹配不到；两行同 `origin_hash`
+   （同一 remote 的两个本地副本）且 `path` 都不存在时选哪行、要不要合并，也要定。
+
+所以在 S4 之前由管理者裁决：**修**（写清匹配与冲突规则）还是**接受**（让 doctor 提示，
+用户在界面上删掉旧行）。本刀只负责把代价如实记下来。

@@ -39,10 +39,10 @@
 | `api/repository.py:_bindable_root()` | 06 T25 的回归锁、D2 的验收、`test_plain_directory_inside_another_working_tree_*` | **普通目录被"绑定成功"** 或 **子目录校正失效** |
 | `api/repository.py` 的错误文案（`MSG_*`） | 05 §4.2、`test_not_a_repo_message_does_not_echo_any_user_path` | **错误回显用户路径** |
 | `api/repository.py` 的错误码 | 07 §1.3 表（**不许新造**，S3 D6） | 客户端按码分支失配 |
-| `storage/db.py:RepoStore.upsert()` | 06 T26、验收 4、`test_rebinding_*` | 重复绑定出现两行 / `repo_id` 不更新 |
-| `storage/db.py:_MIGRATIONS` / `SCHEMA_VERSION` | 06 §7（只增不减、可重入）、升级路径 | 老用户的库迁移失败 / 历史版本被改写 |
+| `storage/db.py:RepoStore.upsert()` | 06 T26/T32、验收 4、`test_rebinding_*`、**S3.5 D1：规则 1 不许写 `repo_id`**、`test_each_half_of_u9_alone_*` | 重复绑定出现两行 / **仓库加了 remote 就换身份（U9 复发）** |
+| `storage/db.py:_MIGRATIONS` / `SCHEMA_VERSION` / `_COLUMNS` | 06 §7（只增不减、可重入）、升级路径、**真库迁移测试**（v1 手工建库 → migrate → id 未变） | 老用户的库迁移失败 / **历史 `repo_id` 被重写（D3）** |
 | `paths.py:STATE_DB_FILE` / `state_db_file()` | `storage/db.py`、`01-overview §4` 的状态根表 | 库落到别处（甚至仓库里） |
-| `domain/models.py:normalize_origin/repo_id` | D3、`test_https_and_ssh_origins_share_the_same_repo_id`、**已存在的 repo_id** | 同一仓库算出两个 id（见 06 U9） |
+| `domain/models.py:normalize_origin` / `repo_id` / `origin_hash` | S3.5 D1/D2、`test_https_and_ssh_origins_share_the_same_repo_id`、**已存在的 repo_id 与 origin_hash** | `repo_id` 一旦依赖 origin 就复发 U9（06 T32）；改 `normalize_origin` 会改 `origin_hash` 但**不该**改 `repo_id` |
 | `api/app.py` 里 `RepoStore()` 的构造位置 | 决定 `state.db` 落在哪个状态根；测试靠 `POSTEL_HOME` | 测试写真实 `~/.postel`（06 T18） |
 | `gateway.Providers` 的字段 | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` | 启动即崩 |
 | `assets.py` 的 `#repos[data-state]` 机制 | 06 T8/T27、D1 的验收 | 断连时显示空列表 = 撒谎 |

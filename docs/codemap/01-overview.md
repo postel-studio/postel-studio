@@ -109,7 +109,7 @@ gateway.handler
 浏览器 左栏「绑定」按钮 → request("repo.bind", {path})           assets.py:266
    │
    ▼
-gateway.dispatch → providers.repo_bind = RepositoryService.bind   repository.py:115
+gateway.dispatch → providers.repo_bind = RepositoryService.bind   repository.py:143
    ├─ _require_path(params)              非字符串/空 → INVALID_PARAMS
    ├─ Path(raw).is_absolute()            相对 / ~ → BAD_CWD
    ├─ Path(raw).resolve()                消 .. 与符号链接（D4）
@@ -117,8 +117,9 @@ gateway.dispatch → providers.repo_bind = RepositoryService.bind   repository.p
    │     └─ 子目录校正：/x/proj/src → /x/proj（D2）
    ├─ gitops.origin_url(root)            git config --get（无 origin → None）
    ├─ gitops.default_branch(root)        git symbolic-ref --short HEAD
-   ├─ domain.repo_id(path, origin_url)   sha256(归一化 URL | 绝对路径)[:12]（D3）
-   └─ RepoStore.upsert(repo)             同路径不产生第二行（验收 4）
+   ├─ domain.repo_id(path)                sha256(绝对路径)[:12]，写后永不更新（S3.5 D1）
+   ├─ domain.origin_hash(origin)          归一化 URL 的哈希；只识别"同一远端"（S3.5 D2）
+   └─ RepoStore.upsert(repo)             同路径不产生第二行；**不改写已有 repo_id**（验收 4 / D1）
    ▼
 浏览器  重读 repo.list → renderRepos() → 左栏一行「名称 / 默认分支」  assets.py:237
 ```
@@ -154,8 +155,8 @@ fail()（唯一向下出口）→ setState("disconnected","已断开")
 | `CONNECT_TIMEOUT_MS` | 2000 | `assets.py:97`（JS 内硬编码） | 见 [03/assets](03-modules/assets.md) |
 | `DIR_MODE` / `FILE_MODE` | `0700` / `0600` | `paths.py:28-29` | 05 §4.1 |
 | `GIT_TIMEOUT_SECONDS` | 5.0 | `gitops/repo.py:31` | D5：git 卡住不能拖住网关 |
-| `SCHEMA_VERSION` | 1 | `storage/db.py:30` | 06 §7：`PRAGMA user_version` |
-| `REPO_ID_LENGTH` | 12 | `domain/models.py:19` | 06 §2.1 / 07 §4.1 |
+| `SCHEMA_VERSION` | 2 | `storage/db.py:31` | 06 §7：`PRAGMA user_version`；v1 = S3，v2 = S3.5 加 `origin_hash` |
+| `REPO_ID_LENGTH` | 12 | `domain/models.py:22` | 06 §2.1 / 07 §4.1 |
 
 > `HEARTBEAT_INTERVAL_MS + RECONNECT_DELAY_MS < 3000` 是被测试断言的关系
 > （S2 验收：断连 ≤3 秒可见）。改心跳间隔会连带打破这个预算。
@@ -215,10 +216,10 @@ S3 也没有退出收场（连接不显式 close，靠进程退出回收；WAL �
 4. `src/postel_studio/api/app.py` — 79 行，路由表
 5. `src/postel_studio/api/frames.py` — 121 行，纯函数，最好读
 6. `src/postel_studio/api/gateway.py` — 150 行，网关
-7. `src/postel_studio/domain/models.py` — 104 行，纯函数，S3 的 id 规则
+7. `src/postel_studio/domain/models.py` — 131 行，纯函数，S3.5 的 id / origin_hash 规则
 8. `src/postel_studio/gitops/repo.py` — 197 行，**先读模块 docstring 的三条硬约束**
-9. `src/postel_studio/storage/db.py` — 226 行，schema v1 + upsert
-10. `src/postel_studio/api/repository.py` — 192 行，S3 的业务编排
+9. `src/postel_studio/storage/db.py` — 261 行，schema v2 + upsert
+10. `src/postel_studio/api/repository.py` — 196 行，S3 的业务编排
 11. `src/postel_studio/web/assets.py` — 465 行，页面 + 内联 JS（JS 从 `<script>` 开始看）
 12. `tests/test_bind.py` — 一条真实的端到端：真实 git + 真实 SQLite + 真实 WebSocket
 13. `tests/test_gateway_inprocess.py` — 看一个「真端口真连接」的测试怎么写
