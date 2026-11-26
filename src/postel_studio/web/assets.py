@@ -644,7 +644,7 @@ INDEX_HTML: Final = """<!doctype html>
 
   function renderDiffPatch(patch) {
     diffPatch.textContent = "";       // 重建前先扔掉旧行
-    var lines = patch.split("\n");
+    var lines = patch.split("\\n");
     for (var i = 0; i < lines.length; i++) {
       if (lines[i] === "" && i === lines.length - 1) { continue; }  // 末尾换行不算内容
       var row = document.createElement("div");

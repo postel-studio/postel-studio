@@ -709,6 +709,38 @@ $ git diff --numstat -z --unified=3 main...feature | od -c | head -2
 / `test_rename_counts_as_delete_plus_add` / `test_stat_exact_numbers`（S5 的 -z 解析）；
 `--unified` 那条由 `test_patch_contains_expected_line_kinds` + 实现里的 `STAT_FLAGS` 守着。
 
+### T37 ❌ 页面 JS 的转义要在 Python 字符串里**多写一层**（S5 真浏览器抓到）
+
+**现象**：S5 的 `#diff` 面板加完后，`tests/test_diff.py` 的 7 条页面契约**全绿**，但真 Chrome 打开
+页面时整页 JS 不执行：`PAGEERROR: SyntaxError: Invalid or unexpected token`，`#repos` 永远停在
+`loading`（`s5_diff.mjs` 卡在等 `#repos=ready` 超时）。
+
+**根因**：页面 JS 是 `assets.py` 里的一个 Python 三引号字符串。JS 想要 `patch.split("\n")`，
+Python 源码必须写 `patch.split("\\n")`——写成 `"\n"` 时 Python 会在渲染阶段把它变成**真换行**，
+于是浏览器看到的是跨行的字符串字面量。同理 JS 里的单反斜杠（`line.indexOf("\\")`）在 Python
+源码里要写四个反斜杠。
+
+**实测**：
+
+```text
+$ python -c 'from postel_studio.web import assets; …'   # 把渲染后的 <script> 抽出来
+$ node --check /tmp/page.js
+/tmp/page.js:355
+    var lines = patch.split("
+                            ^
+SyntaxError: Invalid or unexpected token
+```
+
+改成 Python 源码 `"\\n"` 后 `node --check` 通过、整页 JS 正常。
+
+**为什么 pytest 抓不到**：那 7 条页面契约是 `assert "…" in page` 的**文本断言**（T9 的老问题），
+它们证明"这句话在页面里"，不证明"浏览器能解析这段 JS"。`06 §5` 写了不要求单测覆盖 DOM——
+但**语法错误是静态可查的**：改内联 JS 后跑 `node --check`（或直接跑真浏览器验收脚本）。
+
+**教训**：① 在 Python 里写内联 JS，每一层转义都要数一遍（`\n` / `\\` / `\x1b`）；
+② 文本断言全绿 ≠ 页面能跑——改前端后**必须**跑 `tools/acceptance/*.mjs`（DoD §3.2 同一纪律）；
+③ 抓到后先把现象记下来：这条坑是 S5 实施时真踩到、真修掉的。
+
 ## 已知未决问题
 
 **S4.5 起的规则**：每项必须有「到期切片」——到那一刀开工前，要么修掉，要么明确豁免并写清后果。
