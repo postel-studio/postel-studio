@@ -115,7 +115,7 @@
 | 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
 | **`.git` 判定** | `api/repository.py:72` `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
 | **子目录校正** | `api/repository.py:_bindable_root()`（D2，见 06 T25） |
-| 探测 | `gitops/repo.py:176` `origin_url()`、`:190` `default_branch()` |
+| 探测 | `gitops/repo.py:180` `origin_url()`、`:194` `default_branch()` |
 | id | `domain/models.py:124` `repo_id(path)`——**只看路径**，写后永不更新（S3.5 D1，U9 已结案） |
 | origin 识别 | `domain/models.py:111` `origin_hash()` → `repos.origin_hash`（D2；帧层**不暴露**） |
 | 落库 | `storage/db.py:163` `RepoStore.upsert()`（同路径不产第二行；`repo_id` 只 INSERT 时写） |
@@ -151,7 +151,7 @@
 | DOM 契约 | `#branches[data-state]`（idle/loading/ready/error）+ `#branches-title` / `#branch-list` / `#branch-empty` / `#branches-error`（D6） |
 | 方法表 | `api/gateway.py:115` `dispatch()` 的 `repo.branches` 分支 |
 | 业务编排 | `api/repository.py:214` `RepositoryService.branches()`；`repoId` → 允许根走 `:195` `_require_repo()`（与 `get()` 共用） |
-| 探测 | `gitops/repo.py:209` `list_branches()`：一次 `for-each-ref refs/heads/`、`%00` 分隔四字段（D2/D3） |
+| 探测 | `gitops/repo.py:213` `list_branches()`：一次 `for-each-ref refs/heads/`、`%00` 分隔四字段（D2/D3） |
 | 三态 | `list`（空 = 空仓库，**成功**）/ `None`（不是仓库/路径没了 → `REPO_NOT_BOUND`）/ 抛 `GitUnavailableError`·`GitTimeoutError`（D4/D5） |
 | 载荷 | `{name, sha(8 位), isCurrent, upstream}` 四字段（D1）；截 8 位发生在 `api/repository.py` 边界 |
 | 由谁守住 | `tests/test_branches.py` **23 个用例**（真 git + 真 SQLite + 真 WS 帧，零 mock 解析）：D7 第 1–10 行 + 页面契约 5 条 |
