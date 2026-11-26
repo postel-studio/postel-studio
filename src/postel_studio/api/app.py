@@ -47,7 +47,7 @@ def create_app(
     app = FastAPI(title="Postel Studio Kernel", docs_url=None, redoc_url=None, openapi_url=None)
     tickets = gateway.TicketRegistry()
     root = str(state_root())
-    # S3：内核第一次持有用户数据。store 与 gitops 在这里构造、**作为能力注入**给网关；
+    # S3/S4：内核持有用户数据。store 与 gitops 在这里构造、**作为能力注入**给网关；
     # 网关因此不需要 import 任何业务/存储模块（06-pitfalls T14 的修法，别改回反向 import）。
     store = RepoStore()
     repositories = RepositoryService(store)
@@ -89,6 +89,7 @@ def create_app(
             health=health,
             repo_bind=repositories.bind,
             repo_list=repositories.list,
+            repo_branches=repositories.branches,  # S4
         ),
     )
     return app
