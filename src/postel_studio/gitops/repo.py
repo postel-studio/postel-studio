@@ -1,8 +1,11 @@
-"""git 只读探测：**起子进程**的那一层（S3 引入，D4/D5）。
+"""git 只读探测：**起子进程**的那一层（S3 引入，D4/D5；S4 加分支列表）。
 
-本模块只回答三类问题：这是不是仓库 / 根在哪（`repo_root` / `bare_root` / `is_worktree_root`
-/ `is_repo`）、origin 是什么（`origin_url`）、默认分支是谁（`default_branch`）。
-**不做任何写操作**，也**不接受**任何来自网络的引用名（分支/提交参数属 S4，本刀不出现）。
+本模块只回答四类问题：这是不是仓库 / 根在哪（`repo_root` / `bare_root` / `is_worktree_root`
+/ `is_repo`）、origin 是什么（`origin_url`）、默认分支是谁（`default_branch`）、
+本地分支有哪些（`list_branches`，S4）。
+**不做任何写操作**；`list_branches` 是"枚举全部本地分支"的整体询问（S4 D2：只列
+`refs/heads/`），**仍然不接受**任何来自网络的引用名——`repo.branches` 只收 `repoId`，
+没有 ref 参数（切分支/看 diff 是 S4 之后的事，见 07 §2.2 的 `repo.diff`）。
 
 ⚠️ 这些函数**都不要**被直接用作"用户输入的这个目录能不能绑"的判据：git 的 `-C` 与
 `--show-toplevel` 会向父目录 discover。总判定在 `api/repository.py:_bindable_root()`
@@ -24,11 +27,17 @@ import os
 import shutil
 import subprocess
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 # D5：5 秒。本地只读命令正常在毫秒级，5 秒只可能是"卡住了"。
 GIT_TIMEOUT_SECONDS: Final = 5.0
+# S4 D3：一次 `for-each-ref` 取全字段，字段之间用 NUL（`%00`）分隔。
+# **禁止**解析 `git branch` 的人类可读输出：颜色 / 语言 / 终端宽度都会让格式变样
+# （S4 禁止事项；D7 第 7 行是这条的回归测试）。
+# 末尾的 `%(HEAD)` 是当前分支标记：当前分支给 `*`，**非**当前分支给**一个空格**（T33）。
+BRANCH_FORMAT: Final = "%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)"
 # 不继承调用方环境里可能存在的 GIT_DIR / GIT_WORK_TREE：它们会把 `git -C <path>` 指到别处
 _DROPPED_ENV: Final = (
     "GIT_DIR",
@@ -46,6 +55,24 @@ class GitUnavailableError(RuntimeError):
 
 class GitTimeoutError(RuntimeError):
     """`git` 超时（S3 D6 裁决：先按 `INTERNAL` 处理，S19 的 doctor 再细化）。"""
+
+
+@dataclass(frozen=True)
+class BranchInfo:
+    """一条**本地**分支（S4 D1 / D4）。
+
+    `sha` 存 **完整的 40 位**小写十六进制；截成 8 位是**边界格式化**，发生在
+    `api/repository.py`（07 §4.2「字段名/格式在边界转换」同一条纪律）。两层各自可测：
+    本层断言"git 给的是完整 sha"，帧层断言"载荷里是 8 位"。
+
+    `upstream` 没有 upstream 时是 `None`（不是 `""`，D1）；`is_current` 只在 HEAD
+    直接指向该分支时为 `True`——**游离 HEAD 时全部 `False`**（D1）。
+    """
+
+    name: str
+    sha: str
+    upstream: str | None
+    is_current: bool
 
 
 def _environment() -> dict[str, str]:
@@ -77,6 +104,10 @@ def run_git(args: Sequence[str], *, root: Path) -> subprocess.CompletedProcess[s
     后续切片（S4 的分支列表）只要复用本函数，就天然只能操作已绑定的仓库。
     失败一律抛**不含 `root` 文本**的异常——异常会经 `api/repository.py` 变成帧里的
     `message`，而 05 §4.2 要求错误不回显输入值。
+
+    ⚠️ `text=True` 是**严格 UTF-8 解码**：仓库里有非 UTF-8 的 refname 时，stdout 解码会抛
+    `UnicodeDecodeError`（它**不在** `GIT_ERRORS` 里），一路逃到网关变成 `INTERNAL`。
+    S3/S4 都受影响，本刀不修——策略与建议见 06-pitfalls **U15**。
     """
     command = [git_executable(), "-C", str(root), *args]
     try:
@@ -179,11 +210,69 @@ def default_branch(root: Path) -> str | None:
     return value or None
 
 
+def list_branches(root: Path) -> list[BranchInfo] | None:
+    """`root` 的**本地**分支，按 refname 字典序（S4 D1/D2/D3）。
+
+    | 返回 | 含义 |
+    |---|---|
+    | `list[BranchInfo]`（可能为空） | git 答了；**空列表 = 0 个分支的空仓库，是成功** |
+    | `None` | git 说"这不是仓库 / 路径没了"（非零退出码） |
+    | 抛 `GitUnavailableError` / `GitTimeoutError` | 起不来 / 卡住（同 S3 D5，由调用方翻码） |
+
+    三态**不许合并**（S4 D4）：空列表与 `None` 在帧层是两个不同的码（`data:[]` vs
+    `REPO_NOT_BOUND`），合并掉就会把"空仓库"报成"仓库没了"。
+
+    只列 `refs/heads/`：不带它的话 `refs/remotes/origin/main` 也会出现在结果里，
+    "共几个分支"与"当前分支"会同时失真（D2 的实测）。
+
+    ⚠️ **T33：`%(HEAD)` 的空格 + `_stdout()` 的整段 `.strip()`**（06-pitfalls T33）：
+
+    1. `%(HEAD)` 对**非当前**分支输出的不是空串，而是**一个空格**——它是真值；
+       当前分支输出 `"*"`，也是真值。所以**不能用真值判断**（`if marker` / `bool(marker)`）
+       来判"当前"：那样**除最后一条外全部判反**。
+    2. `_stdout()` 对**整段** stdout `.strip()`，只会把**最后一条记录**的 marker 从 `" "`
+       变成 `""`（值变了）——`%00` 分隔符是 NUL、**不是空白**，行尾的 NUL 不会被 strip，
+       所以 split 后**字段数恒为 4**（末段是空串）。**不要**指望"字段会消失"：实测
+       单分支 / 多分支 / 游离 HEAD / 最后一条有 upstream 等布局，段数全是 4。
+
+    因此：字段逐个 `.strip()`，当前判定写 `marker == "*"`。**测试必须断言每一条分支**的
+    `is_current`：只测单分支仓库、或只断言最后一条的用例，在"真值判断"的 bug 下会**碰巧
+    通过**——最后一条的 marker 恰好被整段 strip 成了空串。
+
+    `len(fields) != 4` 只可能意味着 `--format` 被改写 / git 换了实现：此时**不猜**（把缺字段
+    猜成"非当前"等于把坏数据当正常结果），返回 `None`——"问不出来"是 D4 已经定义好的诚实
+    答案（帧层翻成 `REPO_NOT_BOUND`）。
+    """
+    result = run_git(["for-each-ref", "refs/heads/", f"--format={BRANCH_FORMAT}"], root=root)
+    output = _stdout(result)
+    if output is None:  # 非零退出 = 这不是仓库（或路径已经不存在）
+        return None
+    branches: list[BranchInfo] = []
+    for line in output.splitlines():
+        fields = line.split("\x00")
+        if len(fields) != 4:
+            # 段数不对只可能是 format 被改写 / git 换了实现：**不猜**（猜成"非当前"会把
+            # 坏数据当正常结果），返回 None —— 帧层会翻成 REPO_NOT_BOUND（D4 的诚实答案）。
+            return None
+        name, sha, upstream, marker = (field.strip() for field in fields)
+        branches.append(
+            BranchInfo(
+                name=name,
+                sha=sha,
+                upstream=upstream or None,  # 无 upstream 时 git 给空串；D1 要求 None
+                is_current=marker == "*",  # T33：不能写 `if not marker`
+            )
+        )
+    return branches
+
+
 GIT_ERRORS: Final[tuple[type[Exception], ...]] = (GitUnavailableError, GitTimeoutError)
 
 __all__ = [
+    "BRANCH_FORMAT",
     "GIT_ERRORS",
     "GIT_TIMEOUT_SECONDS",
+    "BranchInfo",
     "GitTimeoutError",
     "GitUnavailableError",
     "bare_root",
@@ -191,6 +280,7 @@ __all__ = [
     "git_executable",
     "is_repo",
     "is_worktree_root",
+    "list_branches",
     "origin_url",
     "repo_root",
     "run_git",

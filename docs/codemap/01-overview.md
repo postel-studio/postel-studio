@@ -154,7 +154,7 @@ fail()（唯一向下出口）→ setState("disconnected","已断开")
 | `RECONNECT_DELAY_MS` | 500 | `assets.py:20` | 点重连后取票的延迟 |
 | `CONNECT_TIMEOUT_MS` | 2000 | `assets.py:97`（JS 内硬编码） | 见 [03/assets](03-modules/assets.md) |
 | `DIR_MODE` / `FILE_MODE` | `0700` / `0600` | `paths.py:28-29` | 05 §4.1 |
-| `GIT_TIMEOUT_SECONDS` | 5.0 | `gitops/repo.py:31` | D5：git 卡住不能拖住网关 |
+| `GIT_TIMEOUT_SECONDS` | 5.0 | `gitops/repo.py:35` | D5：git 卡住不能拖住网关 |
 | `SCHEMA_VERSION` | 2 | `storage/db.py:31` | 06 §7：`PRAGMA user_version`；v1 = S3，v2 = S3.5 加 `origin_hash` |
 | `REPO_ID_LENGTH` | 12 | `domain/models.py:22` | 06 §2.1 / 07 §4.1 |
 

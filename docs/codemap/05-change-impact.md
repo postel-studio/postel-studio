@@ -36,6 +36,10 @@
 | `scripts/gate-codemap.sh` 的判定范围 | 它自己的 `tests/test_gate_codemap.py`、CONTRIBUTING 门禁表 | 门禁悄悄放行（见 06 §门禁） |
 | `gitops/repo.py:run_git()` | `GIT_TERMINAL_PROMPT=0` / 超时 / `shell=False`、`test_bind.py::test_bind_uses_git_in_a_way_that_cannot_prompt` | **05 §3.3 违规 / 网关被 git 挂住** |
 | `gitops/repo.py` 的 `root` 参数 | 变成可选 = 放弃 D4 的允许根 | 子进程会跑在 cwd 上 |
+| `gitops/repo.py:list_branches` 的 `--format` / 解析 | 06 T33（`%(HEAD)` 空格 + 整段 strip）、S4 D1/D2/D3；`tests/test_branches.py` 全部解析用例 | 当前分支标记判反 / 最后一条记录解析失败 / remote-tracking 混进列表 |
+| `api/repository.py:branches` 的错误码或文案 | 07 §1.3（**不许新造码**）、S4 D5；`test_branches.py` 的错误码用例 | 空仓库被报成错误 / 删仓库被报成 INTERNAL / 错误文案回显用户路径 |
+| `assets.py` 的 `#branches[data-state]` 状态机 / 行内类名 | S4 D6（DOM 契约）、`node tools/acceptance/s4_branches.mjs`、`test_branches.py` 的页面契约用例 | 断连时留旧数据 / 空仓库显示成错误 / 浏览器验收脚本失效 |
+| `assets.py` 左栏仓库行的交互（选中 / 键盘） | S4 D6：`click` 与 `Enter`/`Space` 都要能选；`renderRepos` 重建后恢复 `data-selected`；真实浏览器里验一遍 | 选中样式被 `repo.list` 冲掉 / 键盘用户无法选仓库 |
 | `api/repository.py:_bindable_root()` | 06 T25 的回归锁、D2 的验收、`test_plain_directory_inside_another_working_tree_*` | **普通目录被"绑定成功"** 或 **子目录校正失效** |
 | `api/repository.py` 的错误文案（`MSG_*`） | 05 §4.2、`test_not_a_repo_message_does_not_echo_any_user_path` | **错误回显用户路径** |
 | `api/repository.py` 的错误码 | 07 §1.3 表（**不许新造**，S3 D6） | 客户端按码分支失配 |
@@ -44,9 +48,9 @@
 | `paths.py:STATE_DB_FILE` / `state_db_file()` | `storage/db.py`、`01-overview §4` 的状态根表 | 库落到别处（甚至仓库里） |
 | `domain/models.py:normalize_origin` / `repo_id` / `origin_hash` | S3.5 D1/D2、`test_https_and_ssh_origins_share_the_same_repo_id`、**已存在的 repo_id 与 origin_hash** | `repo_id` 一旦依赖 origin 就复发 U9（06 T32）；改 `normalize_origin` 会改 `origin_hash` 但**不该**改 `repo_id` |
 | `api/app.py` 里 `RepoStore()` 的构造位置 | 决定 `state.db` 落在哪个状态根；测试靠 `POSTEL_HOME` | 测试写真实 `~/.postel`（06 T18） |
-| `gateway.Providers` 的字段 | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` | 启动即崩 |
+| `gateway.Providers` 的字段（S4 加了 `repo_branches`） | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` + 07 §2.2/§4.5 | 启动即崩 / `repo.branches` 回 `UNKNOWN_METHOD` |
 | `assets.py` 的 `#repos[data-state]` 机制 | 06 T8/T27、D1 的验收 | 断连时显示空列表 = 撒谎 |
-| `assets.py` 的 `ERROR_TEXT` | 07 §1.3 的码、`error_text_json()` | 错误显示成「绑定失败」或码本身 |
+| `assets.py` 的 `ERROR_TEXT` | 07 §1.3 的码、`error_text_json()`；S4 补了 `REPO_NOT_BOUND`、分支面板另用 `BRANCH_ERROR_FALLBACK` | 错误显示成「绑定失败」或码本身；分支面板答「绑定失败」 |
 | `assets.py` 左栏的 DOM 结构 / 数据来源 | **`node tools/acceptance/s3_bind.mjs`**（真实浏览器） | pytest 看不出来（T9） |
 | `tests/test_reverse_checks.py` 的注入锚点 | 被改的那段源码一旦变形，锚点就找不到（会红，不是静默） | 反向验证失效——但**是响的** |
 
@@ -122,7 +126,8 @@ CI 里 `origin/main` 存在的前提是 `fetch-depth: 0`——浅克隆下它会
 ## 提交前自查（30 秒版）
 
 ```bash
-git diff --stat                      # 触及文件数与行数（预算 ≤12 文件 / ≤400 行）
+git diff --stat -- src/              # 预算**只计 src/**：≤12 文件 / ≤400 行（04 §1.1 口径）
+git diff --stat                      # 全量看一眼：tests/docs 不计入上限，但不该有空 diff 的 src 改动
 git diff main -- tests/test_server_boot.py tests/conftest.py   # 不该有改动
 bash scripts/check.sh                # 全绿
 ```

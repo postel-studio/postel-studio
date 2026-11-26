@@ -43,16 +43,16 @@
 |---|---|
 | 用户路径 | 右上角状态灯：已连接 / 已断开 / 重连中 |
 | DOM | `web/assets.py` 里 `id="status"`、`id="status-text"` |
-| 状态切换 | `web/assets.py:112` `setState()` |
+| 状态切换 | `web/assets.py:280` `setState()` |
 | 由谁守住 | `test_gateway.py::test_page_declares_status_lamp_and_three_states`（**文本断言**） |
 
 ### C5 · 断连 ≤3 秒可见 + 灰化 + 重连按钮
 
 | 项 | 位置 |
 |---|---|
-| 心跳判活 | `web/assets.py:157` `startHeartbeat()` |
-| 唯一向下出口 | `web/assets.py:129` `fail()` |
-| 灰化规则 | `web/assets.py:68-69` `#content.stale` / `::after` |
+| 心跳判活 | `web/assets.py:560` `startHeartbeat()` |
+| 唯一向下出口 | `web/assets.py:515` `fail()` |
+| 灰化规则 | `web/assets.py:102-104` `#content.stale` / `::after` |
 | 按钮显示 | `setState()` 里 `button.style.display = ...` |
 | 由谁守住 | `test_gateway.py::test_server_cleans_up_connection_after_client_disconnect`（**后端侧**）、`::test_page_has_stale_rule_and_toggles_it_on_disconnect`（**文本**） |
 | ⚠️ 真实 DOM 行为 | **无自动化测试**，靠人工浏览器验证 |
@@ -61,10 +61,10 @@
 
 | 项 | 位置 |
 |---|---|
-| 重连入口 | `web/assets.py:218` `reconnect()` |
-| 取新票 | `web/assets.py:168` `freshTicket()` |
-| 端口校验 | `web/assets.py:179` `PORT_CHANGED` |
-| 建连 | `web/assets.py:194` `connect()` |
+| 重连入口 | `web/assets.py:621` `reconnect()` |
+| 取新票 | `web/assets.py:571` `freshTicket()` |
+| 端口校验 | `web/assets.py:582` `PORT_CHANGED` |
+| 建连 | `web/assets.py:597` `connect()` |
 | 由谁守住 | `test_gateway.py::test_reconnect_after_disconnect_works_without_restart`（网关侧）、`::test_frontend_reports_port_change_and_does_not_guess`（文本） |
 | ⚠️ 边界 | **端口变了无法自动恢复**（D7），页面会明确告知 |
 
@@ -81,17 +81,17 @@
 
 | 项 | 位置 |
 |---|---|
-| 签发 | `api/gateway.py:45` `TicketRegistry.issue()`（在 `app.index()` 里调用） |
-| 消费 | `api/gateway.py:54` `consume()` |
+| 签发 | `api/gateway.py:50` `TicketRegistry.issue()`（在 `app.index()` 里调用） |
+| 消费 | `api/gateway.py:59` `consume()` |
 | 页面注入 | `web/assets.py` 的 `<meta name="postel-handshake">` |
-| 拒绝握手 | `api/gateway.py:101` → HTTP 403 |
+| 拒绝握手 | `api/gateway.py:128` → HTTP 403 |
 | 由谁守住 | `test_gateway.py::test_ticket_is_single_use`、`::test_missing_ticket_is_rejected_with_403`、`::test_forged_ticket_is_rejected_with_403` |
 
 ### C9 · 内核告知自己的位置（`/api/where`）
 
 | 项 | 位置 |
 |---|---|
-| 路由 | `api/app.py:67` |
+| 路由 | `api/app.py:73` |
 | 数据来源 | `create_app(ws_path, host=, port=)` 注入的**本进程真实绑定** |
 | 由谁守住 | `test_gateway_inprocess.py::test_where_reports_this_kernels_real_binding`（删掉 server.json 后仍答同样值） |
 
@@ -109,13 +109,13 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 左栏输入框粘绝对路径 → 点「绑定」→ 左栏出现「名称 / 默认分支」 |
-| 前端入口 | `web/assets.py:266` `submitBind()`（真 `<form>`，回车也可） |
-| 方法表 | `api/gateway.py:109` `dispatch()` 的 `repo.bind` 分支 |
-| 业务编排 | `api/repository.py:143` `RepositoryService.bind()` |
+| 前端入口 | `web/assets.py:484` `submitBind()`（真 `<form>`，回车也可） |
+| 方法表 | `api/gateway.py:111` `dispatch()` 的 `repo.bind` 分支 |
+| 业务编排 | `api/repository.py:154` `RepositoryService.bind()` |
 | 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
-| **`.git` 判定** | `api/repository.py:61` `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
+| **`.git` 判定** | `api/repository.py:72` `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
 | **子目录校正** | `api/repository.py:_bindable_root()`（D2，见 06 T25） |
-| 探测 | `gitops/repo.py:149` `origin_url()`、`:163` `default_branch()` |
+| 探测 | `gitops/repo.py:180` `origin_url()`、`:194` `default_branch()` |
 | id | `domain/models.py:124` `repo_id(path)`——**只看路径**，写后永不更新（S3.5 D1，U9 已结案） |
 | origin 识别 | `domain/models.py:111` `origin_hash()` → `repos.origin_hash`（D2；帧层**不暴露**） |
 | 落库 | `storage/db.py:163` `RepoStore.upsert()`（同路径不产第二行；`repo_id` 只 INSERT 时写） |
@@ -127,9 +127,9 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 页面加载 / 重连成功后自动拉一次 |
-| 前端 | `web/assets.py:257` `loadRepos()` → `:237` `renderRepos()` |
-| 方法表 | `api/gateway.py:111` |
-| 业务 | `api/repository.py:139` `RepositoryService.list()` |
+| 前端 | `web/assets.py:366` `loadRepos()` → `:318` `renderRepos()` |
+| 方法表 | `api/gateway.py:113` |
+| 业务 | `api/repository.py:150` `RepositoryService.list()` |
 | 读库 | `storage/db.py:145` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
 | 由谁守住 | `test_bind.py::test_list_returns_array_payload_with_camel_case_keys`、`::test_data_survives_reopening_the_store` |
 
@@ -138,9 +138,24 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 内核不在 / 断连时，左栏仓库区显示「已断开：内核没有连着，仓库列表未知」，**不显示**空态 |
-| 状态源 | `web/assets.py:217` `setRepoState()` → `#repos[data-state]` |
-| 显隐规则 | `web/assets.py:95-135` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
+| 状态源 | `web/assets.py:291` `setRepoState()` → `#repos[data-state]` |
+| 显隐规则 | `web/assets.py:109-154` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
 | 由谁守住 | `tools/acceptance/s3_bind.mjs` 的 `CHECK D1 …` 四行（CDP 断网 → 读 DOM → 恢复 → 点重连，见 06 T27） |
+
+### C14 · 点仓库 → 看到分支列表（`repo.branches`）—— S4
+
+| 项 | 位置 |
+|---|---|
+| 用户路径 | 点左栏仓库行（鼠标，或聚焦后 `Enter`/`Space`）→ 主区分支面板列出该仓库的**本地**分支：当前分支带「当前」徽章、每个 8 位 sha、有 upstream 才显示 |
+| 前端入口 | `web/assets.py:476` `selectRepo()` → `:446` `loadBranches()` → `:416` `renderBranches()`；断连/切换的收口是 `:390` `resetBranches()` |
+| DOM 契约 | `#branches[data-state]`（idle/loading/ready/error）+ `#branches-title` / `#branch-list` / `#branch-empty` / `#branches-error`（D6） |
+| 方法表 | `api/gateway.py:115` `dispatch()` 的 `repo.branches` 分支 |
+| 业务编排 | `api/repository.py:214` `RepositoryService.branches()`；`repoId` → 允许根走 `:195` `_require_repo()`（与 `get()` 共用） |
+| 探测 | `gitops/repo.py:213` `list_branches()`：一次 `for-each-ref refs/heads/`、`%00` 分隔四字段（D2/D3） |
+| 三态 | `list`（空 = 空仓库，**成功**）/ `None`（不是仓库/路径没了 → `REPO_NOT_BOUND`）/ 抛 `GitUnavailableError`·`GitTimeoutError`（D4/D5） |
+| 载荷 | `{name, sha(8 位), isCurrent, upstream}` 四字段（D1）；截 8 位发生在 `api/repository.py` 边界 |
+| 由谁守住 | `tests/test_branches.py` **23 个用例**（真 git + 真 SQLite + 真 WS 帧，零 mock 解析）：D7 第 1–10 行 + 页面契约 5 条 |
+| ⚠️ UI 行为 | pytest 里只有文本断言；验收 1–5 与 D6 由 `node tools/acceptance/s4_branches.mjs` 在真实 Chrome 里跑（T9） |
 
 ---
 
@@ -221,8 +236,8 @@
 | Issue | 用户看到什么 | 会新增的东西 | 影响本目录 |
 |---|---|---|---|
 | ~~S3~~ | **已完成（复审通过）**：填仓库路径 → 左栏出现仓库 | `gitops/`、`storage/db.py`、`domain/`、`api/repository.py`、`tools/acceptance/` | 新增 4 页模块页；**L0 第一次碰子进程与 SQLite**；逼出 T25/T26/T27/T29/T30 |
-| S3 遗留 | `repo.unbind` / `REPO_NOT_BOUND` 的帧方法入口 / S4 的 `repo.branches` | — | 见 06 U9（`repo_id` 会变）、U10（store 不关） |
-| S4 | 分支列表 | `gitops` 复用 `run_git(root=已绑定 path)` | 分支名白名单（05 §3.3）首次出现 |
+| S3 遗留 | `repo.unbind` / `repo.list` 之外的 `REPO_NOT_BOUND` 帧方法入口 | — | 见 06 U9（`repo_id` 已稳定）、U10（store 不关）、U14（移动仓库产生两行） |
+| ~~S4~~ | **已完成**：点仓库行 → 主区分支面板列出本地分支（当前徽章 / 8 位 sha / upstream） | `gitops.BranchInfo` + `list_branches`；`api/repository.branches`；前端 `#branches` | 新增 C14；`for-each-ref` 的 ref 解析首次出现，逼出 **T33** |
 | S5 | diff 视图 | patch 生成 + 截断 | |
 | S6 | Bot 与 charter | `memory/`、`store/` | 新增两页 |
 | S7 | worktree 路径 | `git/worktree` | |

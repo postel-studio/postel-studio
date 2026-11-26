@@ -31,7 +31,8 @@ npm install -g puppeteer-core          # 或任意能让 node 解析到它的位
 
 ```bash
 bash scripts/check.sh                  # 先保证代码是绿的（门禁全过再跑验收）
-node tools/acceptance/s3_bind.mjs
+node tools/acceptance/s3_bind.mjs      # S3：绑定仓库 → 左栏出现
+node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分支列表
 ```
 
 脚本自己会做这些事，**不碰你的真实 `~/.postel`**（06-pitfalls T18）：
@@ -71,3 +72,33 @@ node tools/acceptance/s3_bind.mjs
 - `localhost:` 打开（[06 U4](../../docs/codemap/06-pitfalls.md)）；
 - 内核换端口后的重连路径（S3 没动它，S2 的 `test_gateway.py` 各有覆盖）；
 - 视觉/对比度（那要看截图，脚本只读 DOM 状态）。
+
+## S4 那份（`s4_branches.mjs`）
+
+同一个骨架，验「点左栏仓库行 → 主区分支面板出现」：
+
+1. 在临时工作区建**两个真仓库**：一个有 `main` + `feature` 且 `main` 带 upstream
+   （真 `git init --bare` remote + `push -u`），一个是 `git init` 之后**不 commit** 的空仓库；
+2. 真内核 + 真 Chrome，填路径绑定两个仓库；
+3. **点仓库行**（鼠标）→ 断言分支列表出现、`main` 有「当前」徽章、8 位 sha、
+   upstream 只在有 upstream 的分支上出现；
+4. 切到空仓库 → `data-state=ready` + 空态文案（不是错误、不是空白）；
+5. 期间真的 `git branch hotfix`，再切回来 → 列表**刷新**（出现 `hotfix`）；
+6. 键盘：`Enter` 选空仓库、`Space` 切回来；
+7. CDP 断网 → 面板回 `idle` + 「已断开：分支列表未知」+ 列表清空；恢复网络点「重连」→
+   自动重取（选中仓库还在）；
+8. **错误态**：删掉已绑定仓库的目录再点那一行 → `repo.branches` 回 `REPO_NOT_BOUND` →
+   `data-state="error"` + 按**码**映射的「仓库未绑定或已不存在」（不是绑定表单的「绑定失败」）；
+   再点另一个仓库能恢复（错误不是终态）。
+
+截图与内核日志落在 `/tmp/postel-s4-acceptance-XXXX/`（结尾打印路径）。
+
+| 输出行 | 对应 |
+|---|---|
+| `CHECK 1 …`（分支出现 / 顺序 / 标题） | S4 验收 1 |
+| `CHECK 2 main 是当前（有「当前」徽章）` | S4 验收 2 |
+| `CHECK 3 短 sha 是 8 位小写 hex` | S4 验收 3 |
+| `CHECK 4 空仓库 data-state=ready` / `显示空态文案` | S4 验收 4 |
+| `CHECK 5 切回后列表刷新（出现新分支 hotfix）` | S4 验收 5 |
+| `CHECK D6 …`（初始 idle / role+tabindex / upstream / 选中态 / 键盘 / 断连清空 / 重连重取） | D6 的 DOM 契约 |
+| `CHECK D6 删除仓库后点它 → data-state=error` / `按码映射文案` / `不是「绑定失败」` / `错误后可切到其它仓库恢复` | D6 的失败态（`REPO_NOT_BOUND` 的文案映射 + 错误不是终态） |

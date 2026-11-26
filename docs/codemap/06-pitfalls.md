@@ -554,6 +554,76 @@ S3.5 修完之后两处都被修好，于是单独回退任意一处都不会让
 
 ---
 
+## 分支列表与 ref 解析（S4 首次出现）
+
+### T33 ❌ `%(HEAD)` 的空格是**真值**；整段 strip 只改最后一行的 marker，不改字段数（S4 已处理）
+
+**现象**：用一次 `for-each-ref` 同时取"分支列表"与"当前分支"时（S4 D3 的固定命令），
+`%(HEAD)` 有两个反直觉之处：
+
+1. **非当前分支的 marker 是 `" "`（一个空格），不是空串**——它和当前分支的 `"*"` 一样是**真值**。
+   用（未 strip 的）marker 做真值判断（`if marker` / `bool(marker)`）判"当前"，
+   **除最后一条外全部判反**。
+2. `_stdout()` 对**整段** stdout 做 `.strip()`，只会把**最后一条记录**的 marker 从 `" "` 变成
+   `""`（**值**变了）——`%00` 分隔符是 NUL、**不是空白**，行尾的 NUL 不会被 strip 掉，
+   所以 split 的**字段数恒为 4**（末段是空串）。**字段不会消失**，"整段 strip 会改变段数"是错的。
+   实测单分支 / 多分支 / 游离 HEAD / 最后一条有 upstream 等布局，段数全是 4。
+
+**怎么复现**（真跑过；输出就是下面这三行）：
+
+```bash
+tmp=$(mktemp -d)
+git -c init.defaultBranch=main -C "$tmp" init -q
+git -C "$tmp" -c user.email=a@b -c user.name=a commit -q --allow-empty -m init
+git -C "$tmp" branch feature
+git -C "$tmp" branch zz
+fmt='%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)'
+git -C "$tmp" for-each-ref refs/heads/ --format="$fmt" | od -c
+# feature 行末尾: \0 \0 空格 \n    ← 非当前 = 空格（不是空串）
+# main    行末尾: \0 \0 * \n       ← 当前 = *
+# zz      行末尾: \0 \0 空格 \n
+
+python3 - "$tmp" <<'PY'
+import subprocess, sys
+tmp = sys.argv[1]
+fmt = "%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)"
+out = subprocess.run(
+    ["git", "-C", tmp, "for-each-ref", "refs/heads/", "--format=" + fmt],
+    capture_output=True, text=True,
+).stdout
+for line in out.strip().splitlines():
+    fields = line.split("\x00")
+    print(f"字段数={len(fields)} 名字={fields[0]!r} marker={fields[3]!r} 真值判当前={bool(fields[3])}")
+PY
+# 真实输出：
+# 字段数=4 名字='feature' marker=' ' 真值判当前=True   ← 判反（非当前被当成当前）
+# 字段数=4 名字='main'    marker='*' 真值判当前=True
+# 字段数=4 名字='zz'      marker=''  真值判当前=False  ← 最后一条，碰巧对
+```
+
+**为什么这个坑特别阴**：真值判断下，**最后一条**非当前分支因为被整段 strip 成 `""`，
+反而**碰巧判对**。于是：
+
+- 只测单分支仓库（当前分支在最后一条）→ 通过；
+- 只断言最后一行的用例 → 通过；
+- 只有"多分支里非最后一条的非当前分支"才会露馅。
+
+**怎么防**（`gitops/repo.py:list_branches`，S4 的写法）：
+
+- 字段逐个 `.strip()`，当前判定写 `marker == "*"`，**不要**用真值判断；
+- `len(fields) != 4` 只可能意味着 `--format` 被改写 / git 换了实现：**不猜**（猜成"非当前"
+  等于把坏数据当正常结果），整体返回 `None` —— "问不出来"是 D4 已经定义好的诚实答案
+  （帧层翻成 `REPO_NOT_BOUND`）；
+- 回归测试：`tests/test_branches.py` 的 **D7 第 2 行**（断言**每一条**分支的 `isCurrent`，
+  且 `feature` 是非最后一条的非当前分支）、**第 3 行**（当前分支恰是最后一条且有 upstream）、
+  **第 7 行**（`color.ui always` + 非 ASCII 名）；
+- 反向验证：`tests/test_reverse_checks.py` 里把 `marker == "*"` 注入成 `bool(fields[3])`
+  → 上述用例**真的变红**（已固化；T32 的纪律：注入必须真的红，且红在断言上）。
+
+**教训**：① 布尔"标记字段"的空值可能是**真值**（空格），永远用显式比较，别用真值；
+② 整段 strip 改变的是**值**，不一定是**段数**——解析器和它的"怎么复现"都要盯实测字节；
+③ 只测边界（单分支 / 最后一条）的用例会给 bug 开后门，**列表类断言要遍历每一条**。
+
 ## 已知未决问题
 
 | # | 问题 | 状态 |
@@ -571,7 +641,8 @@ S3.5 修完之后两处都被修好，于是单独回退任意一处都不会让
 | U11 | **普通目录放在别人工作区里会被校到那个仓库**（`proj/plain/deep` 与 `proj/src` 路径上不可区分） | 按 D2 的字面语义处理的**近似**。真要解决需要"区分子目录与普通目录"的判据（例如要求子目录里有被跟踪的文件），代价大且会引入误判，本刀不做 |
 | U12 | `tmp_path` 属于测试夹具，`repo.bind` 允许绑系统临时目录下的仓库 | 行为正确（用户没理由这么做），但测试里必须注意 T28 |
 | U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** |
-| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 之后对它查分支会报错。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) |
+| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) |
+| U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。 |
 
 ---
 

@@ -1,6 +1,6 @@
 # 03 · gateway — `src/postel_studio/api/gateway.py`
 
-> 层 L3 · 165 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
+> 层 L3 · 169 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
 
 ## 职责
 
@@ -10,16 +10,16 @@ WebSocket 网关：**认证 → 接受 → 分派 → 回帧**。
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `GATEWAY_PATH` | 32 | `"/gateway"`，路径前缀 | `server.gateway_path()` |
-| `TICKET_TTL_SECONDS` | 33 | `60.0` | `TicketRegistry` |
-| `CLOSE_FRAME_INVALID` | 35 | `4002` 关闭码 | `handler` |
-| `TicketRegistry` | 38 | 一次性 ticket 签发/消费 | `app.create_app` |
-| `ConnectionState` | 71 | 每连接的 `seq` 计数器（D4） | `handler` |
-| `Providers` | 84 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list`） | `app.create_app` |
-| `active_connection_count()` | 86 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
-| `dispatch(method, params, providers)` | 103 | 方法表（4 个分支） | `handler` |
-| `install(app, path, tickets, providers)` | 101 | 把 WS 路由挂到 app | `app.create_app` |
-| `_ACTIVE` / `_ACTIVE_LOCK` | 64-65 | 活动连接表（模块级） | 内部 |
+| `GATEWAY_PATH` | 36 | `"/gateway"`，路径前缀 | `server.gateway_path()` |
+| `TICKET_TTL_SECONDS` | 37 | `60.0` | `TicketRegistry` |
+| `CLOSE_FRAME_INVALID` | 39 | `4002` 关闭码 | `handler` |
+| `TicketRegistry` | 42 | 一次性 ticket 签发/消费 | `app.create_app` |
+| `ConnectionState` | 75 | 每连接的 `seq` 计数器（D4） | `handler` |
+| `Providers` | 84 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list` / `repo_branches`） | `app.create_app` |
+| `active_connection_count()` | 99 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
+| `dispatch(method, params, providers)` | 105 | 方法表（5 个分支） | `handler` |
+| `install(app, path, tickets, providers)` | 120 | 把 WS 路由挂到 app | `app.create_app` |
+| `_ACTIVE` / `_ACTIVE_LOCK` | 70-71 | 活动连接表（模块级） | 内部 |
 
 ## 关键决策与理由
 
@@ -120,10 +120,10 @@ finally:
 
 `system.health` 与 `system.echo` **共用同一个计数器**，不另造。
 
-### `dispatch()` 现在有四个分支（S2 两个 + S3 两个）
+### `dispatch()` 现在有五个分支（S2 两个 + S3 两个 + S4 一个）
 
 ```python
-# api/gateway.py:103-113（真实代码的形状，别把业务写进来）
+# api/gateway.py:105-117（真实代码的形状，别把业务写进来）
 if method == "system.echo":
     return params  # 通道自检
 if method == "system.health":
@@ -132,21 +132,25 @@ if method == "repo.bind":  # S3
     return providers.repo_bind(params)
 if method == "repo.list":  # S3
     return providers.repo_list()
+if method == "repo.branches":  # S4：参数只有 repoId
+    return providers.repo_branches(params)
 raise FrameError(UNKNOWN_METHOD, ...)
 ```
 
 **故意不实现** `system.subscribe` —— 订阅机制属后续切片。
 未实现的方法返回 `UNKNOWN_METHOD`，**不要返回空成功**（客户端会以为订阅生效了）。
 
-S3 的两个业务分支是**转手**：真正的实现在 `api/repository.py`（`RepositoryService`），
+S3/S4 的三个业务分支是**转手**：真正的实现在 `api/repository.py`（`RepositoryService`），
 由 `app.create_app()` 构造后经 `Providers` 注入。网关不认识"仓库/数据库/git"任何一个词。
 
 > **后续切片注意**：方法多到 6~8 个时，`if` 链应该改成注册表（dict）。
 > 现在四个分支还不需要，**不要提前抽象**（第 5、6 个方法来了再说）。
 
 > ⚠️ `test_unknown_method_is_unknown_method_not_subscribe` 曾把 `repo.bind` 当"未实现"的反例。
-> S3 实现它之后那条测试改成了 `bot.list` / `task.dispatch` / `agent.list` / `repo.branches` 等。
-> **每实现一个方法，都要把它从那条反例清单里拿掉**，否则测试红得莫名其妙。
+> S3 实现它之后反例改成 `bot.list` / `task.dispatch` / `agent.list` / `repo.branches` 等；
+> **S4 实现 `repo.branches` 后又拿掉了它**（现在反例是 `bot.list` / `task.dispatch` /
+> `agent.list` / `system.subscribe` / `system.echo.x`，5 个）。每实现一个方法，都要把它从
+> 那条反例清单里拿掉，否则测试红得莫名其妙。
 
 ### `Providers` 注入消掉循环依赖
 
@@ -184,3 +188,4 @@ S3 的两个业务分支是**转手**：真正的实现在 `api/repository.py`�
 | `test_missing_ticket_is_rejected_with_403` / `test_forged_ticket_is_rejected_with_403` | 拒绝握手 = 403 |
 | `test_server_cleans_up_connection_after_client_disconnect` | D5 清理 |
 | `test_gateway_inprocess.py::test_closing_one_of_two_connections_drops_the_count` | 计数 2→1 |
+| `tests/test_branches.py::test_websocket_branches_roundtrip_matches_service_layer` | S4 D7 第 9 行：`repo.branches` 帧往返（`result.data` 数组 + `seq`），与直调服务层一致 |

@@ -1,6 +1,6 @@
 # 03 · app — `src/postel_studio/api/app.py`
 
-> 层 L3 · 94 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
+> 层 L3 · 95 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
 
 ## 职责
 
@@ -13,23 +13,23 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `API_VERSION` | 22 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
-| `health()` | 25 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
-| `create_app(ws_path, host, port)` | 36 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
+| `API_VERSION` | 24 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
+| `health()` | 27 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
+| `create_app(ws_path, host, port)` | 38 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
 | （局部）`store = RepoStore()` | 52 | 打开 `state.db`（状态根下） | 注入链的起点 |
-| （局部）`repositories = RepositoryService(store)` | 53 | `repo.bind` / `repo.list` 的实现 | `gateway.Providers` |
-| `gateway.Providers(health=…, repo_bind=…, repo_list=…)` | 88-92 | 注入给网关（**唯一**构造点） | `gateway.install` |
+| （局部）`repositories = RepositoryService(store)` | 53 | `repo.bind` / `repo.list` / `repo.branches` 的实现 | `gateway.Providers` |
+| `gateway.Providers(health=…, repo_bind=…, repo_list=…, repo_branches=…)` | 88-93 | 注入给网关（**唯一**构造点） | `gateway.install` |
 
 ### 三个路由
 
 | 路由 | 行 | 认证 | 返回 |
 |---|---|---|---|
-| `GET /` | 46 | 无 | HTML（每次渲染签发新 ticket） |
-| `GET /api/health` | 60 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
+| `GET /` | 67 | 无 | HTML（每次渲染签发新 ticket） |
+| `GET /api/health` | 69 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
 | `GET /api/where` | 73 | 无 | `{host, port, wsPath, pid}` |
-| `WS /gateway/<sha16>` | 93（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
+| `WS /gateway/<sha16>` | 84（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
 
-**S3 没有加路由。** `repo.bind` / `repo.list` 走 WS，`/api/repos` 是 404
+**S3/S4 没有加路由。** `repo.bind` / `repo.list` / `repo.branches` 走 WS，`/api/repos` 是 404
 （`test_bind.py::test_no_http_route_for_repositories` 守着）。
 
 ## 关键决策与理由
@@ -68,6 +68,7 @@ gateway.install(
         health=health,
         repo_bind=repositories.bind,
         repo_list=repositories.list,
+        repo_branches=repositories.branches,  # S4
     ),
 )
 ```
@@ -76,6 +77,7 @@ gateway.install(
   `repository` 不知道 WebSocket 存在，`db` 不知道帧存在——三条向下 import 边，没有环。
 - **为什么不给网关传 `RepoStore`**：网关只需要"方法 → 函数"，传库会让它认识存储层，
   下一个切片又会往里塞业务。**只注入行为，不注入数据源。**
+- **S4 只加了一个注入字段**（`repo_branches=repositories.branches`），没有新路由、没有新 store。
 - **已知未决**：`RepoStore` 在这个函数里构造，但**没有地方关它**（进程退出时由 OS 回收；
   `state.db` 不会被删）。S3 不做退出收场，记在 [06 §已知未决](../06-pitfalls.md#已知未决问题) U10。
   `sqlite3` 的连接不关不会丢数据（WAL 会 fsync），但"有开必有关"这条纪律目前是破的。

@@ -210,6 +210,52 @@
  "result":{"data":{"allowed":false,"reason":"需要 L2，当前 L1"},"seq":15}}
 ```
 
+### 4.5 `repo.branches`（S4）
+
+```json
+// 请求：参数只有 repoId（没有 ref / pathspec；切分支与 diff 是之后的切片）
+{"type":"req","id":"c5","method":"repo.branches","params":{"repoId":"adec6540a725"}}
+// 成功：data 是**数组**，按 refname 字典序；空数组 = 空仓库，是成功
+{"type":"res","id":"c5","ok":true,
+ "result":{"data":[{"name":"feature","sha":"c7a21ad7","isCurrent":false,"upstream":null},
+                   {"name":"main","sha":"c7a21ad7","isCurrent":true,"upstream":"origin/main"}],
+           "seq":16}}
+// 失败：repoId 查不到 / 绑定的路径已不是 git 仓库（目录或 .git 被删）
+{"type":"res","id":"c5","ok":false,
+ "error":{"code":"REPO_NOT_BOUND","message":"仓库路径已不存在"}}
+```
+
+`branch` 载荷字段（**不多不少四个**）：
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `name` | string | 去掉 `refs/heads/` 的短名；带 `/` 的原样保留（`feat/x`） |
+| `sha` | string | **8 位**小写十六进制（git 给 40 位；截断发生在内核的边界层，客户端只拿 8 位） |
+| `isCurrent` | boolean | `HEAD` 指向它才为 `true`；**游离 HEAD 时全部 `false`** |
+| `upstream` | string \| null | `%(upstream:short)`；没有 upstream 时是 **`null`**，不是 `""` |
+
+顺序与范围：
+
+- 顺序固定为 refname 字典序（`for-each-ref` 的缺省），**不**把当前分支提到最前——稳定顺序才能被客户端/测试断言。
+- 只列**本地**分支（`refs/heads/`）。remote-tracking（`origin/main`）**不会**出现：它是别名不是分支，混进来会让"共几个分支"与"当前分支"同时失真。
+
+错误码（**不许新增码**，07 §1.3 的既有六码之内）：
+
+| 情形 | 码 | 可重试 |
+|---|---|---|
+| `repoId` 缺失 / 不是非空字符串 | `INVALID_PARAMS` | 修正后 |
+| `repoId` 查不到 | `REPO_NOT_BOUND` | 否 |
+| 绑定的路径已不是 git 仓库（目录 / `.git` 被删） | `REPO_NOT_BOUND` | 否 |
+| `git` 不存在 | `ADAPTER_UNAVAILABLE` | 是 |
+| `git` 超时 | `INTERNAL` | 是 |
+| 空仓库（0 提交） | **成功**，`data: []` | — |
+
+> 「路径已不存在」用 `REPO_NOT_BOUND` 而不是 `INTERNAL`：码表不许扩，而 `INTERNAL` 会把
+> 「用户删了仓库」这种**正常处境**报成"未预期错误需报障"（S4 D5 的裁决）。
+>
+> 分支列表**不落库**（[06-data-model §8](06-data-model.md)）：每次按需从 git 读，
+> 所以用户 `git switch` 之后刷新页面就能看到，不存在"缓存过期"这一类问题。
+
 ---
 
 ## 5. 兼容与演进

@@ -1,10 +1,11 @@
 # 03 · repository — `src/postel_studio/api/repository.py`
 
-> 层 L3 · 196 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1](../../design/07-api-contract.md)
+> 层 L3 · 256 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5](../../design/07-api-contract.md)
 
 ## 职责
 
-`repo.bind` / `repo.list` 的**业务编排**：路径 → 校验 → git 探测 → 落库 → 帧载荷。
+`repo.bind` / `repo.list` / `repo.branches` 的**业务编排**：路径 → 校验 → git 探测 → 落库 → 帧载荷
+（S4 的 `branches` 是只读的：`repoId` → 已绑定的 path 当允许根 → git → 帧载荷）。
 
 **这一层不碰 fastapi**（S3 涉及文件表的要求）。它只接收 `dict` 参数、返回 `dict`，
 把下游异常翻成 07 §1.3 的**稳定错误码**。怎么接上 WebSocket 是 `api/gateway.py` 的事。
@@ -13,17 +14,20 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `NOT_A_REPO` / `BAD_CWD` / `ADAPTER_UNAVAILABLE` / `REPO_NOT_BOUND` | 34-37 | 07 §1.3 的码（**不许新造**） | `bind` / `get` |
-| `MSG_*`（6 个） | 40-45 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
-| `_fail(code, message)` | 48 | 造 `frames.FrameError`（网关原样转发） | 内部 |
-| `_require_path(params)` | 53 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
-| `_inside_git_dir(root, target)` | 61 | **T29/T31：`root` → `target` 的相对路径里有 `.git` 段 → 不是仓库入口** | `_bindable_root` |
-| `_bindable_root(target)` | 82 | **D2 子目录校正的总判定**（见下） | `bind` |
-| `_split(repo)` | 118 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
-| `RepositoryService` | 133 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
-| `RepositoryService.list()` | 139 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
-| `RepositoryService.bind(params)` | 143 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
-| `RepositoryService.get(params)` | 184 | 按 `repoId` 取（`REPO_NOT_BOUND` 语义的落点；S4 的入口） | 暂无帧方法调用 |
+| `NOT_A_REPO` / `BAD_CWD` / `ADAPTER_UNAVAILABLE` / `REPO_NOT_BOUND` | 37-40 | 07 §1.3 的码（**不许新造**） | `bind` / `get` / `branches` |
+| `MSG_*`（9 个） | 43-52 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
+| `BranchPayloads` | 56 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
+| `_fail(code, message)` | 59 | 造 `frames.FrameError`（网关原样转发） | 内部 |
+| `_require_path(params)` | 64 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
+| `_inside_git_dir(root, target)` | 72 | **T29/T31：`root` → `target` 的相对路径里有 `.git` 段 → 不是仓库入口** | `_bindable_root` |
+| `_bindable_root(target)` | 93 | **D2 子目录校正的总判定**（见下） | `bind` |
+| `_split(repo)` | 129 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
+| `RepositoryService` | 144 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
+| `RepositoryService.list()` | 150 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
+| `RepositoryService.bind(params)` | 154 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
+| `RepositoryService._require_repo(params)` | 195 | `repoId` 校验 + 查库 → `Repo`（`INVALID_PARAMS` / `REPO_NOT_BOUND` 的落点） | `get` / `branches` |
+| `RepositoryService.get(params)` | 210 | 按 `repoId` 取一条（`get` 本身暂无帧方法调用） | 暂无生产调用方 |
+| `RepositoryService.branches(params)` | 214 | `repo.branches`：`repoId` → 允许根 → `gitops.list_branches` → `branch[]`（S4 D1/D5） | `gateway.Providers.repo_branches` |
 
 ## 关键决策与理由
 
@@ -51,6 +55,34 @@
   实测：`tmp_path` 下的普通目录、`/tmp` 本身都会被答"是"，于是"绑定成功"了（T25）。
 - **接受的近似**：第 4 步无法区分 `proj/src`（真子目录）与 `proj/某个普通目录`——两者在路径
   上等价。按 D2 的字面语义一律校到 `proj`。见 [06 §已知未决 U11](../06-pitfalls.md#已知未决问题)。
+
+### S4：`branches` 的三态与错误码映射（D4/D5）
+
+```python
+# api/repository.py:214 —— 允许根只有一处来源：库里那条记录的 path
+repo = self._require_repo(params)  # INVALID_PARAMS / REPO_NOT_BOUND
+found = gitops.list_branches(Path(repo.path))
+if found is None:  # git 非零退出 = 不是仓库 / 路径没了
+    raise _fail(REPO_NOT_BOUND, MSG_REPO_PATH_MISSING)  # 「仓库路径已不存在」
+return [
+    {"name": b.name, "sha": b.sha[:8], "isCurrent": b.is_current, "upstream": b.upstream}
+    for b in found
+]
+```
+
+| gitops 返回 | 帧层结果 | 为什么 |
+|---|---|---|
+| `[]`（空仓库 0 提交） | **成功** `data: []` | D5：空仓库是正常状态，不是错误 |
+| `None`（非零退出） | `REPO_NOT_BOUND` + 「仓库路径已不存在」 | D5：用户删了仓库是**正常处境**；`INTERNAL` 会报成"未预期错误需报障" |
+| `GitUnavailableError` | `ADAPTER_UNAVAILABLE` | 同 S3 D5 |
+| `GitTimeoutError` | `INTERNAL` | 同 S3 D6（S19 的 doctor 再细化） |
+
+- **截 8 位发生在这一层**（D4 的边界纪律）：`gitops.BranchInfo.sha` 是完整 40 位，帧载荷是
+  8 位小写 hex。两层各自可测，别把截断挪到 gitops 或前端。
+- `upstream` 是 `None` 时**原样**放进载荷（`None`），不写成 `""`——D1 把它定为 `null`。
+- `branches` **不落库、不缓存**（06-data-model §8）：每次按需问 git，所以"用户切了分支"立刻可见。
+- `_require_repo` 是唯一允许的既有代码重构（S4 实施要求）：`get()` 与 `branches()` 共用，
+  "允许根 = 已绑定 path"只有一个实现。
 
 ### 错误码只用 07 §1.3 的六个，一个都不新造（D6）
 
@@ -96,7 +128,7 @@ MSG_NOT_A_REPO: Final = "路径不是 git 仓库"
 | 改 `_bindable_root` | T25 的回归锁 `test_root_level_plain_directory_that_contains_a_repo_is_not_a_repo`、D2 的验收（子目录校正）、`test_plain_directory_inside_another_working_tree_is_treated_as_that_repos_subdirectory` |
 | 加错误码 | **禁止**（D6）；确实需要时先改 07 §1.3 表，再回来 |
 | 让 `message` 带上路径 | **禁止**（05 §4.2）|
-| 加 `repo.branches`（S4） | 复用 `get()` 拿到已绑定的 `path`，再 `gitops.run_git(root=path)`——**不要**接受新的路径参数 |
+| 改 `repo.branches` | D5 的码表（07 §1.3，**不许新造**）、`gitops.list_branches` 的三态、D7 第 8 行；**不要**接受新的路径/ref 参数（允许根只能是已绑定的 path） |
 | 在本层 `import fastapi` | **禁止**（S3 涉及文件表的要求）；帧形状用 `frames` 里的纯函数 |
 | 在本层直接 `open()` / `subprocess` | **禁止**：那是 `storage` / `gitops` 的活（02-layers） |
 
@@ -120,3 +152,15 @@ MSG_NOT_A_REPO: Final = "路径不是 git 仓库"
 | `test_failed_bind_leaves_no_half_state` | 验收 2「不留半状态」 |
 | `test_list_returns_array_payload_with_camel_case_keys` | 07 §4.2 边界转换 |
 | `test_websocket_bind_then_list_returns_the_repo` | 端到端 |
+
+### S4 的分支列表（`tests/test_branches.py`）
+
+| 测试 | 守什么 |
+|---|---|
+| `test_branches_returns_names_in_refname_order_with_short_shas` | D7 第 1 行 / D1：四字段、`sha` 8 位小写 hex、顺序为 refname 字典序 |
+| `test_branch_error_codes_for_bad_params`（4 组参数化） | D7 第 8 行 / D5：缺/非字符串/空串 → `INVALID_PARAMS`；未知 `repoId` → `REPO_NOT_BOUND` |
+| `test_deleted_repo_path_maps_to_repo_not_bound` / `test_repo_whose_dot_git_was_removed_maps_to_repo_not_bound` | D5：路径没了 / `.git` 被删 → `REPO_NOT_BOUND`（文案「仓库路径已不存在」） |
+| `test_empty_repo_returns_empty_list_as_success` | D5：空仓库 `data == []`，不是错误 |
+| `test_missing_git_executable_maps_to_adapter_unavailable` | D5：`PATH=""` → `ADAPTER_UNAVAILABLE`（真让 git 找不到，不 mock 解析） |
+| `test_git_timeout_maps_to_internal` | D5：超时 → `INTERNAL`（只在边界注入异常，钉住码映射） |
+| `test_websocket_branches_roundtrip_matches_service_layer` | D7 第 9 行：真 WS 帧 `result.data` 形状与 `seq`，与直调服务层逐字段一致 |

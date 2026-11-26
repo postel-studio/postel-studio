@@ -1,8 +1,11 @@
-"""`repo.bind` / `repo.list` 的业务编排（S3）。
+"""`repo.bind` / `repo.list` / `repo.branches` 的业务编排（S3；S4 加分支列表）。
 
 **这一层不碰 fastapi**（S3 涉及文件表的要求）：它只接收 `dict` 参数、返回 `dict`，
 把"路径 → 校验 → 探测 → 落库"串起来，并把下游异常翻成 07 §1.3 的**稳定错误码**。
-框架怎么把这两条接上 WebSocket，是 `api/gateway.py` 的事。
+框架怎么把这些接上 WebSocket，是 `api/gateway.py` 的事。
+
+S4 的 `branches` 是 `repo.bind` 的**只读反向**：`repoId` → 库里那条记录 → 已绑定的 `path`
+当允许根 → `gitops.list_branches` → 帧载荷。它不落库、不缓存（06-data-model §8）。
 
 为什么校验要在这里而不是在网关：网关只该知道"方法名 → 处理函数"（02-layers 的
 `gateway` 里那条"禁止 Agent 特判"是同一精神），字段语义属于业务。D6 的错误码表也在这里
@@ -43,6 +46,14 @@ MSG_INVALID_PARAMS: Final = "path 参数缺失或不是字符串"
 MSG_ADAPTER_UNAVAILABLE: Final = "git 命令不可用"
 MSG_GIT_TIMEOUT: Final = "git 命令超时"  # D6：先按 INTERNAL，S19 的 doctor 再细化
 MSG_REPO_NOT_BOUND: Final = "仓库未绑定"
+MSG_REPO_ID_INVALID: Final = "repoId 参数缺失或不是字符串"
+# S4 D5：绑定的路径已不是仓库（目录被删 / .git 被删）用 REPO_NOT_BOUND + 这句文案。
+# 不夸大字眼：这不是"未预期错误"（INTERNAL），而是用户自己删了仓库——正常处境。
+MSG_REPO_PATH_MISSING: Final = "仓库路径已不存在"
+
+# `RepositoryService` 里有个方法叫 `list`，**类作用域**里的 `list[...]` 注解会被 mypy 解析成
+# 那个方法（`valid-type`）。所以分支载荷的列表类型用模块级别名，别在类体里直接写 `list[...]`。
+type BranchPayloads = list[dict[str, object]]
 
 
 def _fail(code: str, message: str) -> frames.FrameError:
@@ -181,16 +192,65 @@ class RepositoryService:
 
         return _split(self._store.upsert(repo))
 
-    def get(self, params: dict[str, object]) -> dict[str, object]:
-        """按 `repoId` 取一条（本刀没有帧方法用到它，但 `REPO_NOT_BOUND` 的语义要立住）。
+    def _require_repo(self, params: dict[str, object]) -> Repo:
+        """取出并校验 `repoId`，返回**已绑定**的 `Repo`（D5 前两行的落点）。
 
-        S4 的 `repo.branches` 会以它为入口；把它放在这里而不是让 S4 自己查库，
-        是为了让"允许根 = 已绑定的 path"（D4 后半句）只有一个实现。
+        `repoId` 缺失 / 不是非空字符串 → `INVALID_PARAMS`；查不到 → `REPO_NOT_BOUND`。
+        返回 `Repo` 而不是 `dict`：调用方要拿 `repo.path` 当**允许根**（D4 后半句
+        "绑定之后的所有操作必须以已绑定的 path 为允许根"），这样"允许根"只有一个来源。
         """
         value = params.get("repoId")
         if not isinstance(value, str) or not value:
-            raise _fail(frames.INVALID_PARAMS, "repoId 参数缺失或不是字符串")
+            raise _fail(frames.INVALID_PARAMS, MSG_REPO_ID_INVALID)
         repo = self._store.get(value)
         if repo is None:
             raise _fail(REPO_NOT_BOUND, MSG_REPO_NOT_BOUND)
-        return _split(repo)
+        return repo
+
+    def get(self, params: dict[str, object]) -> dict[str, object]:
+        """按 `repoId` 取一条（S4 起 `branches` 与它共用 `_require_repo`）。"""
+        return _split(self._require_repo(params))
+
+    def branches(self, params: dict[str, object]) -> BranchPayloads:
+        """`repo.branches`：按 `repoId` 列出已绑定仓库的**本地**分支（S4）。
+
+        D4 的"允许根"落点：`root` 只能是**库里那条记录的 `path`**，不接受任何新路径参数
+        （07 §2.2：参数只有 `repoId`）。D4 的"截 8 位是边界格式化"也落在这里——gitops 层
+        给完整 40 位，帧里只给 8 位。
+
+        D5 的错误码映射（**一个码都不新增**）：
+
+        | 情形 | 码 |
+        |---|---|
+        | `repoId` 缺失 / 不是非空字符串 | `INVALID_PARAMS` |
+        | `repoId` 查不到 | `REPO_NOT_BOUND` |
+        | 绑定的路径已不是仓库（目录 / `.git` 被删） | `REPO_NOT_BOUND` |
+        | `git` 不存在 | `ADAPTER_UNAVAILABLE` |
+        | `git` 超时 | `INTERNAL`（同 S3 D6，S19 的 doctor 再细化） |
+        | 空仓库（0 提交） | **成功**，`data: []` |
+
+        "路径已不是仓库"这条码后的文案是「仓库路径已不存在」：`REPO_NOT_BOUND` 而不是
+        `INTERNAL` 的理由见 07 §1.3 与 D5——把用户删了仓库这种正常处境报成"需报障"是错的。
+
+        载荷四字段（D1，不多不少）：`name` / `sha`（前 8 位）/ `isCurrent` / `upstream`。
+        顺序沿用 git 的 refname 字典序，**不**把当前分支提到最前（D1：稳定顺序才能被断言）。
+        """
+        repo = self._require_repo(params)
+        try:
+            found = gitops.list_branches(Path(repo.path))
+        except gitops.GitUnavailableError:
+            raise _fail(ADAPTER_UNAVAILABLE, MSG_ADAPTER_UNAVAILABLE) from None
+        except gitops.GitTimeoutError:
+            raise _fail(frames.INTERNAL, MSG_GIT_TIMEOUT) from None
+        if found is None:
+            # D5：路径被删 / .git 被删是**正常的用户处境**，不是"未预期错误需报障"
+            raise _fail(REPO_NOT_BOUND, MSG_REPO_PATH_MISSING)
+        return [
+            {
+                "name": branch.name,
+                "sha": branch.sha[:8],  # D1：8 位小写 hex；完整 40 位留在 gitops 层（D4）
+                "isCurrent": branch.is_current,
+                "upstream": branch.upstream,  # None 原样出去，不编造空串
+            }
+            for branch in found
+        ]

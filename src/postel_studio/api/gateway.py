@@ -1,8 +1,8 @@
 """网关：一次性 handshake ticket → WebSocket → 帧分派（S2 D1/D3/D4/D5）。
 
-方法表（`dispatch()`）：S2 的 `system.echo` / `system.health`，S3 加了 `repo.bind` / `repo.list`
-（S3 D1：**只走 WS 帧**，不新开 HTTP 路由）。其余一律 `UNKNOWN_METHOD`；订阅 / topic 机制
-在 S2 **故意不存在**，S3 也没有加——不要在这里提前长出来。
+方法表（`dispatch()`）：S2 的 `system.echo` / `system.health`，S3 加了 `repo.bind` / `repo.list`，
+S4 加了 `repo.branches`（三个 `repo.*` 都**只走 WS 帧**，不新开 HTTP 路由）。其余一律
+`UNKNOWN_METHOD`；订阅 / topic 机制在 S2 **故意不存在**，S3/S4 也没有加——不要在这里提前长出来。
 
 业务处理函数**不在本模块实现**：它们由 `app` 侧构造后经 `Providers` 注入（S2 R3 的教训，
 06-pitfalls T14：网关不反向 import `app`，也不要为了绕环写函数内 import）。
@@ -84,14 +84,16 @@ class ConnectionState:
 class Providers:
     """从 `app` 侧注入的能力（消环用：`app` import 本模块，本模块不得反向 import `app`）。
 
-    `repo_bind` / `repo_list` 是 S3 加的两个业务入口，签名刻意用 `dict → dict`：闸门只认
-    「帧的参数对象进、载荷对象出」，网关不知道仓库、数据库、git 的存在。
+    `repo_bind` / `repo_list` 是 S3 加的两个业务入口，`repo_branches` 是 S4 加的第三个；
+    签名刻意用 `dict → dict`（列表载荷用 `list[dict]`）：闸门只认「帧的参数对象进、载荷对象出」，
+    网关不知道仓库、数据库、git 的存在。
     抛 `frames.FrameError` 时网关原样转发它的 `code` / `message`（D6 的稳定码）。
     """
 
     health: Callable[[], dict[str, object]]
     repo_bind: Callable[[dict[str, object]], dict[str, object]]
     repo_list: Callable[[], list[dict[str, object]]]
+    repo_branches: Callable[[dict[str, object]], list[dict[str, object]]]
 
 
 def active_connection_count() -> int:
@@ -110,6 +112,8 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.repo_bind(params)
     if method == "repo.list":  # 07 §2.2：无参数，返回 repo[]（载荷是**数组**，不是 {data:[...]}）
         return providers.repo_list()
+    if method == "repo.branches":  # S4 / 07 §4.5：参数只有 repoId，返回 branch[]（D1 四字段）
+        return providers.repo_branches(params)
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 
