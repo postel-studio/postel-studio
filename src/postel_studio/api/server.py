@@ -17,7 +17,11 @@ pid 属于自己的（`--force` 接管时不能删对方的锁）；令牌随进
 from __future__ import annotations
 
 import contextlib
+import copy
+import hashlib
+import logging
 import os
+import re
 import secrets
 import signal
 import socket
@@ -32,6 +36,7 @@ import uvicorn
 
 from postel_studio import __version__
 from postel_studio.api.app import API_VERSION, create_app
+from postel_studio.api.gateway import GATEWAY_PATH
 from postel_studio.storage.paths import (
     KernelBootError,
     acquire_lock,
@@ -102,6 +107,60 @@ def serve(port: int = 0, *, force: bool = False) -> int:
         release_lock(lock)
 
 
+class _WsQueryRedactor(logging.Filter):
+    """把日志行里 WebSocket URL 的查询串打掉（05 §4.1：凭据绝不进日志）。
+
+    uvicorn 的三条 WS 日志（`[accepted]` / `403` / 状态码）都打 `get_path_with_query_string()`，
+    于是 `?ticket=<一次性随机串>` 会整串进内核输出——**`access_log=False` 管不着它**，
+    因为它走的是 `uvicorn.error` 这个 logger，不是 `uvicorn.access`。
+    ticket 是一次性的，但「一次性随机串已泄漏」仍然是泄漏：拿到它就能抢先换走这条连接。
+    所以这里不关日志（HTTP 的访问行要留），只把 `?…` 之后的部分替换成 `?<REDACTED>`。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "?" in message and "WebSocket" in message:
+            record.msg = re.sub(r"\?\S*", "?<REDACTED>", message)
+            record.args = ()
+        return True
+
+
+def log_config() -> dict[str, object]:
+    """uvicorn 缺省 logging 配置 + 两处改动（理由见 `_run` 与 `_WsQueryRedactor`）：
+
+    1. 把内核自己的 `postel_studio` 挂到 stream handler 上（uvicorn 缺省配置没有 root logger，
+       不挂的话我们所有 logger 都是静默的）；
+    2. 给 `uvicorn.error` 挂一个脱敏过滤器（WS 日志会带 ticket）。
+
+    只影响这两支，`propagate=False` 防止与 root 重复输出。
+    """
+    config: dict[str, object] = copy.deepcopy(dict(uvicorn.config.LOGGING_CONFIG))
+    loggers = config.get("loggers")
+    assert isinstance(loggers, dict)
+    loggers["postel_studio"] = {"handlers": ["default"], "level": "INFO", "propagate": False}
+    return config
+
+
+def _install_ws_log_redaction() -> None:
+    """给 `uvicorn.error` 挂脱敏过滤器（`log_config()` 里挂不了，见下）。
+
+    为什么不在 dictConfig 里写：**logger 的 `filters` 列表不接受 `{"()": ...}`**（只有 handler
+    的 `filters` 接受自定义工厂），写进去会抛 `ValueError: Unable to add filter {…}` 让内核
+    直接起不来（实测）。`ext://` 只认模块属性，也不认类里的调用。所以只能在 `dictConfig`
+    执行完之后，直接对 logger 对象 `addFilter`——它幂等（`addFilter` 不会重复加同一个对象），
+    重复调用无副作用。
+    """
+    logger = logging.getLogger("uvicorn.error")
+    if not any(isinstance(f, _WsQueryRedactor) for f in logger.filters):
+        logger.addFilter(_WsQueryRedactor())
+
+
+def _configured_log_config() -> dict[str, object]:
+    """`log_config()`，并保证脱敏过滤器已挂上（理由见 `_install_ws_log_redaction`）。"""
+    _install_ws_log_redaction()
+    return log_config()
+
+
 def _install_signal_handlers() -> None:
     """把 SIGTERM 与 SIGINT 统一成「优雅停止」，Ctrl+C 走同一条路。
 
@@ -125,12 +184,25 @@ def _install_signal_handlers() -> None:
     signal.signal(signal.SIGINT, _on_stop_signal)
 
 
+def gateway_path(root: Path) -> str:
+    """网关路径：`/gateway/<状态根的 sha256 前 16 个 hex>`（D7）。
+
+    **稳**比**随机**重要：它决定页面与客户端拼 URL 时能不能跨重启复用。它的输入是状态根
+    （同一台机器同一用户 → 同一值），不是随机数，也不是凭据——真正的凭据是页面里的 ticket。
+    早先随机生成的问题实测过：重启后路径变了，旧页面拿着旧路径连不上，而浏览器无法读
+    `server.json` 去发现新路径。
+    """
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()
+    return f"{GATEWAY_PATH}/{digest[:16]}"
+
+
 def _run(root: Path, sock: socket.socket) -> int:
     host, port = sock.getsockname()[:2]
     _install_signal_handlers()
     _BUILDING.set()
     token = secrets.token_hex(32)
     token_file = write_token(token)
+    ws_path = gateway_path(root)
     write_server_info(
         {
             "host": host,
@@ -139,6 +211,7 @@ def _run(root: Path, sock: socket.socket) -> int:
             "apiVersion": API_VERSION,
             "version": __version__,
             "stateRoot": str(root),
+            "wsPath": ws_path,
             # 令牌本体**不进** server.json（05-security §1.1 要求写明文令牌；S1 还没有
             # WebSocket 客户端可发 Bearer，写进去只会多一处长期凭据）。这里只放指纹，
             # 供退出时判断「这份 server.json 是不是我写的」。详见交付说明的偏离项。
@@ -154,7 +227,11 @@ def _run(root: Path, sock: socket.socket) -> int:
     print("Ctrl+C 停止", flush=True)
 
     config = uvicorn.Config(
-        create_app(),
+        create_app(ws_path, host=host, port=port),
+        # uvicorn 的缺省 logging 配置里**没有 root logger 项**：不挂流处理器，我们自己模块
+        # 的 logger 会一路静默（INFO/WARNING 都不会出现在 stderr）。所以把内核的 logger
+        # 显式接到 uvicorn 的 `default` 流处理器上，级别随 `log_level` 一起定。
+        log_config=_configured_log_config(),
         log_level="info",
         access_log=False,
         lifespan="off",
