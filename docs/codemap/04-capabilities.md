@@ -109,7 +109,7 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 左栏输入框粘绝对路径 → 点「绑定」→ 左栏出现「名称 / 默认分支」 |
-| 前端入口 | `web/assets.py:484` `submitBind()`（真 `<form>`，回车也可） |
+| 前端入口 | `web/assets.py:748` `submitBind()`（真 `<form>`，回车也可） |
 | 方法表 | `api/gateway.py:112` `dispatch()` 的 `repo.bind` 分支 |
 | 业务编排 | `api/repository.py:234` `RepositoryService.bind()` |
 | 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
@@ -127,7 +127,7 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 页面加载 / 重连成功后自动拉一次 |
-| 前端 | `web/assets.py:366` `loadRepos()` → `:318` `renderRepos()` |
+| 前端 | `web/assets.py:457` `loadRepos()` → `:405` `renderRepos()` |
 | 方法表 | `api/gateway.py:114` |
 | 业务 | `api/repository.py:230` `RepositoryService.list()` |
 | 读库 | `storage/db.py:145` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
@@ -138,8 +138,8 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 内核不在 / 断连时，左栏仓库区显示「已断开：内核没有连着，仓库列表未知」，**不显示**空态 |
-| 状态源 | `web/assets.py:291` `setRepoState()` → `#repos[data-state]` |
-| 显隐规则 | `web/assets.py:109-154` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
+| 状态源 | `web/assets.py:371` `setRepoState()` → `#repos[data-state]` |
+| 显隐规则 | `web/assets.py:109-236` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
 | 由谁守住 | `tools/acceptance/s3_bind.mjs` 的 `CHECK D1 …` 四行（CDP 断网 → 读 DOM → 恢复 → 点重连，见 06 T27） |
 
 ### C14 · 点仓库 → 看到分支列表（`repo.branches`）—— S4
@@ -147,7 +147,7 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 点左栏仓库行（鼠标，或聚焦后 `Enter`/`Space`）→ 主区分支面板列出该仓库的**本地**分支：当前分支带「当前」徽章、每个 8 位 sha、有 upstream 才显示 |
-| 前端入口 | `web/assets.py:476` `selectRepo()` → `:446` `loadBranches()` → `:416` `renderBranches()`；断连/切换的收口是 `:390` `resetBranches()` |
+| 前端入口 | `web/assets.py:737` `selectRepo()` → `:551` `loadBranches()` → `:507` `renderBranches()`；断连/切换的收口是 `:481` `resetBranches()` |
 | DOM 契约 | `#branches[data-state]`（idle/loading/ready/error）+ `#branches-title` / `#branch-list` / `#branch-empty` / `#branches-error`（D6） |
 | 方法表 | `api/gateway.py:116` `dispatch()` 的 `repo.branches` 分支 |
 | 业务编排 | `api/repository.py:298` `RepositoryService.branches()`；`repoId` → 允许根走 `:279` `_require_repo()`（与 `get()` / `diff()` 共用） |
@@ -171,7 +171,7 @@
 | 确定性 | `DIFF_FLAGS`（`--no-color` / `--no-ext-diff` / `--no-textconv` / `--no-renames` / `--unified=3`）+ `-c core.quotePath=false`：用户配置改不动输出（D4，T34） |
 | 截断 | `maxChars ∈ [1000, 200000]`、缺省 100k、**越界报错不夹紧**；`truncated` 只影响 patch，`stat` 描述完整差异（D6） |
 | 错误码 | `INVALID_PARAMS` / `REPO_NOT_BOUND`（含路径没了，先于 ref 判）/ `BAD_REF`（解析不到、无共同祖先）/ `ADAPTER_UNAVAILABLE` / `INTERNAL` / `NOT_SUPPORTED`（非 UTF-8 ref 名）—— 07 §1.3 既有码，**一个不新增**（D7） |
-| 由谁守住 | `tests/test_diff.py` **40 个用例**（真 git + 真 SQLite + 真 WS 帧）：D10 第 1–21 行；反向注入 5 条在 `tests/test_reverse_checks.py` |
+| 由谁守住 | `tests/test_diff.py` **47 个用例**（真 git + 真 SQLite + 真 WS 帧）：D10 第 1–21 行 + 页面契约 7 条；反向注入 5 条在 `tests/test_reverse_checks.py` |
 | ⚠️ UI 行为 | pytest 里只有文本断言；D11 的 10 条由 `node tools/acceptance/s5_diff.mjs` 在真实 Chrome 里跑（T9） |
 
 ---

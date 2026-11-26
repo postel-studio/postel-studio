@@ -42,6 +42,7 @@ from postel_studio.api.repository import (
 )
 from postel_studio.gitops import repo as gitops
 from postel_studio.storage import db as state_db
+from postel_studio.web import assets
 
 from .gateway_util import Kernel, decode_frame, frame_result
 
@@ -835,3 +836,142 @@ def test_ws_repo_diff_error_frame_carries_stable_code(gw: Kernel) -> None:
     error = frame["error"]
     assert isinstance(error, dict)
     assert error["code"] == REPO_NOT_BOUND
+
+
+# ---------------------------------------------------------------------------
+# D6 / D9 的页面契约（**文本断言**；真实 DOM 行为见 tools/acceptance/s5_diff.mjs）
+# ---------------------------------------------------------------------------
+
+
+def _page() -> str:
+    return assets.render_index(
+        version="0.1.2",
+        api_version="1",
+        state_root="/tmp/state",
+        handshake_ticket="t" * 64,
+        ws_path="/gateway/x",
+    )
+
+
+def test_page_declares_diff_panel_dom_contract() -> None:
+    """**D9**：`#diff` 的 id / 初始 state / 三个条件元素的 hidden / DOM 顺序。
+
+    这些是浏览器验收按着点的契约（`tools/acceptance/s5_diff.mjs` 与 D9 的 DOM 契约表），
+    改 id 会同时打断脚本与 codemap；文本断言只是最快的报警器（T9）。
+    """
+    page = _page()
+    for snippet in (
+        '<section id="diff" data-state="idle" aria-live="polite">',
+        '<h2 id="diff-title">差异</h2>',
+        '<form id="diff-form" autocomplete="off">',
+        '<input id="diff-base" type="text" spellcheck="false" placeholder="base（分支或提交）">',
+        '<span class="diff-arrow">→</span>',
+        '<input id="diff-head" type="text" spellcheck="false" placeholder="head（分支或提交）">',
+        '<button id="diff-compare" type="submit">对比</button>',
+        '<p id="diff-state">点左侧分支查看它与默认分支的差异，或在上方填两个 ref</p>',
+        '<p id="diff-error" role="alert" hidden></p>',
+        '<p id="diff-truncated" hidden>已截断：差异太大，只显示前一部分</p>',
+        '<p id="diff-stat" hidden></p>',
+        '<pre id="diff-patch" hidden></pre>',
+    ):
+        assert snippet in page, snippet
+
+    # D9：位置在 #branches 之后、不重排既有布局
+    assert page.index('id="branches"') < page.index('id="diff"')
+    assert page.index('id="diff"') < page.index('id="repos"')
+
+
+def test_page_diff_panel_visibility_is_css_driven() -> None:
+    """**D9 / T8**：显隐由 `#diff[data-state=…]` 的 CSS 规则决定，JS 只改一个属性。"""
+    page = _page()
+    for selector in (
+        '#diff[data-state="idle"] #diff-patch',
+        '#diff[data-state="loading"] #diff-patch',
+        '#diff[data-state="ready"] #diff-state',
+        '#diff[data-state="error"] #diff-stat',
+        '#diff[data-state="error"] #diff-patch',
+    ):
+        assert selector in page, selector
+    for assignment in (
+        "diffEl.dataset.state = state;",
+        'diffEl.dataset.state = "loading";',
+        'diffEl.dataset.state = "ready";',
+        'diffEl.dataset.state = "error";',
+    ):
+        assert assignment in page, assignment
+    # T8：状态切换不许逐个 style.display
+    assert "diffEl.style.display" not in page
+    assert "diffPatch.style.display" not in page
+
+
+def test_page_diff_error_text_reuses_error_text_with_its_own_fallback() -> None:
+    """**D9**：错误按**码**映射（复用 `ERROR_TEXT`），兜底是差异面板自己的那句。
+
+    `BAD_REF` / `NOT_SUPPORTED` 是 07 §1.3 已有的码，S5 第一次用；文案进页面是为了让
+    浏览器验收能断言"显示的是可读中文，不是码本身"。
+    """
+    page = _page()
+    assert '"BAD_REF": "分支或提交不存在"' in page
+    assert '"NOT_SUPPORTED": "仓库含非 UTF-8 的名称，第一版不支持"' in page
+    assert 'var DIFF_ERROR_FALLBACK = "读取差异失败";' in page
+    assert "return ERROR_TEXT[code] || DIFF_ERROR_FALLBACK;" in page
+    # 绑定表单的兜底保持不变（S3 的页面断言引用了它）
+    assert 'var ERROR_TEXT_FALLBACK = "绑定失败";' in page
+
+
+def test_page_diff_rows_use_text_content_and_contract_order() -> None:
+    """**D9**：行元素 `.diff-line.diff-<kind>`，文本走 `textContent`，分类顺序照契约表。
+
+    diff 是**不可信文本**（文件名可以是 `<script>`），所以这一层只允许 `textContent`；
+    `+++ `/`--- ` 必须在 `+`/`-` **之前**判。
+    """
+    page = _page()
+    for snippet in (
+        'row.className = "diff-line diff-" + diffLineKind(lines[i]);',
+        "row.textContent = lines[i];",
+        'if (line.indexOf("@@") === 0) { return "hunk"; }',
+        'if (line.indexOf("+++ ") === 0 || line.indexOf("--- ") === 0) { return "meta"; }',
+        'if (line.indexOf("+") === 0) { return "add"; }',
+        'if (line.indexOf("-") === 0) { return "del"; }',
+        'return "ctx";',
+    ):
+        assert snippet in page, snippet
+    # 分类顺序：+++ / --- 的分支必须出现在 + / - 之前
+    assert page.index('line.indexOf("+++ ")') < page.index('line.indexOf("+") === 0')
+
+
+def test_page_diff_stat_and_truncation_have_exact_copy() -> None:
+    """**D9**：统计串用 U+00B7 `·` 与 U+2212 `−`；截断文案就是 HTML 里那句（不拼数字）。"""
+    page = _page()
+    assert '" 个文件 · +"' in page
+    assert '" −"' in page
+    assert "已截断：差异太大，只显示前一部分" in page
+    # D9 的 CSS 颜色契约（暗色底上可读）
+    for rule in (
+        ".diff-add { color: #3fb950; }",
+        ".diff-del { color: #f85149; }",
+        ".diff-hunk { color: #58a6ff; }",
+        ".diff-meta { color: #8b949e; }",
+        ".diff-ctx { color: inherit; }",
+    ):
+        assert rule in page, rule
+
+
+def test_page_diff_branch_rows_are_keyboard_selectable() -> None:
+    """**D9**：分支行 `tabindex="0"` + `role="button"`，`Enter`/`Space` 与 click 同一条路径。"""
+    page = _page()
+    for snippet in (
+        "li.tabIndex = 0;",
+        'li.setAttribute("role", "button");',
+        'li.addEventListener("click", function () { selectBranch(rowName); });',
+        "selectBranch(rowName);",
+    ):
+        assert snippet in page, snippet
+
+
+def test_page_never_uses_inner_html() -> None:
+    """**D10 第 18 行**：全文件 `innerHTML` 零使用。
+
+    diff 是**不可信文本**（文件名可以是 `<script>`），进 DOM 一律 `textContent`。
+    """
+    assert "innerHTML" not in assets.INDEX_HTML

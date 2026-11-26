@@ -52,7 +52,7 @@ REQUIRED_PARAMS: Final = (
 )
 
 # 07 §1.3 的错误码 → 用户可读文案。**按码映射，不读 `message`**（07 §1.3：文案可改，码不能改）。
-# 本刀会遇到的四个码各有一句人话；表外的码走通用文案，不把服务端原文贴到页面上。
+# 每个码有一句人话；表外的码走通用文案，不把服务端原文贴到页面上。
 ERROR_TEXT: Final = {
     "NOT_A_REPO": "不是 git 仓库",
     "BAD_CWD": "请输入绝对路径（不能是相对路径或 ~ 开头的路径）",
@@ -62,6 +62,9 @@ ERROR_TEXT: Final = {
     # S4：repo.branches 会回这个码（repoId 查不到 / 绑定的路径已不是仓库）。
     # S3 的绑定表单用不到它，但码表是全局的，别让分支面板走到「绑定失败」兜底。
     "REPO_NOT_BOUND": "仓库未绑定或已不存在",
+    # S5：repo.diff 会回这两个码（07 §1.3 既有码；不新增）。
+    "BAD_REF": "分支或提交不存在",
+    "NOT_SUPPORTED": "仓库含非 UTF-8 的名称，第一版不支持",
 }
 ERROR_TEXT_FALLBACK: Final = "绑定失败"
 
@@ -184,6 +187,49 @@ INDEX_HTML: Final = """<!doctype html>
   #branches[data-state="error"] #branches-state,
   #branches[data-state="error"] #branch-list,
   #branches[data-state="error"] #branch-empty { display: none; }
+  /* 主区差异面板（S5 D9）。与 #branches 同一套机制：JS 只改 data-state 与 hidden，
+     显隐规则全部在这里（06-pitfalls T8：不要逐个 style.display）。 */
+  #diff { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #diff h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .08em;
+    color: #8b95a7; text-transform: uppercase; }
+  #diff-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  #diff-base, #diff-head { min-width: 0; flex: 1 1 12ch; padding: 6px 9px; font: inherit;
+    font-size: 13px; color: #e6e9ef; background: #0f1115; border: 1px solid #39404f;
+    border-radius: 6px; }
+  #diff-base:focus, #diff-head:focus { outline: none; border-color: #58627a; }
+  #diff-compare { padding: 6px 12px; font: inherit; font-size: 13px; color: #0f1115;
+    background: #3fb950; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+  #diff-compare:disabled { opacity: .45; cursor: progress; }
+  .diff-arrow { font-size: 13px; color: #8b95a7; }
+  #diff-state { margin: 10px 0 0; font-size: 13px; color: #8b95a7; }
+  #diff-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
+    border-radius: 6px; }
+  #diff-truncated { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #0f1115;
+    background: #d29922; border-radius: 6px; }
+  #diff-stat { margin: 10px 0 0; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  /* 不设固定宽度、不假设中文宽度（D9）：等宽字体 + 可换行 + 自身滚动。 */
+  #diff-patch { margin: 10px 0 0; max-height: 60vh; overflow: auto; white-space: pre-wrap;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; }
+  .diff-add { color: #3fb950; }
+  .diff-del { color: #f85149; }
+  .diff-hunk { color: #58a6ff; }
+  .diff-meta { color: #8b949e; }
+  .diff-ctx { color: inherit; }
+  /* 状态 → 可见性：idle / loading 只显示状态文案；error 只显示错误；ready 显示统计与 patch。
+     hidden 属性管「空 patch / 未截断 / 无错误」这几个单元素条件（D9 的表）。 */
+  #diff[data-state="idle"] #diff-stat,
+  #diff[data-state="idle"] #diff-patch,
+  #diff[data-state="idle"] #diff-truncated,
+  #diff[data-state="loading"] #diff-stat,
+  #diff[data-state="loading"] #diff-patch,
+  #diff[data-state="loading"] #diff-truncated,
+  #diff[data-state="ready"] #diff-state,
+  #diff[data-state="error"] #diff-state,
+  #diff[data-state="error"] #diff-stat,
+  #diff[data-state="error"] #diff-patch,
+  #diff[data-state="error"] #diff-truncated { display: none; }
 </style>
 </head>
 <body>
@@ -211,6 +257,22 @@ INDEX_HTML: Final = """<!doctype html>
     <p id="branches-error" role="alert" hidden></p>
     <ul id="branch-list"></ul>
     <p id="branch-empty" hidden>这个仓库还没有任何分支（空仓库）。</p>
+  </section>
+  <!-- 主区差异面板（S5 D9）：位置在 #branches 之后，不重排既有布局。
+       显隐只由 #diff[data-state=…] 与 hidden 属性决定；JS 不碰 style.display。 -->
+  <section id="diff" data-state="idle" aria-live="polite">
+    <h2 id="diff-title">差异</h2>
+    <form id="diff-form" autocomplete="off">
+      <input id="diff-base" type="text" spellcheck="false" placeholder="base（分支或提交）">
+      <span class="diff-arrow">→</span>
+      <input id="diff-head" type="text" spellcheck="false" placeholder="head（分支或提交）">
+      <button id="diff-compare" type="submit">对比</button>
+    </form>
+    <p id="diff-state">点左侧分支查看它与默认分支的差异，或在上方填两个 ref</p>
+    <p id="diff-error" role="alert" hidden></p>
+    <p id="diff-truncated" hidden>已截断：差异太大，只显示前一部分</p>
+    <p id="diff-stat" hidden></p>
+    <pre id="diff-patch" hidden></pre>
   </section>
   <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
        「还没有仓库」（S3 D1：空 与 没连上 必须可区分）。 -->
@@ -277,6 +339,24 @@ INDEX_HTML: Final = """<!doctype html>
   var selectedRepoName = "";
   var branchRequestToken = 0;     // 只认最后一次分支请求的回包（切仓库/断连时让旧回包作废）
 
+  // 差异面板元素（S5 D9）
+  var diffEl = document.getElementById("diff");
+  var diffTitle = document.getElementById("diff-title");
+  var diffForm = document.getElementById("diff-form");
+  var diffBase = document.getElementById("diff-base");
+  var diffHead = document.getElementById("diff-head");
+  var diffState = document.getElementById("diff-state");
+  var diffError = document.getElementById("diff-error");
+  var diffTruncated = document.getElementById("diff-truncated");
+  var diffStat = document.getElementById("diff-stat");
+  var diffPatch = document.getElementById("diff-patch");
+  // 差异面板**自己的**兜底（同分支面板的纪律：不能答"绑定失败"）。
+  var DIFF_ERROR_FALLBACK = "读取差异失败";
+  var DIFF_HINT = "点左侧分支查看它与默认分支的差异，或在上方填两个 ref";
+  var repoDefaultBranches = {};   // repoId → 默认分支（点分支行时 base 的来源；null = HEAD 游离）
+  var selectedBranchName = null;  // 当前点选的分支行（分支列表重建后恢复 data-selected）
+  var diffRequestToken = 0;       // 只认最后一次 diff 请求的回包（同 branchRequestToken）
+
   function setState(state, text) {
     statusEl.dataset.state = state;
     statusText.textContent = text;
@@ -294,7 +374,12 @@ INDEX_HTML: Final = """<!doctype html>
     else if (state === "connected") { repoState.textContent = "已连接"; }
     else { repoState.textContent = "已断开：内核没有连着，仓库列表未知"; }
     reposEl.dataset.state = state === "connected" ? "ready" : state;
-    if (state === "connected") { loadRepos(); return; }
+    if (state === "connected") {
+      // 连接恢复：差异面板若还停在 idle（断连时已被清空），把「已断开」文案换回提示。
+      // **不**自动重发 diff（D9：diff 是查询历史动作，重放会覆盖用户正在看的对比）。
+      if (diffEl.dataset.state === "idle") { diffState.textContent = DIFF_HINT; }
+      loadRepos(); return;
+    }
     repoEmpty.hidden = true;
     reposError.hidden = true;
     bindInput.disabled = true;
@@ -304,6 +389,8 @@ INDEX_HTML: Final = """<!doctype html>
     resetBranches("idle", state === "disconnected"
       ? "已断开：分支列表未知"
       : "正在连接内核…");
+    // S5 D9：差异面板同一纪律——断连回 idle + 「已断开：差异未知」+ 清空，不留旧 diff。
+    resetDiff("idle", state === "disconnected" ? "已断开：差异未知" : "正在连接内核…");
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -321,6 +408,9 @@ INDEX_HTML: Final = """<!doctype html>
       var repo = list[i] || {};
       var repoId = String(repo.repoId || "");
       var repoName = String(repo.name || "（未命名）");
+      // S5 D9：点分支行时 base = 仓库 defaultBranch。存在这里而不是 selectRepo 的参数上，
+      // 是为了不改 S4 的既有行结构/回调形状。
+      repoDefaultBranches[repoId] = repo.defaultBranch || null;
       var li = document.createElement("li");
       li.dataset.repoId = repoId;
       li.tabIndex = 0;                       // 键盘可达：Tab 能聚焦，Enter/Space 能选
@@ -357,6 +447,7 @@ INDEX_HTML: Final = """<!doctype html>
       selectedRepoId = null;
       selectedRepoName = "";
       resetBranches("idle", "从左侧选择一个仓库");
+      resetDiff("idle", DIFF_HINT);   // S5 D9：差异面板一起清空，不留上一个仓库的对比
       return;
     }
     applyRepoSelection();
@@ -417,11 +508,24 @@ INDEX_HTML: Final = """<!doctype html>
     branchList.textContent = "";
     for (var i = 0; i < list.length; i++) {
       var branch = list[i] || {};
+      var branchName = String(branch.name || "");
       var li = document.createElement("li");
-      li.dataset.branchName = String(branch.name || "");
+      li.dataset.branchName = branchName;
+      // S5 D9：分支行键盘可达（与左栏仓库行一致）；click 与 Enter/Space 走同一条路径。
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      (function (rowName) {
+        li.addEventListener("click", function () { selectBranch(rowName); });
+        li.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+            ev.preventDefault();     // 防 Space 滚动页面
+            selectBranch(rowName);
+          }
+        });
+      }(branchName));
       var name = document.createElement("span");
       name.className = "branch-name";
-      name.textContent = String(branch.name || "");
+      name.textContent = branchName;
       var sha = document.createElement("span");
       sha.className = "branch-sha";
       sha.textContent = String(branch.sha || "");
@@ -441,6 +545,7 @@ INDEX_HTML: Final = """<!doctype html>
       }
       branchList.appendChild(li);
     }
+    applyBranchSelection();   // 列表整体重建：恢复选中标记（同 renderRepos 的纪律）
   }
 
   function loadBranches() {
@@ -473,11 +578,170 @@ INDEX_HTML: Final = """<!doctype html>
     }
   }
 
+  // -------------------------------------------------------------------------
+  // 差异面板（S5 D9）。三条纪律与分支面板同源：
+  //   1. 显隐只由 CSS 的 `#diff[data-state=…]` 与 hidden 属性决定，这里只改这两样（T8）；
+  //   2. 断连 / 切仓库回 idle 并清空（resetDiff），不留旧 diff 装新鲜；
+  //   3. 快速切换时旧回包不能覆盖新结果（diffRequestToken）。
+  // diff 文本一律 textContent：文件名可能是 `<script>`，它是**不可信文本**（05 §4.2 同一精神）。
+  // -------------------------------------------------------------------------
+
+  function diffErrorText(code) {
+    return ERROR_TEXT[code] || DIFF_ERROR_FALLBACK;   // 表外的码不显示「绑定失败」
+  }
+
+  function diffTitleText() {
+    return selectedRepoId ? ("差异 · " + selectedRepoName) : "差异";
+  }
+
+  // 清内容但**不动**分支行选中：点分支 / 发起请求时用；resetDiff 才连选中一起清。
+  function clearDiffContent(state, text) {
+    diffRequestToken += 1;            // 让在途请求的回包作废
+    diffEl.dataset.state = state;
+    diffTitle.textContent = diffTitleText();
+    diffState.textContent = text;
+    diffError.textContent = "";
+    diffError.hidden = true;
+    diffTruncated.hidden = true;
+    diffStat.textContent = "";
+    diffStat.hidden = true;
+    diffPatch.textContent = "";
+    diffPatch.hidden = true;
+  }
+
+  function applyBranchSelection() {
+    var rows = branchList.querySelectorAll("li[data-branch-name]");
+    for (var i = 0; i < rows.length; i++) {
+      if (selectedBranchName !== null && rows[i].dataset.branchName === selectedBranchName) {
+        rows[i].dataset.selected = "true";
+        rows[i].setAttribute("aria-current", "true");
+      } else {
+        delete rows[i].dataset.selected;
+        rows[i].removeAttribute("aria-current");
+      }
+    }
+  }
+
+  function resetDiff(state, text) {   // 切仓库 / 断连 / 清空：连分支行选中一起清
+    selectedBranchName = null;
+    clearDiffContent(state, text);
+    applyBranchSelection();
+  }
+
+  // D9 的行分类顺序**必须照这个顺序判**：`+++ `/`--- ` 是文件头，不能算 add/del；
+  // `+`/`-` 前缀不能先判。`\\` 开头是 "\\ No newline at end of file" 这种元信息行。
+  function diffLineKind(line) {
+    if (line.indexOf("diff --git ") === 0 || line.indexOf("index ") === 0
+      || line.indexOf("new file mode ") === 0 || line.indexOf("deleted file mode ") === 0
+      || line.indexOf("old mode ") === 0 || line.indexOf("new mode ") === 0
+      || line.indexOf("\\\\") === 0) { return "meta"; }
+    if (line.indexOf("@@") === 0) { return "hunk"; }
+    if (line.indexOf("+++ ") === 0 || line.indexOf("--- ") === 0) { return "meta"; }
+    if (line.indexOf("+") === 0) { return "add"; }
+    if (line.indexOf("-") === 0) { return "del"; }
+    return "ctx";
+  }
+
+  function renderDiffPatch(patch) {
+    diffPatch.textContent = "";       // 重建前先扔掉旧行
+    var lines = patch.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i] === "" && i === lines.length - 1) { continue; }  // 末尾换行不算内容
+      var row = document.createElement("div");
+      row.className = "diff-line diff-" + diffLineKind(lines[i]);
+      row.textContent = lines[i];     // 不可信文本：只进 textContent
+      diffPatch.appendChild(row);
+    }
+  }
+
+  function diffStatText(stat) {
+    return String(stat.filesChanged || 0) + " 个文件 · +" + String(stat.insertions || 0)
+      + " −" + String(stat.deletions || 0);
+  }
+
+  function requestDiff(base, head) {
+    if (selectedRepoId === null) { return; }
+    var repoId = selectedRepoId;
+    var token = ++diffRequestToken;
+    diffEl.dataset.state = "loading";
+    diffTitle.textContent = diffTitleText();
+    diffState.textContent = "正在读取差异…";
+    diffError.textContent = "";
+    diffError.hidden = true;
+    diffTruncated.hidden = true;
+    diffStat.textContent = "";
+    diffStat.hidden = true;
+    diffPatch.textContent = "";
+    diffPatch.hidden = true;
+    var id = request("repo.diff", { repoId: repoId, base: base, head: head },
+      function (err, data) {
+        if (token !== diffRequestToken) { return; }   // 过期回包：切了仓库 / 断连 / 换了对比
+        if (err) {
+          diffEl.dataset.state = "error";
+          diffError.textContent = diffErrorText(err);  // 按码映射，不看 message
+          diffError.hidden = false;
+          return;
+        }
+        var payload = data || {};
+        var stat = payload.stat || {};
+        var patch = typeof payload.patch === "string" ? payload.patch : "";
+        diffEl.dataset.state = "ready";
+        diffStat.textContent = diffStatText(stat);
+        diffStat.hidden = false;
+        renderDiffPatch(patch);
+        diffPatch.hidden = patch === "";               // 空差异只显示统计（D6）
+        diffTruncated.hidden = payload.truncated !== true;
+      });
+    if (id === null) {                                 // 连接没就绪：不装成"正在读"
+      if (token === diffRequestToken) { resetDiff("idle", "连接尚未就绪"); }
+    }
+  }
+
+  // 点分支行（S5 D9）：填两个输入框 → 默认分支本身 / 无默认分支时不发请求。
+  function selectBranch(name) {
+    if (selectedRepoId === null) { return; }
+    var defaultBranch = repoDefaultBranches[selectedRepoId] || null;
+    selectedBranchName = name;
+    diffBase.value = defaultBranch === null ? "" : defaultBranch;
+    diffHead.value = name;
+    clearDiffContent("idle", DIFF_HINT);
+    applyBranchSelection();
+    if (defaultBranch === null) {
+      diffState.textContent = "不知道默认分支（HEAD 未指向分支），请在上方填两个 ref";
+      return;
+    }
+    if (defaultBranch === name) {
+      diffState.textContent = "这是默认分支，选择其它分支查看差异";
+      return;
+    }
+    requestDiff(defaultBranch, name);
+  }
+
+  // 手动提交（S5 D9）：trim 后任一为空 → #diff-error 显示提示、data-state 保持原样。
+  function submitDiff() {
+    var base = diffBase.value.trim();
+    var head = diffHead.value.trim();
+    if (!base || !head) {
+      diffError.textContent = "请填 base 和 head";
+      diffError.hidden = false;
+      return;
+    }
+    if (selectedRepoId === null) {
+      diffError.textContent = "先选择一个仓库";
+      diffError.hidden = false;
+      return;
+    }
+    requestDiff(base, head);
+  }
+
   function selectRepo(repoId, name) {
     if (!repoId) { return; }
     selectedRepoId = repoId;
     selectedRepoName = name;
     applyRepoSelection();
+    // S5 D9：切仓库 → 差异面板回 idle 并清空 patch/stat/error/选中行，标题跟着仓库名变。
+    // 显式重选同一个仓库也会清空（用户正在看的对比就此结束，不静默留着旧结果）。
+    resetDiff("idle", DIFF_HINT);
     loadBranches();
   }
 
@@ -634,6 +898,7 @@ INDEX_HTML: Final = """<!doctype html>
 
   button.addEventListener("click", reconnect);
   bindForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitBind(); });
+  diffForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitDiff(); });
   // 断连期间**不自动重连**（禁止事项：不得静默重试而不改 UI 状态），只如实显示「已断开」。
   connect(metaTicket ? metaTicket.content : "");
 }());

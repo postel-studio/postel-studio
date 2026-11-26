@@ -16,7 +16,7 @@
 | L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 174 | WS 认证与帧分派（6 个方法） |
 | L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 405 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的业务编排（**不碰 fastapi**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 121 | 帧编解码，纯函数 |
-| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 683 | 页面 HTML + 内联 JS（S3 左栏仓库区 + S4 主区分支面板） |
+| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 948 | 页面 HTML + 内联 JS（S3 左栏仓库区 + S4 分支面板 + S5 差异面板） |
 
 **必须有但我还没单列的**（内容已在别处）：
 

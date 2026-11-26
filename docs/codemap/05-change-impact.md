@@ -39,6 +39,9 @@
 | `gitops/repo.py:run_git` 的 `decode_errors` 缺省值 | 06 U15、S5 D3.2；`tests/test_diff.py` 的 D10 第 19/20 行 | 非 UTF-8 refname 又回 `INTERNAL`（U15 复发），或 mangled 名字被回传 git |
 | `gitops/repo.py:list_branches` 的 `--format` / 解析 | 06 T33（`%(HEAD)` 空格 + 整段 strip）、S4 D1/D2/D3；`tests/test_branches.py` 全部解析用例 | 当前分支标记判反 / 最后一条记录解析失败 / remote-tracking 混进列表 |
 | `api/repository.py:branches` 的错误码或文案 | 07 §1.3（**不许新造码**）、S4 D5；`test_branches.py` 的错误码用例 | 空仓库被报成错误 / 删仓库被报成 INTERNAL / 错误文案回显用户路径 |
+| `assets.py` 的 `#diff[data-state]` 状态机 / 行分类顺序 / `#diff-patch` 渲染 | S5 D9（DOM 契约）、`node tools/acceptance/s5_diff.mjs`、`test_diff.py` 的页面契约用例 | `+++` 变绿、截断静默丢、断连留旧 diff、XSS（文件名进 innerHTML） |
+| `assets.py` 的 `selectBranch` / `submitDiff` / `diffRequestToken` | S5 D9：点分支填两个输入框、默认分支不发请求、过期回包丢弃 | 点默认分支也发请求 / 快速切换时旧对比覆盖新对比 |
+| `assets.py` 的 `ERROR_TEXT`（S5 补 `BAD_REF` / `NOT_SUPPORTED`） | 07 §1.3 的码、`test_page_diff_error_text_*`；真浏览器里看一遍 | 差异面板显示码本身或「绑定失败」 |
 | `assets.py` 的 `#branches[data-state]` 状态机 / 行内类名 | S4 D6（DOM 契约）、`node tools/acceptance/s4_branches.mjs`、`test_branches.py` 的页面契约用例 | 断连时留旧数据 / 空仓库显示成错误 / 浏览器验收脚本失效 |
 | `assets.py` 左栏仓库行的交互（选中 / 键盘） | S4 D6：`click` 与 `Enter`/`Space` 都要能选；`renderRepos` 重建后恢复 `data-selected`；真实浏览器里验一遍 | 选中样式被 `repo.list` 冲掉 / 键盘用户无法选仓库 |
 | `api/repository.py:_bindable_root()` | 06 T25 的回归锁、D2 的验收、`test_plain_directory_inside_another_working_tree_*` | **普通目录被"绑定成功"** 或 **子目录校正失效** |
