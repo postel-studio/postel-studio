@@ -337,6 +337,26 @@ class BotStore:
             )
         return bot
 
+    def set_permission(self, bot_id: str, permission: str) -> Bot | None:
+        """改一个 Bot 的权限并返回落库后的记录；`bot_id` 不存在返回 `None`（S8 D1）。
+
+        只动 `permission` 一列：`bot_id` / `repo_id` / `name` 是身份，`charter_rev` 属于 charter
+        的写路径（S22）。"行不存在"由**调用方**翻成码——store 不认识 07 §1.3。
+
+        `rowcount` 在 SQLite 里是"匹配到的行数"，不是"值真的变了"：写成同一个值也返回 1。
+        调用方自己在写之前挡掉 no-op（`api/bots.py` 的做法），这里不做无谓的判断。
+        """
+        with self._lock, self._conn:
+            updated = self._conn.execute(
+                "UPDATE bots SET permission = ? WHERE bot_id = ?", (permission, bot_id)
+            ).rowcount
+            if updated == 0:
+                return None
+            row = self._conn.execute(
+                f"SELECT {_BOT_COLUMNS} FROM bots WHERE bot_id = ?", (bot_id,)
+            ).fetchone()
+        return None if row is None else _row_to_bot(row)
+
 
 def _row_to_bot(row: sqlite3.Row) -> Bot:
     """`sqlite3.Row` → `Bot`。类型收敛集中在这里，别处不再直接碰 Row。"""

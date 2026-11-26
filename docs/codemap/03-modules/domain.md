@@ -5,7 +5,7 @@
 ## 职责
 
 领域模型与**纯派生规则**：`Repo` / `Bot` 实体、origin URL 归一化、`repo_id` / `bot_id`
-与名字白名单的算法（S6 加了 Bot）。
+与名字白名单的算法（S6 加了 Bot，S8 加了权限阶梯）。
 这一层**不碰磁盘、不起子进程、不 import 框架**——它的每个函数都能在一行断言里被验证。
 
 S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算法是被验收断言过的契约
@@ -17,28 +17,34 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 5 | 包标记 + 本层"无 IO"的声明 |
-| `models.py` | 208 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7） |
+| `models.py` | 272 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8） |
 
 ## 符号表（`domain/models.py`）
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `REPO_ID_LENGTH` | 22 | `12`：06 §2.1 的 id 长度 | `models.repo_id*`、测试 |
-| `_SCP_LIKE` / `_URL_LIKE` | 26-27 | 两种 remote 写法的正则 | `normalize_origin` |
-| `Repo` | 31 | frozen dataclass：`repo_id` / `path` / `origin_url` / `default_branch` / `added_at` / `origin_hash`（**末位、有缺省值**） | `storage/db.py`、`api/repository.py` |
-| `Repo.name`（property） | 48 | 根目录名 = 左栏显示名（`proj/src` 绑成 `proj` 后显示 `proj`） | `api/repository.py:_split` |
-| `normalize_origin(url)` | 53 | URL → 与传输方式无关的 `host/path` | `repo_id_for_origin`、测试 |
-| `repo_id_for_origin(url)` | 90 | `sha256(归一化 URL)[:12]`——**只给 `origin_hash` 用**（S3.5 D2） | `origin_hash` |
-| `repo_id_for_path(path)` | 100 | `sha256(绝对路径)[:12]`——`repo_id` 的**唯一**算法（D1） | `repo_id` |
-| `origin_hash(origin_url)` | 111 | 归一化 URL 的哈希；无 origin → `None`（D2，**不参与主键**） | `api/repository.py:bind` |
-| `repo_id(path)` | 124 | **只看路径**（S3 的签名是 `repo_id(path, origin_url)`，已收窄） | `api/repository.py:bind` |
-| `BOT_NAME_RE` | 139 | 06 §2.2 白名单 `^[a-z][a-z0-9-]{0,31}$` | `bot_name_ok`、`storage/paths.py` |
-| `BOT_PERMISSION_DEFAULT` | 141 | `"L1"`：M1 的 Bot 权限恒为默认值（改权限是 M2） | `api/bots.py:_seed` |
-| `Bot` | 145 | frozen dataclass：`bot_id` / `repo_id` / `name` / `permission` / `agent_kind` / `charter_rev` / `created_at` | `storage/db.py`、`api/bots.py` |
-| `bot_name_ok(name)` | 161 | 名字白名单判定（**纯函数**）；进路径前必须过它（D3） | `storage/paths.py:bot_memory_dir` |
-| `bot_id(repo_id, name)` | 166 | 复合主键 `{repo_id}/{name}`——**唯一的拼接处**（06 §2.2） | `api/bots.py:_seed`、测试 |
-| `REF_NAME_MAX_LENGTH` | 180 | `200`：入站 ref 名的长度上限（S5 D3.1）——**S7 从 `api/repository.py` 搬来** | `ref_name_ok` |
-| `ref_name_ok(value)` | 183 | 入站 ref 名的六条形状（S5 D3.1）：`repo.diff` 的 base/head 与 `worktree.acquire` 的 baseRef 共用一份；lone surrogate 只有 `encode` 抓得到 | `api/repository._require_ref`、`api/worktrees._base_ref` |
+| `REPO_ID_LENGTH` | 23 | `12`：06 §2.1 的 id 长度 | `models.repo_id*`、测试 |
+| `_SCP_LIKE` / `_URL_LIKE` | 27-28 | 两种 remote 写法的正则 | `normalize_origin` |
+| `Repo` | 32 | frozen dataclass：`repo_id` / `path` / `origin_url` / `default_branch` / `added_at` / `origin_hash`（**末位、有缺省值**） | `storage/db.py`、`api/repository.py` |
+| `Repo.name`（property） | 49 | 根目录名 = 左栏显示名（`proj/src` 绑成 `proj` 后显示 `proj`） | `api/repository.py:_split` |
+| `normalize_origin(url)` | 54 | URL → 与传输方式无关的 `host/path` | `repo_id_for_origin`、测试 |
+| `repo_id_for_origin(url)` | 91 | `sha256(归一化 URL)[:12]`——**只给 `origin_hash` 用**（S3.5 D2） | `origin_hash` |
+| `repo_id_for_path(path)` | 101 | `sha256(绝对路径)[:12]`——`repo_id` 的**唯一**算法（D1） | `repo_id` |
+| `origin_hash(origin_url)` | 112 | 归一化 URL 的哈希；无 origin → `None`（D2，**不参与主键**） | `api/repository.py:bind` |
+| `repo_id(path)` | 125 | **只看路径**（S3 的签名是 `repo_id(path, origin_url)`，已收窄） | `api/repository.py:bind` |
+| `BOT_NAME_RE` | 140 | 06 §2.2 白名单 `^[a-z][a-z0-9-]{0,31}$` | `bot_name_ok`、`storage/paths.py` |
+| `Permission` | 143 | **S8**：四个**可授予**级别（`L0`/`L1`/`L2`/`L2+`）的枚举；`rank` 是它们在 v1 阶梯上的位置 | `api/bots.py`、页面、测试 |
+| `Permission.rank`（property） | 162 | 0..3，只对那四个成员有意义 | `permission_covers` |
+| `_PERMISSION_LADDER` | 168 | 阶梯顺序的**唯一**事实源（`rank` 与 `covers` 都读它） | 本模块 |
+| `UNASSIGNABLE_PERMISSIONS` | 172 | `{"L3","L4"}`：**认识但不可写入**的两个名字（`NOT_SUPPORTED`） | `api/bots.py:_permission` |
+| `BOT_PERMISSION_DEFAULT` | 175 | `Permission.L1`：新建 Bot 的默认级别（05 §2.2；不再是一句字符串） | `api/bots.py:create` |
+| `Bot` | 179 | frozen dataclass：`bot_id` / `repo_id` / `name` / `permission` / `agent_kind` / `charter_rev` / `created_at` | `storage/db.py`、`api/bots.py` |
+| `bot_name_ok(name)` | 196 | 名字白名单判定（**纯函数**）；进路径前必须过它（D3） | `storage/paths.py:bot_memory_dir`、`api/bots.py:_require_name` |
+| `bot_id(repo_id, name)` | 201 | 复合主键 `{repo_id}/{name}`——**唯一的拼接处**（06 §2.2） | `api/bots.py`、`api/worktrees.py`、测试 |
+| `permission_parse(value)` | 206 | 入站值 → `Permission`；不是那四个就 `None`（**不抛**）。`L3`/`L4` 也走 `None` | `permission_covers`、`api/bots.py:_permission` |
+| `permission_covers(held, needed)` | 222 | 阶梯包含关系（`L2` ⊨ `L1`）；任一端解析不出 → `False`（失败即收紧） | S16 的权限门、测试 |
+| `REF_NAME_MAX_LENGTH` | 244 | `200`：入站 ref 名的长度上限（S5 D3.1）——**S7 从 `api/repository.py` 搬来** | `ref_name_ok` |
+| `ref_name_ok(value)` | 247 | 入站 ref 名的六条形状（S5 D3.1，**纯判定不抛**）——**S7 搬来** | `api/repository._require_ref`、`api/worktrees._base_ref` |
 
 ## 关键决策与理由
 

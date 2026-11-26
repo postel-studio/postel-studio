@@ -263,12 +263,39 @@ INDEX_HTML: Final = """<!doctype html>
   .bot-charter-summary { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
   #bots[data-state="idle"] #bot-list,
   #bots[data-state="idle"] #bot-empty,
+  #bots[data-state="idle"] #bot-new,
   #bots[data-state="loading"] #bot-list,
   #bots[data-state="loading"] #bot-empty,
+  #bots[data-state="loading"] #bot-new,
   #bots[data-state="ready"] #bots-state,
   #bots[data-state="error"] #bots-state,
   #bots[data-state="error"] #bot-list,
+  #bots[data-state="error"] #bot-new,
   #bots[data-state="error"] #bot-empty { display: none; }
+  /* S8 D8：新建 Bot。按钮只在 ready 出现（没选仓库 / 读取中 / 出错时不装作能建）；表单开关只看
+     `hidden`——`display: grid` 会盖掉 UA 的 `[hidden]`，所以这条 `[hidden]` 规则是**必须的**。 */
+  #bot-new { margin-top: 12px; padding: 6px 12px; font: inherit; font-size: 13px;
+    color: #e6e9ef; background: #1a1f2a; border: 1px solid #39404f; border-radius: 6px;
+    cursor: pointer; }
+  #bot-new:hover { border-color: #58627a; }
+  #bot-new:focus-visible { outline: 1px solid #58627a; outline-offset: 2px; }
+  #bot-create-form { margin: 10px 0 0; display: grid; gap: 8px; }
+  #bot-create-form[hidden] { display: none; }
+  #bot-create-name, #bot-create-permission, #charter-permission {
+    min-width: 0; padding: 6px 8px; font: inherit; font-size: 13px; color: #e6e9ef;
+    background: #0f1115; border: 1px solid #39404f; border-radius: 6px; }
+  #bot-create-name:focus, #bot-create-permission:focus, #charter-permission:focus {
+    outline: none; border-color: #58627a; }
+  #bot-create-actions { display: flex; gap: 8px; }
+  #bot-create-submit, #bot-create-cancel { padding: 6px 12px; font: inherit; font-size: 13px;
+    border-radius: 6px; cursor: pointer; }
+  #bot-create-submit { color: #0f1115; background: #3fb950; border: 1px solid #3fb950; }
+  #bot-create-submit:disabled { opacity: .45; cursor: progress; }
+  #bot-create-cancel { color: #e6e9ef; background: transparent; border: 1px solid #39404f; }
+  #bot-create-error { margin: 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
+  #charter-permission-row { margin: 8px 0 0; font-size: 13px; color: #8b95a7; }
+  #charter-permission { margin-left: 8px; }
   #charter-memory { margin: 8px 0 0; font-size: 13px; color: #8b95a7;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
   #charter-content { margin: 10px 0 0; max-height: 60vh; overflow: auto;
@@ -276,11 +303,14 @@ INDEX_HTML: Final = """<!doctype html>
     font-size: 12px; line-height: 1.6; }
   #charter[data-state="idle"] #charter-memory,
   #charter[data-state="idle"] #charter-content,
+  #charter[data-state="idle"] #charter-permission-row,
   #charter[data-state="loading"] #charter-memory,
   #charter[data-state="loading"] #charter-content,
+  #charter[data-state="loading"] #charter-permission-row,
   #charter[data-state="ready"] #charter-state,
   #charter[data-state="error"] #charter-state,
   #charter[data-state="error"] #charter-memory,
+  #charter[data-state="error"] #charter-permission-row,
   #charter[data-state="error"] #charter-content { display: none; }
   /* 工作区卡片（S7 D9）。显隐只由 `#workspace[data-state=…]` 与 `hidden` 决定（T8：不碰
      style.display）；路径 / 分支 / Bot 名都是用户数据，只进 textContent。 */
@@ -365,6 +395,14 @@ INDEX_HTML: Final = """<!doctype html>
     <h2 id="charter-title">Charter</h2>
     <p id="charter-state">点左侧的 Bot 查看它的 charter</p>
     <p id="charter-error" role="alert" hidden></p>
+    <!-- S8 D8：权限是人的入口（05 §2.3：Bot 永不能改自己的级别）。四个选项与新建表单同源；
+         显隐只由 #charter 的 data-state 决定。 -->
+    <p id="charter-permission-row">权限<select id="charter-permission" aria-label="权限">
+        <option value="L0">L0 · 只读</option>
+        <option value="L1">L1 · 改工作区（默认）</option>
+        <option value="L2">L2 · 推分支</option>
+        <option value="L2+">L2+ · 开本仓库 PR</option>
+      </select></p>
     <p id="charter-memory" hidden></p>
     <pre id="charter-content" hidden></pre>
   </section>
@@ -395,6 +433,24 @@ INDEX_HTML: Final = """<!doctype html>
     <p id="bots-error" role="alert" hidden></p>
     <ul id="bot-list"></ul>
     <p id="bot-empty" hidden>这个仓库还没有 Bot。</p>
+    <!-- S8 D8：新建 Bot。四个可授予级别**就是全部**——L3/L4 不在这里，也不灰着放
+         （灰掉也会让人以为"以后能开"）。表单靠 hidden 开关，JS 不碰 style.display。 -->
+    <button id="bot-new" type="button">新建 Bot</button>
+    <form id="bot-create-form" autocomplete="off" hidden>
+      <input id="bot-create-name" type="text" spellcheck="false" maxlength="32"
+             placeholder="名字（如 qa-1）" aria-label="Bot 名字">
+      <select id="bot-create-permission" aria-label="权限">
+        <option value="L0">L0 · 只读</option>
+        <option value="L1" selected>L1 · 改工作区（默认）</option>
+        <option value="L2">L2 · 推分支</option>
+        <option value="L2+">L2+ · 开本仓库 PR</option>
+      </select>
+      <div id="bot-create-actions">
+        <button id="bot-create-submit" type="submit" disabled>创建</button>
+        <button id="bot-create-cancel" type="button">取消</button>
+      </div>
+      <p id="bot-create-error" role="alert" hidden></p>
+    </form>
   </section>
   <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
        「还没有仓库」（S3 D1：空 与 没连上 必须可区分）。 -->
@@ -491,6 +547,8 @@ INDEX_HTML: Final = """<!doctype html>
   var charterError = document.getElementById("charter-error");
   var charterMemory = document.getElementById("charter-memory");
   var charterContent = document.getElementById("charter-content");
+  var charterPermissionRow = document.getElementById("charter-permission-row");
+  var charterPermission = document.getElementById("charter-permission");
   var BOT_HINT = "选择一个仓库查看它的 Bot";
   var CHARTER_HINT = "点左侧的 Bot 查看它的 charter";
   // 两个面板**自己的**兜底：表外的码不显示绑定场景的「绑定失败」（同分支/差异面板）。
@@ -499,8 +557,21 @@ INDEX_HTML: Final = """<!doctype html>
   var selectedBotId = null;       // 选中的 Bot 与 repo 强绑定（D8）；切仓库/断连时清
   var selectedBotName = "";
   var botMemoryPaths = {};        // botId → memoryPath（来自 bot.list；charter.get 不回它）
+  // S8：botId → permission。徽标与 charter 面板的下拉**同源**（都来自 bot.list），
+  // 所以改权限成功后只需重拉一次列表，两处一起更新。
+  var botPermissions = {};
   var botRequestToken = 0;        // 只认最后一次 bot.list 的回包（快速切仓库）
   var charterRequestToken = 0;    // 只认最后一次 charter 请求的回包
+
+  // 新建 Bot（S8 D8）。表单开关只看 hidden；`botCreateBusy` 防连点。
+  var botNew = document.getElementById("bot-new");
+  var botCreateForm = document.getElementById("bot-create-form");
+  var botCreateName = document.getElementById("bot-create-name");
+  var botCreatePermission = document.getElementById("bot-create-permission");
+  var botCreateSubmit = document.getElementById("bot-create-submit");
+  var botCreateCancel = document.getElementById("bot-create-cancel");
+  var botCreateError = document.getElementById("bot-create-error");
+  var botCreateBusy = false;
 
   // 工作区卡片（S7 D9）。三条纪律：显隐只由 data-state / hidden 决定；路径与分支只进
   // textContent；**创建是显式动作**（选仓库只读 worktree.list，不会自动建目录）。
@@ -926,6 +997,23 @@ INDEX_HTML: Final = """<!doctype html>
     return ERROR_TEXT[code] || BOT_ERROR_FALLBACK;
   }
 
+  // S8 D8：两个面板的码 → 文案。全局 ERROR_TEXT 里 NOT_SUPPORTED 是「仓库含非 UTF-8 的名称」
+  // （S5 的语义），在这里显示那句话就是撒谎——所以这几条在面板里各自覆盖。
+  function botCreateErrorText(code) {
+    if (code === "INVALID_PARAMS") {
+      return "名字不合法：1–32 位，小写字母开头，只能用小写字母、数字和连接符";
+    }
+    if (code === "ALREADY_EXISTS") { return "这个仓库已经有叫这个名字的 Bot"; }
+    if (code === "NOT_SUPPORTED") { return "第一版不支持这个权限级别（L3 / L4）"; }
+    return ERROR_TEXT[code] || "新建 Bot 失败";
+  }
+
+  function permissionErrorText(code) {
+    if (code === "INVALID_PARAMS") { return "找不到这个 Bot"; }
+    if (code === "NOT_SUPPORTED") { return "第一版不支持这个权限级别（L3 / L4）"; }
+    return ERROR_TEXT[code] || "改权限失败";
+  }
+
   function charterErrorText(code) {
     // INVALID_PARAMS 在 charter 场景 = botId 查不到（D6）；不显示 S3 绑定场景的「路径参数不合法」。
     if (code === "INVALID_PARAMS") { return "找不到这个 Bot"; }
@@ -944,6 +1032,7 @@ INDEX_HTML: Final = """<!doctype html>
     botsError.textContent = "";
     botsError.hidden = true;
     botEmpty.hidden = true;
+    closeBotCreate(true);                 // S8：切仓库 / 断连时收掉半填的表单，别让它悬着
   }
 
   function applyBotSelection() {
@@ -963,6 +1052,7 @@ INDEX_HTML: Final = """<!doctype html>
   // 整行可选中（D8）：tabindex + role=button，click 与 Enter/Space 同一条路径。
   function renderBots(list) {
     botList.textContent = "";
+    botPermissions = {};   // 列表是徽标与 charter 下拉的共同事实源：整份重建，不留旧值
     for (var i = 0; i < list.length; i++) {
       var bot = list[i] || {};
       var rowId = String(bot.botId || "");
@@ -991,6 +1081,7 @@ INDEX_HTML: Final = """<!doctype html>
       summary.textContent = String(bot.charterSummary || "");
       // D8：记忆目录来自 bot.list 的 memoryPath（memory.charter.get 只回 content/rev）。
       botMemoryPaths[rowId] = String(bot.memoryPath || "");
+      botPermissions[rowId] = String(bot.permission || "");
       li.appendChild(name);
       li.appendChild(badge);
       li.appendChild(summary);
@@ -1029,6 +1120,7 @@ INDEX_HTML: Final = """<!doctype html>
     if (selectedRepoId === null) { resetBots("idle", BOT_HINT); return; }
     var repoId = selectedRepoId;
     var token = ++botRequestToken;
+    closeBotCreate(true);   // 列表要重读了：半填的表单不该跨过一次加载留着
     botsEl.dataset.state = "loading";
     botsState.textContent = "正在读取 Bot…";
     botList.textContent = "";
@@ -1048,6 +1140,72 @@ INDEX_HTML: Final = """<!doctype html>
     });
   }
 
+  // -------------------------------------------------------------------------
+  // 新建 Bot（S8 D8）。三条纪律：
+  //   1. 表单开关只看 hidden；按钮只在 ready 出现（CSS 管，不碰 style.display）；
+  //   2. 创建成功后**重新拉一次 bot.list**——排序与徽标的事实源在服务端，页面不拼列表；
+  //   3. 错误按**码**映射，不把服务端 message 贴到页面上（05 §4.2）。
+  // -------------------------------------------------------------------------
+
+  function syncBotCreateButton() {
+    botCreateSubmit.disabled = botCreateBusy || botCreateForm.hidden;
+  }
+
+  function openBotCreate() {
+    botCreateForm.hidden = false;
+    botCreateName.value = "";
+    botCreatePermission.value = "L1";   // D2：默认级别，改由人
+    botCreateError.textContent = "";
+    botCreateError.hidden = true;
+    syncBotCreateButton();
+    botCreateName.focus();
+  }
+
+  // `silent`：别抢焦点（切换仓库 / 重读列表时，用户的眼睛不在这个表单上）。
+  function closeBotCreate(silent) {
+    var wasOpen = !botCreateForm.hidden;
+    botCreateForm.hidden = true;
+    botCreateName.value = "";
+    botCreatePermission.value = "L1";
+    botCreateError.textContent = "";
+    botCreateError.hidden = true;
+    botCreateBusy = false;
+    syncBotCreateButton();
+    if (wasOpen && silent !== true) { botNew.focus(); }
+  }
+
+  function submitBotCreate() {
+    if (botCreateBusy || selectedRepoId === null || botCreateForm.hidden) { return; }
+    var repoId = selectedRepoId;
+    var name = botCreateName.value.trim();   // 只削空白：名字白名单由内核判（D3）
+    botCreateBusy = true;
+    botCreateError.textContent = "";
+    botCreateError.hidden = true;
+    syncBotCreateButton();
+    request("bot.create", {
+      repoId: repoId,
+      name: name,
+      permission: botCreatePermission.value
+    }, function (err, data) {
+      botCreateBusy = false;
+      syncBotCreateButton();
+      if (selectedRepoId !== repoId) { return; }   // 切了仓库：回包作废
+      if (err) {
+        botCreateError.textContent = botCreateErrorText(err);
+        botCreateError.hidden = false;
+        botCreateName.focus();   // 失败后光标回到能改的地方（提交按钮此时刚被重新启用）
+        return;
+      }
+      if (!data) {
+        botCreateError.textContent = "新建 Bot 失败";
+        botCreateError.hidden = false;
+        return;
+      }
+      closeBotCreate();
+      loadBots();
+    });
+  }
+
   function resetCharter(state, text) {
     charterRequestToken += 1;
     charterEl.dataset.state = state;
@@ -1059,6 +1217,15 @@ INDEX_HTML: Final = """<!doctype html>
     charterMemory.hidden = true;
     charterContent.textContent = "";
     charterContent.hidden = true;
+    // 在途的改权限回包也别再把控件解冻到"已重置"的面板上
+    charterPermission.disabled = false;
+    charterPermission.value = "";
+  }
+
+  // S8 D8：权限下拉的值只来自 botPermissions（bot.list 的同一份事实）。
+  // 库里若有选项之外的值（手改过 DB），这里落成未选中——不假装认识它。
+  function renderCharterPermission(botId) {
+    charterPermission.value = String(botPermissions[botId] || "");
   }
 
   function loadCharter(botId, botName) {
@@ -1072,6 +1239,7 @@ INDEX_HTML: Final = """<!doctype html>
     charterMemory.hidden = true;
     charterContent.textContent = "";
     charterContent.hidden = true;
+    renderCharterPermission(botId);
     request("memory.charter.get", { botId: botId }, function (err, data) {
       if (token !== charterRequestToken) { return; }  // 过期回包：切了仓库/Bot 或已断连
       if (err) {
@@ -1087,6 +1255,33 @@ INDEX_HTML: Final = """<!doctype html>
       charterMemory.hidden = false;
       charterContent.textContent = String(payload.content == null ? "" : payload.content);
       charterContent.hidden = false;
+      renderCharterPermission(botId);   // 回包可能比 renderBots 晚：再对一次
+    });
+  }
+
+  // S8 D8：人改权限（05 §2.3：Bot 永不能改自己的级别——本方法只挂在人的入口上）。
+  // 失败时把下拉**回滚**到服务端仍持有的值：控件不能声称一个内核拒绝了的改动。
+  function submitPermissionChange() {
+    if (selectedBotId === null || charterPermission.disabled) { return; }
+    var botId = selectedBotId;
+    var wanted = charterPermission.value;
+    var previous = String(botPermissions[botId] || "");
+    if (!wanted || wanted === previous) { return; }
+    charterPermission.disabled = true;
+    charterError.textContent = "";
+    charterError.hidden = true;
+    request("bot.set_permission", { botId: botId, permission: wanted }, function (err, data) {
+      charterPermission.disabled = false;
+      if (selectedBotId !== botId) { return; }   // 切了 Bot：回包作废
+      if (err) {
+        charterPermission.value = previous;
+        charterError.textContent = permissionErrorText(err);
+        charterError.hidden = false;
+        return;
+      }
+      botPermissions[botId] = String((data || {}).permission || wanted);
+      charterPermission.value = botPermissions[botId];
+      loadBots();   // 左栏徽标由 bot.list 渲染：一处事实源，两处一起更新
     });
   }
 
@@ -1102,9 +1297,9 @@ INDEX_HTML: Final = """<!doctype html>
     return ERROR_TEXT[code] || WORKSPACE_ERROR_FALLBACK;   // 表外的码不显示"绑定失败"
   }
 
-  // 卡片作用在哪个 Bot 上：**说出来**，别让人猜（D9）。没有 Bot 时说清楚，而不是静默不响应。
+  // 卡片作用在哪个 Bot 上：**说出来**，别让人猜（D9）。没有 Bot 时指向那个动作（S8 起可建）。
   function workspaceBotText(name) {
-    return name ? ("Bot：" + name) : "Bot：（这个仓库还没有 Bot）";
+    return name ? ("Bot：" + name) : "Bot：（还没有 Bot，先新建一个）";
   }
 
   // 本地文案（不是服务端 message）：连接没就绪 / 这个仓库还没有 Bot。
@@ -1408,6 +1603,24 @@ INDEX_HTML: Final = """<!doctype html>
     submitWorkspace();
   });
   workspaceRelease.addEventListener("click", releaseWorkspace);
+  // S8：新建走 <form>（回车 = 点「创建」）；Escape 收表单（焦点回到「新建 Bot」）；
+  // 改权限挂在下拉的 change 上——选完即提交，没有第二个按钮可以忘点。
+  botNew.addEventListener("click", openBotCreate);
+  botCreateForm.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    submitBotCreate();
+  });
+  botCreateCancel.addEventListener("click", function () { closeBotCreate(); });
+  // Escape 绑在 **document** 上，不是绑在 form 上：提交时按钮会被 `disabled`（防连点），
+  // 而"正在聚焦的元素被禁用"会把焦点丢回 body —— 绑在 form 上的 keydown 就再也收不到了
+  // （真实浏览器验收当场抓到这个，见 06-pitfalls T41）。守卫是"表单开着才管"。
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && !botCreateForm.hidden) {
+      ev.preventDefault();
+      closeBotCreate();
+    }
+  });
+  charterPermission.addEventListener("change", submitPermissionChange);
   // 断连期间**不自动重连**（禁止事项：不得静默重试而不改 UI 状态），只如实显示「已断开」。
   connect(metaTicket ? metaTicket.content : "");
 }());

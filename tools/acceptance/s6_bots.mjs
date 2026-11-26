@@ -12,6 +12,7 @@
  *
  * 覆盖（D8 的 DOM 契约）：
  *   1. 左栏 Bots 区出现 builder（名字 / L1 徽标 / 摘要「尚未填写职责」）；
+ *      （S8 起 `bot.list` 不再播种：这个 Bot 由剧本用「新建 Bot」表单建出来。）
  *   2. 点开看到 charter 全文 + 记忆目录**绝对路径**；
  *   3. 键盘 Enter 与 click 同一条路径；
  *   4. 切仓库两个面板一起清空；
@@ -266,6 +267,41 @@ async function waitCharterState(page, state) {
   await sleep(150);
 }
 
+/**
+ * 用「新建 Bot」表单建一个 Bot（S8 的用户路径）。
+ *
+ * S8 起 `bot.list` 不再惰性播种：任何"左栏要有一个 Bot"的剧本都得自己建一个。输入用
+ * Ctrl+A + Backspace 清空，不用三击——headless 里三击不选中（S7 的实测，见 replaceBase）。
+ */
+async function createBot(page, name, permission) {
+  await page.click("#bot-new");
+  await page.waitForFunction(() => document.getElementById("bot-create-form").hidden === false, {
+    timeout: 5000,
+  });
+  await page.click("#bot-create-name");
+  await page.keyboard.down("Control");
+  await page.keyboard.press("KeyA");
+  await page.keyboard.up("Control");
+  await page.keyboard.press("Backspace");
+  await page.type("#bot-create-name", name);
+  if (permission) await page.select("#bot-create-permission", permission);
+  await page.click("#bot-create-submit");
+  await page.waitForFunction(() => document.getElementById("bot-create-form").hidden === true, {
+    timeout: 15000,
+  });
+  await page.waitForFunction(
+    (want) => {
+      if (document.getElementById("bots").dataset.state !== "ready") return false;
+      return Array.from(document.querySelectorAll("#bot-list li .bot-name")).some(
+        (node) => node.textContent === want,
+      );
+    },
+    { timeout: 15000 },
+    name,
+  );
+  await sleep(150);
+}
+
 let failures = 0;
 function check(name, ok, detail) {
   if (!ok) failures += 1;
@@ -356,7 +392,15 @@ async function main() {
     check("0 左栏两行仓库", (await page.evaluate(() => document.querySelectorAll("#repo-list li[data-repo-id]").length)) === 2);
 
     // ---- 验收：点仓库 → 左栏 Bots 区出现 builder ----
+    // S8 起没有惰性播种：先点「新建 Bot」建一个（这本身是 S8 的路径，S6 只借它当准备）。
     await clickRepoRow(page, "demo-main");
+    const emptyBots = await snapshot(page);
+    check(
+      "0 S8 起空仓库真的没有 Bot（列表空 + 空态可见）",
+      emptyBots.botRows.length === 0 && emptyBots.botEmptyVisible,
+      { rows: emptyBots.botRows.length, empty: emptyBots.botEmptyVisible },
+    );
+    await createBot(page, "builder");
     const bots = await snapshot(page);
     const mainRepoId = bots.repoRows.find((row) => row.name === "demo-main").repoId;
     check("1 点仓库 → #bots data-state=ready", bots.botsState === "ready", bots.botsState);
@@ -410,7 +454,13 @@ async function main() {
     await clickRepoRow(page, "demo-two");
     const switched = await snapshot(page);
     const twoRepoId = switched.repoRows.find((row) => row.name === "demo-two").repoId;
-    check("4 切仓库 → #bots 重新 ready（demo-two 也有 builder）", switched.botsState === "ready" && switched.botRows.length === 1 && switched.botRows[0].name === "builder", switched.botRows);
+    check(
+      "4 切到另一个仓库 → 它还没有 Bot（S8 起不再自动播种）",
+      switched.botsState === "ready" &&
+        switched.botRows.length === 0 &&
+        switched.botEmptyVisible,
+      { state: switched.botsState, rows: switched.botRows.length },
+    );
     check(
       "4 切仓库 → #charter 回 idle、全文与记忆目录清空、标题回 Charter",
       switched.charterState === "idle" &&
@@ -422,6 +472,17 @@ async function main() {
       { state: switched.charterState, content: switched.content, title: switched.charterTitle },
     );
     await page.screenshot({ path: join(shots, "3-switched-repo.png") });
+
+    // S8：另一个仓库也要有一个 Bot，后面几条（键盘、XSS、断连）才有对象可点。
+    await createBot(page, "builder");
+    const twoBots = await snapshot(page);
+    check(
+      "4 在 demo-two 建一个 builder → 左栏有它（仓库隔离：与 demo-main 的不是同一行）",
+      twoBots.botRows.length === 1 &&
+        twoBots.botRows[0].name === "builder" &&
+        twoBots.botRows[0].botId.startsWith(`${twoRepoId}/`),
+      twoBots.botRows,
+    );
 
     // ---- 验收：键盘 Enter 与 click 同一条路径 ----
     await focusBotRow(page, 0);

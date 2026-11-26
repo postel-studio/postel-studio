@@ -1,6 +1,6 @@
 # 03 · assets — `src/postel_studio/web/assets.py`
 
-> 层 L4 · 1457 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
+> 层 L4 · 1670 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
 > ⚠️ **本模块是 Code Map 里覆盖最薄的一块**：JS 的 DOM 行为没有自动化测试。见 §测试。
 
 ## 职责
@@ -30,8 +30,8 @@ S6 起左栏还有「Bots」区、主区还有只读的「Charter」面板（D8 
 | `ERROR_TEXT` | 61 | 07 §1.3 错误码 → 用户可读中文（S3 左栏 + S4 分支面板 + S5 差异面板共用；S4 补 `REPO_NOT_BOUND`，S5 补 `BAD_REF` / `NOT_SUPPORTED`） |
 | `ERROR_TEXT_FALLBACK` | 79 | 表外的码走这句通用文案（**只给绑定表单**；分支/差异面板各有自己那句） |
 | `INDEX_HTML` | 81 | 页面本体 |
-| `error_text_json()` | 1420 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
-| `render_index(...)` | 1429 | 填占位符 |
+| `error_text_json()` | 1629 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
+| `render_index(...)` | 1638 | 填占位符 |
 
 页面内的 DOM / JS（S3 左栏仓库区）：
 
@@ -40,13 +40,13 @@ S6 起左栏还有「Bots」区、主区还有只读的「Charter」面板（D8 
 | `<section id="repos" data-state="loading">` | 401 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
 | `#bind-form` / `#bind-path` / `#bind-button` | 346-349 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
 | `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 351-354 | 错误 / 连接状态 / 列表 / 空态 |
-| `setState(state, text)` | 527 | 状态灯 + `#content.stale` + 转给 `setRepoState` |
-| `setRepoState(state, text)` | 538 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**）；非 connected 时把分支/差异面板重置回 idle |
-| `errorText(code)` | 570 | 错误码 → 文案（**不看 message**；绑定表单用） |
-| `renderRepos(list)` | 578 | 一行 = 名称 + 「默认分支 X」；`li` 可选中（`tabindex` / `role=button` / `data-selected`），重建后恢复选中标记；同时把 `defaultBranch` 存进 `repoDefaultBranches` 供差异面板用 |
-| `loadRepos()` | 637 | 连上后发 `repo.list` |
-| `submitBind()` | 1251 | 发 `repo.bind`，成功/失败各自收口 |
-| `request(method, params, done)` | 1299 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
+| `setState(state, text)` | 598 | 状态灯 + `#content.stale` + 转给 `setRepoState` |
+| `setRepoState(state, text)` | 609 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**）；非 connected 时把分支/差异面板重置回 idle |
+| `errorText(code)` | 641 | 错误码 → 文案（**不看 message**；绑定表单用） |
+| `renderRepos(list)` | 649 | 一行 = 名称 + 「默认分支 X」；`li` 可选中（`tabindex` / `role=button` / `data-selected`），重建后恢复选中标记；同时把 `defaultBranch` 存进 `repoDefaultBranches` 供差异面板用 |
+| `loadRepos()` | 708 | 连上后发 `repo.list` |
+| `submitBind()` | 1442 | 发 `repo.bind`，成功/失败各自收口 |
+| `request(method, params, done)` | 1490 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
 
 S4 的分支面板（D6）：
 
@@ -54,13 +54,13 @@ S4 的分支面板（D6）：
 |---|---|---|
 | `<section id="branches" data-state="idle">` | 339 | 主区分支面板，位置在 `#content` 之后；初始 idle |
 | `#branches-title` / `#branches-state` / `#branches-error` / `#branch-list` / `#branch-empty` | 302-306 | 标题 / 状态文案 / 错误 / 列表 / 空态（DOM 契约，id 不许改） |
-| `BRANCH_ERROR_FALLBACK` | 459 | 分支面板**自己的**兜底「读取分支列表失败」（不用 `ERROR_TEXT_FALLBACK`） |
-| `branchErrorText(code)` | 653 | 错误码 → 中文；表外走分支自己的兜底 |
-| `resetBranches(state, text)` | 661 | 清空列表 + 回指定 state；断连时 `idle` + 「已断开：分支列表未知」 |
-| `applyRepoSelection()` | 672 | 左边行 `data-selected="true"`（选中标记只在这一个函数里打/清） |
-| `renderBranches(list)` | 687 | 一行 = `.branch-name` / `.branch-sha` / `.branch-upstream`（有才建）/ `.branch-current`（仅当前）；**S5 起每行可点/键盘可达**（`tabIndex` / `role=button` / `data-selected`），重建后恢复选中 |
-| `loadBranches()` | 731 | 发 `repo.branches`；用 `branchRequestToken` 丢弃过期回包 |
-| `selectRepo(repoId, name)` | 1231 | 选中仓库：更新选中态 + 标题 + **清空差异面板** + 取分支 |
+| `BRANCH_ERROR_FALLBACK` | 515 | 分支面板**自己的**兜底「读取分支列表失败」（不用 `ERROR_TEXT_FALLBACK`） |
+| `branchErrorText(code)` | 724 | 错误码 → 中文；表外走分支自己的兜底 |
+| `resetBranches(state, text)` | 732 | 清空列表 + 回指定 state；断连时 `idle` + 「已断开：分支列表未知」 |
+| `applyRepoSelection()` | 743 | 左边行 `data-selected="true"`（选中标记只在这一个函数里打/清） |
+| `renderBranches(list)` | 758 | 一行 = `.branch-name` / `.branch-sha` / `.branch-upstream`（有才建）/ `.branch-current`（仅当前）；**S5 起每行可点/键盘可达**（`tabIndex` / `role=button` / `data-selected`），重建后恢复选中 |
+| `loadBranches()` | 802 | 发 `repo.branches`；用 `branchRequestToken` 丢弃过期回包 |
+| `selectRepo(repoId, name)` | 1422 | 选中仓库：更新选中态 + 标题 + **清空差异面板** + 取分支 |
 
 S5 的差异面板（D9）：
 
@@ -69,19 +69,19 @@ S5 的差异面板（D9）：
 | `<section id="diff" data-state="idle">` | 348 | 主区差异面板，位置在 `#branches` 之后；初始 idle |
 | `#diff-title` / `#diff-base` / `#diff-head` / `#diff-compare` / `#diff-state` / `#diff-error` / `#diff-truncated` / `#diff-stat` / `#diff-patch` | 311-322 | 标题 / 两个 ref 输入 + 对比按钮 / 状态文案 / 错误 / 截断提示 / 统计 / patch（DOM 契约，id 不许改） |
 | `DIFF_ERROR_FALLBACK` / `DIFF_HINT` | 419-420 | 差异面板自己的兜底「读取差异失败」/ 初始提示文案 |
-| `repoDefaultBranches` | 478 | `repoId → defaultBranch`（点分支行时 base 的来源；`null` = HEAD 游离） |
-| `selectedBranchName` | 479 | 当前点选的分支行（列表重建后恢复 `data-selected`） |
-| `diffErrorText(code)` | 769 | 错误码 → 中文；表外走差异面板自己的兜底 |
-| `diffTitleText()` | 773 | `差异` / `差异 · <repoName>`（`textContent`，不拼 HTML） |
-| `clearDiffContent(state, text)` | 778 | 清空统计/patch/错误/截断 + 回指定 state；`diffRequestToken += 1` 让在途回包作废 |
-| `applyBranchSelection()` | 792 | 分支行 `data-selected` 的唯一打/清点（重建后恢复） |
-| `resetDiff(state, text)` | 805 | 切仓库 / 断连的收口：清分支选中 + `clearDiffContent` |
-| `diffLineKind(line)` | 813 | **按 D9 的顺序**分类：meta（`diff --git`/`index`/mode/`\\`）→ hunk（`@@`）→ meta（`+++ `/`--- `）→ add → del → ctx |
-| `renderDiffPatch(patch)` | 825 | 一行一个 `<div class="diff-line diff-<kind>">`，文本 `textContent`（不可信） |
-| `diffStatText(stat)` | 837 | `<N> 个文件 · +<X> −<Y>`（U+00B7 / U+2212） |
-| `requestDiff(base, head)` | 842 | 发 `repo.diff`；`diffRequestToken` 丢弃过期回包；处理 truncated / 空 patch |
-| `selectBranch(name)` | 881 | 点分支行：填两个输入框；默认分支本身 / 无默认分支 → idle + 文案、**不发请求** |
-| `submitDiff()` | 901 | 手填表单：trim 后为空 → `#diff-error`「请填 base 和 head」、state 不变 |
+| `repoDefaultBranches` | 534 | `repoId → defaultBranch`（点分支行时 base 的来源；`null` = HEAD 游离） |
+| `selectedBranchName` | 535 | 当前点选的分支行（列表重建后恢复 `data-selected`） |
+| `diffErrorText(code)` | 840 | 错误码 → 中文；表外走差异面板自己的兜底 |
+| `diffTitleText()` | 844 | `差异` / `差异 · <repoName>`（`textContent`，不拼 HTML） |
+| `clearDiffContent(state, text)` | 849 | 清空统计/patch/错误/截断 + 回指定 state；`diffRequestToken += 1` 让在途回包作废 |
+| `applyBranchSelection()` | 863 | 分支行 `data-selected` 的唯一打/清点（重建后恢复） |
+| `resetDiff(state, text)` | 876 | 切仓库 / 断连的收口：清分支选中 + `clearDiffContent` |
+| `diffLineKind(line)` | 884 | **按 D9 的顺序**分类：meta（`diff --git`/`index`/mode/`\\`）→ hunk（`@@`）→ meta（`+++ `/`--- `）→ add → del → ctx |
+| `renderDiffPatch(patch)` | 896 | 一行一个 `<div class="diff-line diff-<kind>">`，文本 `textContent`（不可信） |
+| `diffStatText(stat)` | 908 | `<N> 个文件 · +<X> −<Y>`（U+00B7 / U+2212） |
+| `requestDiff(base, head)` | 913 | 发 `repo.diff`；`diffRequestToken` 丢弃过期回包；处理 truncated / 空 patch |
+| `selectBranch(name)` | 952 | 点分支行：填两个输入框；默认分支本身 / 无默认分支 → idle + 文案、**不发请求** |
+| `submitDiff()` | 972 | 手填表单：trim 后为空 → `#diff-error`「请填 base 和 head」、state 不变 |
 
 S6 的 Bots 区与 charter 面板（D8）：
 
@@ -95,15 +95,30 @@ S6 的 Bots 区与 charter 面板（D8）：
 | `BOT_HINT` / `CHARTER_HINT` / `BOT_ERROR_FALLBACK` / `CHARTER_ERROR_FALLBACK` | 437-441 | 提示文案与**各自**的兜底（不用绑定表单那句「绑定失败」） |
 | `selectedBotId` / `selectedBotName` / `botRequestToken` / `charterRequestToken` | 442-446 | 选中的 Bot（与 repo 强绑定）+ 两个过期回包拦截器 |
 | `botErrorText(code)` / `charterErrorText(code)` | 840/844 | 按码映射；`charterErrorText` 把 `INVALID_PARAMS` 翻成「找不到这个 Bot」（D6） |
-| `charterTitleText()` | 935 | `Charter` / `Charter · <botName>` |
-| `resetBots(state, text)` | 939 | 清列表 + 回 state；`botRequestToken += 1` 让在途回包作废 |
-| `applyBotSelection()` | 949 | Bot 行 `data-selected` 的唯一打/清点（列表重建后恢复） |
-| `renderBots(list)` | 964 | 一行 = `.bot-name` / `.bot-permission` / `.bot-charter-summary`；`li` 键盘可达；选中的 Bot 消失 → charter 回 idle |
-| `loadBots()` | 1028 | 发 `bot.list`；`botRequestToken` 丢弃过期回包 |
-| `resetCharter(state, text)` | 1051 | 清记忆目录/全文/错误 + 回 state（切仓库、断连） |
-| `loadCharter(botId, botName)` | 1064 | 发 `memory.charter.get`；全文与路径只进 `textContent`（D8/D9） |
-| `selectBot(botId, botName)` | 1223 | 选中 Bot → 取 charter |
+| `charterTitleText()` | 1023 | `Charter` / `Charter · <botName>` |
+| `resetBots(state, text)` | 1027 | 清列表 + 回 state；`botRequestToken += 1` 让在途回包作废 |
+| `applyBotSelection()` | 1038 | Bot 行 `data-selected` 的唯一打/清点（列表重建后恢复） |
+| `renderBots(list)` | 1053 | 一行 = `.bot-name` / `.bot-permission` / `.bot-charter-summary`；`li` 键盘可达；选中的 Bot 消失 → charter 回 idle |
+| `loadBots()` | 1119 | 发 `bot.list`；`botRequestToken` 丢弃过期回包 |
+| `resetCharter(state, text)` | 1205 | 清记忆目录/全文/错误 + 回 state（切仓库、断连） |
+| `loadCharter(botId, botName)` | 1227 | 发 `memory.charter.get`；全文与路径只进 `textContent`（D8/D9） |
+| `selectBot(botId, botName)` | 1414 | 选中 Bot → 取 charter |
 | `setRepoState` / `renderRepos` / `selectRepo` | 457/495/1006 | S6 钩子：断连重置两个面板、仓库列表重建后重取 `bot.list`、切仓库清 charter |
+
+S8 的新建 Bot 表单与 charter 面板的权限下拉（D8）：
+
+| 元素/函数 | 行 | 做什么 |
+|---|---|---|
+| `#bot-new` | 438 | 「新建 Bot」按钮；**只在 `#bots[data-state=ready]` 出现**（CSS 管） |
+| `#bot-create-form` / `#bot-create-name` / `#bot-create-permission` | 439-447 | 表单（`hidden` 开关 + `[hidden]{display:none}` 显式规则）与四个选项的下拉 |
+| `#bot-create-submit` / `#bot-create-cancel` / `#bot-create-error` | 449-452 | 提交（飞行中 `disabled`）/ 取消 / `role=alert` 的错误行 |
+| `#charter-permission-row` / `#charter-permission` | 400-405 | charter 面板里的权限下拉；同样四个选项，`change` 即提交 |
+| `botCreateErrorText(code)` / `permissionErrorText(code)` | 1002/1011 | 面板**自己的**码→文案（`ALREADY_EXISTS` / `NOT_SUPPORTED` 不进全局表） |
+| `syncBotCreateButton()` | 1150 | 提交按钮的 `disabled` 只看「忙不忙 + 表单开没开」 |
+| `openBotCreate()` / `closeBotCreate(silent)` | 1154/1165 | 开：清空 + 权限回 L1 + 聚焦名字；关：清空 + **焦点回按钮**（`silent` 不抢焦点） |
+| `submitBotCreate()` | 1177 | 发 `bot.create`；成功 → 关表单 + `loadBots()`；失败 → 错误行 + 焦点回名字框 |
+| `renderCharterPermission(botId)` | 1223 | 下拉的值只来自 `botPermissions`（`bot.list` 的同一份事实） |
+| `submitPermissionChange()` | 1260 | 发 `bot.set_permission`；成功 → 更新徽标（`loadBots`）；失败 → **回滚下拉** + 错误行 |
 
 ## 关键决策与理由
 
@@ -290,6 +305,19 @@ DOM 契约（**id / `data-state` 值 / 类名都是契约，浏览器验收按�
   `bot.list`，选中的 Bot 仍存在时把 charter 重放回来（charter 是静态内容，重放不会覆盖
   用户正在看的对比——这一条与 diff 的「不重放」不同）。
 - **两个 token**：`botRequestToken` / `charterRequestToken` 各自拦住过期回包（快速切仓库）。
+
+### S8：新建 Bot —— 表单只是一个动作，列表仍是事实源
+
+- **创建成功后不在本地拼列表**：`submitBotCreate` 成功只做两件事——关表单、`loadBots()`。
+  排序（`created_at, bot_id`）与徽标的事实源都在服务端，页面只负责显示。
+- **改权限也一样**：`bot.set_permission` 成功后 `loadBots()` 刷新徽标，而不是直接改 DOM 文本。
+  下拉的值来自 `botPermissions`（`renderBots` 时从 `bot.list` 填），所以两处永远不会说两句话。
+- **失败要回滚控件**：`set_permission` 被拒时把下拉拨回服务端仍持有的值。一个"显示成改了、
+  其实没改"的控件比一行错误文案更糟。
+- **Escape 绑在 `document` 上**（T41）：提交时按钮会被 `disabled`（防连点），"聚焦元素被禁用"
+  会把焦点丢回 `body`，绑在 `<form>` 上的 keydown 就再也收不到——真实浏览器验收当场抓到。
+- **四个选项就是全部**：`L3`/`L4` 不出现，**也不灰着放**（灰掉会让人以为"以后能开"）。
+  `test_page_permission_select_lists_exactly_four_levels` 静态守着两个下拉。
 
 ## 修改须知
 

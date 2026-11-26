@@ -235,10 +235,9 @@ def _add_repo(repos: state_db.RepoStore, path: Path, *, repo_id_value: str | Non
     return repos.upsert(repo)
 
 
-def _payload(service: BotService, repo_id_value: str) -> dict[str, object]:
-    payloads = service.list({"repoId": repo_id_value})
-    assert len(payloads) == 1
-    return payloads[0]
+def _make_bot(service: BotService, repo_id_value: str, name: str = "builder") -> dict[str, object]:
+    """建一个 Bot 并返回它的载荷。**S8 起没有惰性播种**：要有一个 Bot，就得先创建一个。"""
+    return service.create({"repoId": repo_id_value, "name": name})
 
 
 def _seed(repos: state_db.RepoStore, tmp_path: Path, name: str = "repo-a") -> Repo:
@@ -246,24 +245,28 @@ def _seed(repos: state_db.RepoStore, tmp_path: Path, name: str = "repo-a") -> Re
 
 
 # ---------------------------------------------------------------------------
-# D11 第 1/2/3 行：惰性播种、幂等不覆盖、仓库隔离
+# D11 第 1/2/3 行：列表（S8 起是纯读）、幂等不覆盖、仓库隔离
 # ---------------------------------------------------------------------------
 
 
-def test_first_bot_list_seeds_preset_builder(
+def test_bot_list_returns_created_bots_and_repeats_identically(
     service: BotService, repos: state_db.RepoStore, tmp_path: Path
 ) -> None:
-    """**D11 第 1 行**：首次 `bot.list` 播种 1 个 `builder`；再调一次仍是 1 个（D2 幂等）。"""
+    """**D11 第 1 行（S8 改写）**：创建后列出 1 个；再列一次逐字相同（纯读、无副作用）。
+
+    S6 的这条断言原本是"首次 `bot.list` 播种"，S8 D7 删掉了播种——现在 `bot.list` 不写任何
+    东西，"列出什么"完全由 `bot.create` 决定（空列表那条在 `tests/test_bot_create.py`）。
+    """
     repo = _seed(repos, tmp_path)
-    first = service.list({"repoId": repo.repo_id})
-    assert len(first) == 1
-    payload = first[0]
+    assert service.list({"repoId": repo.repo_id}) == []  # 建之前就是空的，不自动补
+    payload = _make_bot(service, repo.repo_id)
     assert payload["name"] == "builder"
     assert payload["permission"] == "L1"
     assert payload["agentKind"] is None
     assert payload["charterSummary"] == DEFAULT_SUMMARY
     assert isinstance(payload["charterRev"], int) and payload["charterRev"] > 0
-    assert service.list({"repoId": repo.repo_id}) == first  # 不重复播种、载荷也一致
+    assert service.list({"repoId": repo.repo_id}) == [payload]
+    assert service.list({"repoId": repo.repo_id}) == [payload]  # 第二次读一模一样
 
 
 def test_bot_list_never_overwrites_an_edited_charter(
@@ -271,7 +274,7 @@ def test_bot_list_never_overwrites_an_edited_charter(
 ) -> None:
     """**D11 第 2 行**：手写 charter → 再 `bot.list` + `charter.get` → 内容**逐字未变**。"""
     repo = _seed(repos, tmp_path)
-    payload = _payload(service, repo.repo_id)
+    payload = _make_bot(service, repo.repo_id)
     charter = Path(str(payload["memoryPath"])) / paths.CHARTER_FILE
     edited = "# builder\n\n## 职责\n\n审查每一行改动。\n"
     paths.atomic_write(charter, edited.encode("utf-8"))
@@ -287,11 +290,11 @@ def test_bot_list_never_overwrites_an_edited_charter(
 def test_two_repos_have_isolated_builders_and_charters(
     service: BotService, repos: state_db.RepoStore, tmp_path: Path
 ) -> None:
-    """**D11 第 3 行**：两个 repo 各播种 `builder`、各写不同 charter → 各回各的。"""
+    """**D11 第 3 行**：两个 repo 各建 `builder`、各写不同 charter → 各回各的。"""
     repo_a = _seed(repos, tmp_path, "repo-a")
     repo_b = _seed(repos, tmp_path, "repo-b")
-    payload_a = _payload(service, repo_a.repo_id)
-    payload_b = _payload(service, repo_b.repo_id)
+    payload_a = _make_bot(service, repo_a.repo_id)
+    payload_b = _make_bot(service, repo_b.repo_id)
     assert payload_a["botId"] != payload_b["botId"]
     assert payload_a["memoryPath"] != payload_b["memoryPath"]
 
@@ -317,7 +320,7 @@ def test_memory_path_is_absolute_outside_the_repo_and_exists(
 ) -> None:
     """**D11 第 4 行**：`memoryPath` 在 `bots_root()` 下、**不在仓库路径内**、目录真实存在。"""
     repo = _seed(repos, tmp_path)
-    memory = Path(str(_payload(service, repo.repo_id)["memoryPath"]))
+    memory = Path(str(_make_bot(service, repo.repo_id)["memoryPath"]))
     assert memory.is_absolute()  # D9：显示绝对路径，不伪装成 ~
     assert str(memory).startswith(str(paths.state_root()))
     assert memory.is_relative_to(paths.bots_root())
@@ -326,12 +329,12 @@ def test_memory_path_is_absolute_outside_the_repo_and_exists(
         assert (memory / name).exists(), name
 
 
-def test_seeded_bot_permissions_are_0700_and_0600(
+def test_created_bot_permissions_are_0700_and_0600(
     umask_022: None, service: BotService, repos: state_db.RepoStore, tmp_path: Path
 ) -> None:
-    """**D11 第 5 行**：播种出来的目录链全 `0700`、`charter.md` `0600`（真 stat，T38）。"""
+    """**D11 第 5 行**：创建出来的目录链全 `0700`、`charter.md` `0600`（真 stat，T38）。"""
     repo = _seed(repos, tmp_path)
-    memory = Path(str(_payload(service, repo.repo_id)["memoryPath"]))
+    memory = Path(str(_make_bot(service, repo.repo_id)["memoryPath"]))
     for directory in (
         paths.bots_root(),
         memory.parent,
@@ -353,7 +356,7 @@ def test_charter_rev_changes_with_content_and_is_deterministic(
 ) -> None:
     """**D11 第 6 行**：载荷 `{content, rev}`；改内容 rev 变、不改则 rev 相同（确定性）。"""
     repo = _seed(repos, tmp_path)
-    payload = _payload(service, repo.repo_id)
+    payload = _make_bot(service, repo.repo_id)
     bot_id_value = str(payload["botId"])
     first = service.charter_get({"botId": bot_id_value})
     assert first == service.charter_get({"botId": bot_id_value})
@@ -401,7 +404,7 @@ def test_bot_payload_has_exactly_eight_fields(
 ) -> None:
     """**D11 第 8 行**：`set(payload)` 恰好是 06/07 的八个字段，`agentKind is None`。"""
     repo = _seed(repos, tmp_path)
-    payload = _payload(service, repo.repo_id)
+    payload = _make_bot(service, repo.repo_id)
     assert set(payload) == {
         "botId",
         "repoId",
@@ -435,7 +438,7 @@ def test_bot_error_codes(service: BotService, repos: state_db.RepoStore, tmp_pat
         service.list({"repoId": "0" * 12})
     assert excinfo.value.code == "REPO_NOT_BOUND"
 
-    payload = _payload(service, repo.repo_id)
+    payload = _make_bot(service, repo.repo_id)
     bad_bot_params: tuple[dict[str, object], ...] = (
         {},
         {"botId": None},
@@ -459,7 +462,7 @@ def test_bot_id_traversal_is_rejected_and_creates_nothing(
     """**D11 第 10 行**：`botId="../../etc/passwd"` 之类 → `INVALID_PARAMS`，
     且**没有在状态根外创建任何东西**。"""
     repo = _seed(repos, tmp_path)
-    _payload(service, repo.repo_id)  # 先播种出真实记忆目录
+    _make_bot(service, repo.repo_id)  # 先建出真实记忆目录
     before = sorted(p.name for p in tmp_path.iterdir())
     for bad in (
         "../../etc/passwd",
@@ -516,7 +519,10 @@ def _init_repo(path: Path) -> Path:
 
 def test_ws_bot_frames_match_service(gw: Kernel, state_home: Path, tmp_path: Path) -> None:
     """**D11 第 13 行**：`bot.list` / `memory.charter.get` 走真 WS 帧，载荷与直调服务层
-    一致；同一条连接上 `seq` 严格递增（1,2,3,4）。"""
+    一致；同一条连接上 `seq` 严格递增（1..5）。
+
+    S8 起列表**不再播种**：这条用例必须先发一帧 `bot.create`，否则 `bot.list` 回的是 `[]`。
+    """
     repo_path = _init_repo(tmp_path / "repo")
 
     async def run() -> tuple[str, dict[str, object], dict[str, object], dict[str, object]]:
@@ -537,20 +543,47 @@ def test_ws_bot_frames_match_service(gw: Kernel, state_home: Path, tmp_path: Pat
             assert isinstance(bound_data, dict)
             repo_id_value = bound_data["repoId"]
             assert isinstance(repo_id_value, str)
-            first = await call(ws, "c2", "bot.list", {"repoId": repo_id_value})
-            again = await call(ws, "c3", "bot.list", {"repoId": repo_id_value})
+            created = await call(
+                ws, "c2", "bot.create", {"repoId": repo_id_value, "name": "builder"}
+            )
+            created_data = frame_result(created)["data"]
+            assert isinstance(created_data, dict)
+            assert set(created_data) == {
+                "botId",
+                "repoId",
+                "name",
+                "permission",
+                "agentKind",
+                "charterRev",
+                "charterSummary",
+                "memoryPath",
+            }
+            assert created_data["botId"] == f"{repo_id_value}/builder"
+            assert created_data["permission"] == "L1"
+            assert created_data["memoryPath"] == str(paths.bots_root() / repo_id_value / "builder")
+            first = await call(ws, "c3", "bot.list", {"repoId": repo_id_value})
+            again = await call(ws, "c4", "bot.list", {"repoId": repo_id_value})
             payloads = frame_result(first)["data"]
             assert isinstance(payloads, list) and len(payloads) == 1
             bot_payload = payloads[0]
             assert isinstance(bot_payload, dict)
             bot_id_value = bot_payload["botId"]
             assert isinstance(bot_id_value, str)
-            charter = await call(ws, "c4", "memory.charter.get", {"botId": bot_id_value})
+            # S8 的第二个方法也过一遍真帧：改权限回的是同一个 8 字段载荷
+            changed = await call(
+                ws, "c5", "bot.set_permission", {"botId": bot_id_value, "permission": "L2"}
+            )
+            changed_data = frame_result(changed)["data"]
+            assert isinstance(changed_data, dict)
+            assert changed_data["permission"] == "L2"
+            # 改回去，好让下面"与直调服务层一致"逐字相等
+            await call(ws, "c6", "bot.set_permission", {"botId": bot_id_value, "permission": "L1"})
+            charter = await call(ws, "c7", "memory.charter.get", {"botId": bot_id_value})
             return repo_id_value, first, again, charter
 
     repo_id_value, first, again, charter = asyncio.run(run())
     assert repo_id_value == repo_id(str(repo_path))
-    assert [frame_seq(frame) for frame in (first, again, charter)] == [2, 3, 4]
+    assert [frame_seq(frame) for frame in (first, again, charter)] == [3, 4, 7]
 
     payloads = frame_result(first)["data"]
     assert payloads == frame_result(again)["data"]

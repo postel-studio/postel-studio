@@ -200,7 +200,7 @@ S3 也没有退出收场（连接不显式 close，靠进程退出回收；WAL �
 
 | 没有 | 出现的切片 | 届时影响 |
 |---|---|---|
-| 其余业务方法（bot/task/candidate/memory/agent、`repo.unbind`） | S4~S13 | `dispatch()` 已从 4 个分支长到 11 个（S7 结束）→ 到十几个时应考虑改注册表 |
+| 其余业务方法（task/candidate/memory/agent、`repo.unbind`、`bot.delete`） | S4~S13 | `dispatch()` 已从 4 个分支长到 **13 个**（S8 结束）→ **已经到该考虑改注册表的时候**了（S10 的 `task.*` 会再加 4 个） |
 | Bot / Task / Candidate / WorktreeLease 表 | 后续切片 | 现在只有 `repos` 一张表；新表 append 一版迁移 |
 | 订阅/topic 机制 | S10 前后 | `encode_event` 已存在但**从未被调用** |
 | `seq` 的跨连接语义 | — | 现在每连接独立从 1 开始（D4） |

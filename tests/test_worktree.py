@@ -39,7 +39,7 @@ REPO_NOT_BOUND = "REPO_NOT_BOUND"
 BAD_BASE_REF = "BAD_BASE_REF"
 WORKTREE_CONFLICT = "WORKTREE_CONFLICT"
 
-PRESET = "builder"  # S6 的预置 Bot（M1 唯一一个）
+PRESET = "builder"  # 本文件用的 Bot 名字（S8 起由 `bot.create` 建，不再有预置播种）
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,11 @@ def service(
 def bind(
     stores: tuple[state_db.RepoStore, state_db.BotStore],
 ) -> Callable[[Path], str]:
-    """`bind(path) -> repoId`，并顺手让 S6 的惰性播种建出 `builder`（工作区必须挂在 Bot 上）。"""
+    """`bind(path) -> repoId`，并顺手建出 `builder`（工作区必须挂在一个 Bot 上）。
+
+    S8 删掉了 `bot.list` 的惰性播种，所以这里显式 `bot.create`——S7 的断言点（路径 / 分支 /
+    复用 / 回收）一个都没变，只是"Bot 从哪来"变成了人的动作。
+    """
     repos, bots = stores
     repository = RepositoryService(repos)
 
@@ -148,7 +152,7 @@ def bind(
         repo_id = payload["repoId"]
         assert isinstance(repo_id, str)
         if seed:
-            BotService(bots, repos).list({"repoId": repo_id})
+            BotService(bots, repos).create({"repoId": repo_id, "name": PRESET})
         return repo_id
 
     return bind_repo
@@ -772,6 +776,8 @@ def test_gateway_exposes_the_three_worktree_methods() -> None:
         repo_branches=lambda params: [params],
         repo_diff=lambda params: params,
         bot_list=lambda params: [params],
+        bot_create=lambda params: params,
+        bot_set_permission=lambda params: params,
         memory_charter_get=lambda params: params,
         worktree_acquire=acquire,
         worktree_list=listing,
