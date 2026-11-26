@@ -1,6 +1,6 @@
 # 03 · gateway — `src/postel_studio/api/gateway.py`
 
-> 层 L3 · 174 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
+> 层 L3 · 181 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
 
 ## 职责
 
@@ -15,10 +15,10 @@ WebSocket 网关：**认证 → 接受 → 分派 → 回帧**。
 | `CLOSE_FRAME_INVALID` | 39 | `4002` 关闭码 | `handler` |
 | `TicketRegistry` | 42 | 一次性 ticket 签发/消费 | `app.create_app` |
 | `ConnectionState` | 75 | 每连接的 `seq` 计数器（D4） | `handler` |
-| `Providers` | 85 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list` / `repo_branches` / `repo_diff`） | `app.create_app` |
+| `Providers` | 86 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list` / `repo_branches` / `repo_diff` / S6 的 `bot_list` / `memory_charter_get`） | `app.create_app` |
 | `active_connection_count()` | 99 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
-| `dispatch(method, params, providers)` | 108 | 方法表（6 个分支） | `handler` |
-| `install(app, path, tickets, providers)` | 120 | 把 WS 路由挂到 app | `app.create_app` |
+| `dispatch(method, params, providers)` | 111 | 方法表（8 个分支） | `handler` |
+| `install(app, path, tickets, providers)` | 138 | 把 WS 路由挂到 app | `app.create_app` |
 | `_ACTIVE` / `_ACTIVE_LOCK` | 70-71 | 活动连接表（模块级） | 内部 |
 
 ## 关键决策与理由
@@ -120,7 +120,7 @@ finally:
 
 `system.health` 与 `system.echo` **共用同一个计数器**，不另造。
 
-### `dispatch()` 现在有六个分支（S2 两个 + S3 两个 + S4 一个 + S5 一个）
+### `dispatch()` 现在有八个分支（S2 两个 + S3 两个 + S4/S5 各一 + S6 两个）
 
 ```python
 # api/gateway.py:110-122（真实代码的形状，别把业务写进来）
@@ -136,18 +136,22 @@ if method == "repo.branches":  # S4：参数只有 repoId
     return providers.repo_branches(params)
 if method == "repo.diff":  # S5：repoId + base + head(+ maxChars)
     return providers.repo_diff(params)
+if method == "bot.list":  # S6：一个仓库下的 Bot（空则惰性播种，D2）
+    return providers.bot_list(params)
+if method == "memory.charter.get":  # S6：charter 正文 + 内容哈希版本（D5）
+    return providers.memory_charter_get(params)
 raise FrameError(UNKNOWN_METHOD, ...)
 ```
 
 **故意不实现** `system.subscribe` —— 订阅机制属后续切片。
 未实现的方法返回 `UNKNOWN_METHOD`，**不要返回空成功**（客户端会以为订阅生效了）。
 
-S3/S4/S5 的四个业务分支是**转手**：真正的实现在 `api/repository.py`（`RepositoryService`），
+S3–S6 的六个业务分支都是**转手**：真正的实现在 `api/repository.py`（`RepositoryService`），
 由 `app.create_app()` 构造后经 `Providers` 注入。网关不认识"仓库/数据库/git"任何一个词。
 
 > **后续切片注意**：方法多到 6~8 个时，`if` 链应该改成注册表（dict）。
-> 现在六个分支**已经到阈值**：下一个方法（S6 的 `bot.*`）应当顺手把 `if` 链换成 dict
-> 注册表，但**不要**单独为这次重构开一刀。
+> **S6 已经到 8 个分支**（阈值上沿）；S6 的裁决是"本刀只加两行、不顺手重构"（预算），
+> 下一个方法应当把 `if` 链换成 dict 注册表，但**不要**单独为这次重构开一刀。
 
 > ⚠️ `test_unknown_method_is_unknown_method_not_subscribe` 曾把 `repo.bind` 当"未实现"的反例。
 > S3 实现它之后反例改成 `bot.list` / `task.dispatch` / `agent.list` / `repo.branches` 等；
@@ -195,3 +199,4 @@ S3/S4/S5 的四个业务分支是**转手**：真正的实现在 `api/repository
 | `tests/test_branches.py::test_websocket_branches_roundtrip_matches_service_layer` | S4 D7 第 9 行：`repo.branches` 帧往返（`result.data` 数组 + `seq`），与直调服务层一致 |
 | `tests/test_diff.py::test_ws_repo_diff_matches_service` | S5 D10 第 21 行：`repo.diff` 帧往返（`result.data` = `{stat,patch,truncated}` + `seq`），与直调服务层逐字段一致 |
 | `tests/test_diff.py::test_ws_repo_diff_error_frame_carries_stable_code` | 坏 `repoId` → `ok:false` + `REPO_NOT_BOUND`（稳定码，不是 500） |
+| `tests/test_bot_charter.py::test_ws_bot_frames_match_service` | S6 D11 #13：`bot.list` / `memory.charter.get` 帧往返，与直调服务层一致、`seq` 递增 |

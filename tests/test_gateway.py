@@ -231,8 +231,9 @@ def test_seq_restarts_for_a_new_connection(kernel: Kernel):
 def test_unknown_method_is_unknown_method_not_subscribe(kernel: Kernel):
     """只实现已登记的方法：其它（含 `system.subscribe`）一律 UNKNOWN_METHOD。
 
-    `repo.bind`（S3）与 `repo.branches`（S4）**都已实现**，不再是反例——它们收到空 params 时
-    正确回 `INVALID_PARAMS`。反例保留 5 个仍未实现的方法（D7 要求至少 4 个）。
+    `repo.bind`（S3）/ `repo.branches`（S4）/ `repo.diff`（S5）/ `bot.list`（S6）**都已实现**，
+    不再是反例——它们收到空 params 时正确回 `INVALID_PARAMS`（或 `REPO_NOT_BOUND`）。
+    反例保留 5 个仍未实现的方法（D7 要求至少 4 个；S6 把 `bot.list` 换成了 `bot.create`）。
     """
     ticket, _ = kernel.fetch_page()
 
@@ -241,7 +242,7 @@ def test_unknown_method_is_unknown_method_not_subscribe(kernel: Kernel):
         async with websockets.connect(kernel.ws_url(ticket)) as ws:
             for i, method in enumerate(
                 [
-                    "bot.list",
+                    "bot.create",
                     "task.dispatch",
                     "agent.list",
                     "system.subscribe",

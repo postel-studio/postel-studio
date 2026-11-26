@@ -12,9 +12,10 @@
 | L0 | [gitops](gitops.md) | `src/postel_studio/gitops/repo.py` | 468 | git 只读探测（子进程，含 S4 分支列表 + S5 diff）——**唯一起 git 的地方** |
 | L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 356 | `state.db`、schema 迁移（v3）、`RepoStore` / `BotStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 256 | 进程生命周期、信号、日志 |
-| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 96 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store 并注入 |
-| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 174 | WS 认证与帧分派（6 个方法） |
+| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 101 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store/service 并注入 |
+| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 181 | WS 认证与帧分派（8 个方法） |
 | L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 405 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的业务编排（**不碰 fastapi**） |
+| L3 | [bots](bots.md) | `src/postel_studio/api/bots.py` | 181 | `bot.list` / `memory.charter.get` 的业务编排（惰性播种 + charter 摘要/rev，**不碰 fastapi**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 121 | 帧编解码，纯函数 |
 | L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 948 | 页面 HTML + 内联 JS（S3 左栏仓库区 + S4 分支面板 + S5 差异面板） |
 

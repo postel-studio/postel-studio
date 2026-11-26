@@ -1,7 +1,8 @@
 """网关：一次性 handshake ticket → WebSocket → 帧分派（S2 D1/D3/D4/D5）。
 
 方法表（`dispatch()`）：S2 的 `system.echo` / `system.health`，S3 加了 `repo.bind` / `repo.list`，
-S4 加了 `repo.branches`，S5 加了 `repo.diff`（四个 `repo.*` 都**只走 WS 帧**，不新开 HTTP 路由）。
+S4 加了 `repo.branches`，S5 加了 `repo.diff`，S6 加了 `bot.list` / `memory.charter.get`
+（都**只走 WS 帧**，不新开 HTTP 路由）。
 其余一律 `UNKNOWN_METHOD`；订阅 / topic 机制在 S2 **故意不存在**，S3/S4/S5 也没有加——
 不要在这里提前长出来。
 
@@ -86,9 +87,9 @@ class Providers:
     """从 `app` 侧注入的能力（消环用：`app` import 本模块，本模块不得反向 import `app`）。
 
     `repo_bind` / `repo_list` 是 S3 加的两个业务入口，`repo_branches` 是 S4 加的第三个，
-    `repo_diff` 是 S5 加的第四个；
+    `repo_diff` 是 S5 加的第四个，`bot_list` / `memory_charter_get` 是 S6 加的第五、六个；
     签名刻意用 `dict → dict`（列表载荷用 `list[dict]`）：闸门只认「帧的参数对象进、载荷对象出」，
-    网关不知道仓库、数据库、git 的存在。
+    网关不知道仓库、数据库、git、charter 文件的存在。
     抛 `frames.FrameError` 时网关原样转发它的 `code` / `message`（D6 的稳定码）。
     """
 
@@ -97,6 +98,8 @@ class Providers:
     repo_list: Callable[[], list[dict[str, object]]]
     repo_branches: Callable[[dict[str, object]], list[dict[str, object]]]
     repo_diff: Callable[[dict[str, object]], dict[str, object]]
+    bot_list: Callable[[dict[str, object]], list[dict[str, object]]]
+    memory_charter_get: Callable[[dict[str, object]], dict[str, object]]
 
 
 def active_connection_count() -> int:
@@ -119,6 +122,10 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.repo_branches(params)
     if method == "repo.diff":  # S5 / 07 §4.6：两个 ref → 三点 diff 的 stat + patch
         return providers.repo_diff(params)
+    if method == "bot.list":  # S6 / 07 §4.7：一个仓库下的 Bot（空则惰性播种，D2）
+        return providers.bot_list(params)
+    if method == "memory.charter.get":  # S6 / 07 §4.8：charter 正文 + 内容哈希版本
+        return providers.memory_charter_get(params)
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 
