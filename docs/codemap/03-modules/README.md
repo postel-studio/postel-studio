@@ -9,7 +9,7 @@
 | L0 | [entry](entry.md) | `src/postel_studio/__init__.py` | 55 | CLI 入口，解析 `serve` / `version` |
 | L0 | [paths](paths.md) | `src/postel_studio/storage/paths.py` | 203 | 状态根、锁、原子写、权限 |
 | L0 | [domain](domain.md) | `src/postel_studio/domain/models.py` | 131 | `Repo` 实体、origin 归一化、`repo_id`（**无 IO**） |
-| L0 | [gitops](gitops.md) | `src/postel_studio/gitops/repo.py` | 197 | git 只读探测（子进程）——**唯一起 git 的地方** |
+| L0 | [gitops](gitops.md) | `src/postel_studio/gitops/repo.py` | 280 | git 只读探测（子进程，含 S4 分支列表）——**唯一起 git 的地方** |
 | L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 261 | `state.db`、schema 迁移、`RepoStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 256 | 进程生命周期、信号、日志 |
 | L3 | [app](app.md) | `src/postel_studio/api/app.py` | 94 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store 并注入 |
