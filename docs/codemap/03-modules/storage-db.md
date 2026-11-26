@@ -1,13 +1,14 @@
 # 03 · storage-db — `src/postel_studio/storage/db.py`
 
-> 层 L0（**碰磁盘**）· 261 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
+> 层 L0（**碰磁盘**）· 356 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
 
 ## 职责
 
-内核的本地状态库 `state.db`：连接、**schema 版本与迁移**、`repos` 表的读写。
+内核的本地状态库 `state.db`：连接、**schema 版本与迁移**、`repos` 与 `bots`（S6）表的读写。
 
 - **只写在状态根**（`~/.postel/state.db`，`POSTEL_HOME` 覆盖）。**绝不**写进用户仓库（S3 禁止事项）。
-- 本刀**只有一张表** `repos`。Bot / Task / Candidate / WorktreeLease 是后续切片，**不要提前建表**。
+- S3 只有 `repos`；S6 加了第二张表 `bots`（v3）。Task / Candidate / WorktreeLease 仍是后续切片，
+  **不要提前建表**（建错的表比没有表更难改回来）。
 - 用**标准库 `sqlite3`**，不引入 ORM / 迁移框架（S3 DoD：不新增依赖）。
 
 文件名的事实源在 `storage/paths.py:26/59`（`STATE_DB_FILE` / `state_db_file()`），本模块只是消费者。
@@ -16,8 +17,8 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `SCHEMA_VERSION` | 31 | `2`：当前 schema 版本（v1 = S3 初始，v2 = S3.5 加 `origin_hash`） | `migrate`、测试 |
-| `_MIGRATIONS` | 39 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
+| `SCHEMA_VERSION` | 32 | `3`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`） | `migrate`、测试 |
+| `_MIGRATIONS` | 42 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
 | `_COLUMNS` | 62 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
 | `state_db_path()` | 65 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
 | `_connect(path)` | 70 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
@@ -31,11 +32,17 @@
 | `RepoStore.get(repo_id)` | 153 | 按 id 取，没有给 `None` | `repo.get`（S4 入口） |
 | `RepoStore.upsert(repo)` | 163 | 绑定写库：同路径**不产生第二行**，且**不改写已有 `repo_id`**；返回落库后的记录 | `repo.bind` |
 | `_row_to_repo(row)` | 235 | `sqlite3.Row` → `Repo`，类型收敛只在这一处 | 内部 |
+| `_BOT_COLUMNS` | 281 | `bots` 的列清单（同 `_COLUMNS` 的理由：只写一份） | `BotStore` |
+| `BotStore` | 284 | `bots` 表的读写门面（带锁）：`list_for_repo` / `get` / `insert` | `api/app.py`、`api/bots.py` |
+| `BotStore.list_for_repo(repo_id)` | 304 | 某仓库全部 Bot，`ORDER BY created_at, bot_id`（确定性） | `bot.list` |
+| `BotStore.get(bot_id)` | 315 | 按复合主键取，没有给 `None` | `memory.charter.get` |
+| `BotStore.insert(bot)` | 326 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:_seed` |
+| `_row_to_bot(row)` | 341 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
 | `open_store(path=None)` | 255 | `with` 版工厂（异常路径也关连接） | 暂无生产调用方（测试与将来的 CLI） |
 
 ## 关键决策与理由
 
-### schema 只有一张表：v1 → v2（S3.5）
+### schema 演进：v1 → v2（S3.5）→ v3（S6）
 
 ```sql
 -- v1（S3）
@@ -55,6 +62,26 @@ ALTER TABLE repos ADD COLUMN origin_hash TEXT;
 - `origin_hash` 允许 `NULL`：没 origin 的行就是 NULL；老行（v1 绑的）迁移**不回填**。
   它**不参与任何主键/外键**，只用于识别"这两个绑定是不是同一个远端仓库"。
 - 没有 `name` 列：06 §2.1 就没有，`name` 由 `Repo.name` 从路径派生。
+
+```sql
+-- v3（S6 D7，只加表、**不动 repos**）
+CREATE TABLE bots (
+    bot_id      TEXT PRIMARY KEY,          -- {repo_id}/{name}（06 §2.2）
+    repo_id     TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    permission  TEXT NOT NULL DEFAULT 'L1',
+    agent_kind  TEXT,                      -- NULL = 未选择（M1 就是 NULL）
+    charter_rev INTEGER NOT NULL DEFAULT 0,-- 先建列；M1 不维护（D5，S22 才写）
+    created_at  REAL NOT NULL,
+    UNIQUE (repo_id, name)
+);
+```
+
+- `charter_rev` **M1 不维护**：charter 正文的事实源是文件（D5），载荷里的 `charterRev` 现场
+  由 `api/bots.py` 按内容算；这一列只记播种那一刻的值（U17，到期 S22）。
+- `UNIQUE (repo_id, name)` 是 06 §2.2「同一 repo 下 name 唯一」的落点；`bot_id` 是复合主键，
+  **天然按仓库隔离**。
+- 迁移只 `CREATE TABLE`，老库（v2）升级后 `repos` 数据原样还在（D11 #12 的真库测试）。
 
 **v2 迁移的措辞**：`_MIGRATIONS` 只 append 一条 `ALTER TABLE`。**不要**在这里加
 `UPDATE repos SET repo_id = …`——D3 明确不重写历史 id（详见 08 §3）。
@@ -108,7 +135,8 @@ id 变成 URL 哈希了，但库里仍是路径哈希，**界面与本刀算出�
 
 | 如果你要… | 还波及 |
 |---|---|
-| 加表 / 改列 | `_MIGRATIONS` **append** 一版 + `SCHEMA_VERSION` +1 + `_COLUMNS`（若新列要读）；**必须**补一条"手工建旧库 → migrate → 断言数据未变"的真库测试（v2 就是这么测的） |
+| 加表 / 改列 | `_MIGRATIONS` **append** 一版 + `SCHEMA_VERSION` +1 + `_COLUMNS`（若新列要读）；**必须**补一条"手工建旧库 → migrate → 断言数据未变"的真库测试（v2/v3 就是这么测的） |
+| 改 `bots` 表 | `api/bots.py` 的 8 字段载荷 + `tests/test_bot_charter.py` + 06 §2.2；`charter_rev` 的写路径属于 S22 |
 | 改 `upsert` 的冲突规则 | 验收 4（重复绑定一行）+ `test_rebinding_*` + `test_double_bind_is_idempotent_row_and_id` |
 | 把 `repo_id` 加回规则 1 的 `SET` | **禁止**（S3.5 D1 / U9）；反向锁是 `test_each_half_of_u9_alone_*` + 组合注入 |
 | 换回 `INSERT … ON CONFLICT` | **不要**，见 T26：它不会更新次级唯一键对应的列 |
@@ -129,3 +157,4 @@ id 变成 URL 哈希了，但库里仍是路径哈希，**界面与本刀算出�
 | `tests/test_bind.py::test_rebinding_after_origin_added_updates_the_row` | D1 回归锁（id **不**被更新） |
 | `tests/test_bind.py::test_bind_writes_nothing_into_the_user_repository` | 只写状态根 |
 | `tests/test_bind.py::test_list_returns_array_payload_with_camel_case_keys` | 落盘 `snake_case` / 帧层 `camelCase` |
+| `tests/test_bot_charter.py::test_v2_database_upgrades_to_v3_and_keeps_repos` | S6 D11 #12：真库 v2→v3，repos 行原样 |
