@@ -194,8 +194,9 @@ INDEX_HTML: Final = """<!doctype html>
   function connect(ticket) {
     clearTimers();
     setState("reconnecting", "重连中");
-    var scheme = location.protocol === "https:" ? "wss://" : "ws://";
-    var url = scheme + location.host + metaPath.content + "?ticket=" + encodeURIComponent(ticket);
+    // 内核只绑 127.0.0.1 且只讲 ws://（05 §1.1）；https/wss 是将来远程访问隧道的事，
+    // 本刀不写那条从未执行过的分支。
+    var url = "ws://" + location.host + metaPath.content + "?ticket=" + encodeURIComponent(ticket);
     var ws;
     try { ws = new WebSocket(url); }
     catch (e) { fail(); return; }
