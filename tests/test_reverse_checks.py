@@ -51,9 +51,13 @@ SOURCE_ROOT = REPO_ROOT / "src"
 RUN_TIMEOUT_SECONDS = 120
 
 
-def _target_test(name: str) -> str:
-    """被测测试的节点 id（都在 `tests/test_bind.py`：它是 S3 的验收文件）。"""
-    return f"tests/test_bind.py::{name}"
+def _target_test(name: str, *, file: str = "test_bind") -> str:
+    """被测测试的节点 id。
+
+    缺省在 `tests/test_bind.py`（S3 的验收文件）；S4 的分支列表注入指向
+    `tests/test_branches.py`。
+    """
+    return f"tests/{file}.py::{name}"
 
 
 # (注入点文件, 原始片段, 替换成什么, 应当变红的测试, 缺陷说明)
@@ -174,8 +178,9 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
     # ---- D6：错误码 ----
     (
         "postel_studio/api/repository.py",
-        "raise _fail(ADAPTER_UNAVAILABLE, MSG_ADAPTER_UNAVAILABLE) from None",
-        "raise _fail(frames.INTERNAL, MSG_GIT_TIMEOUT) from None",
+        "            # D5：git 不存在**不崩内核**，回 503 类码；S19 的 doctor 负责告诉用户怎么装\n"
+        "            raise _fail(ADAPTER_UNAVAILABLE, MSG_ADAPTER_UNAVAILABLE) from None",
+        "            raise _fail(frames.INTERNAL, MSG_GIT_TIMEOUT) from None",
         _target_test("test_missing_git_is_adapter_unavailable"),
         "ADAPTER_UNAVAILABLE 翻成 INTERNAL",
     ),
@@ -190,6 +195,41 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         "    if False:\n        return None",
         _target_test("test_inprocess_dispatch_exposes_repo_bind"),
         "网关不注册 repo.bind",
+    ),
+    # ---- S4：分支列表（D1/D2/D3/D5 + T33）----
+    (
+        "postel_studio/api/repository.py",
+        "        except gitops.GitUnavailableError:\n"
+        "            raise _fail(ADAPTER_UNAVAILABLE, MSG_ADAPTER_UNAVAILABLE) from None",
+        "        except gitops.GitUnavailableError:\n"
+        "            raise _fail(frames.INTERNAL, MSG_GIT_TIMEOUT) from None",
+        _target_test(
+            "test_missing_git_executable_maps_to_adapter_unavailable", file="test_branches"
+        ),
+        "repo.branches 把 ADAPTER_UNAVAILABLE 翻成 INTERNAL",
+    ),
+    (
+        "postel_studio/gitops/repo.py",
+        'is_current=marker == "*"',
+        "is_current=bool(fields[3])",
+        _target_test("test_branch_current_flag_is_only_on_the_head_branch", file="test_branches"),
+        "T33：当前判定用未 strip 的 marker 做真值判断（非当前分支的 marker 是空格）",
+    ),
+    (
+        "postel_studio/gitops/repo.py",
+        "                upstream=upstream or None,",
+        "                upstream=upstream,",
+        _target_test(
+            "test_branch_upstream_is_short_name_and_none_when_missing", file="test_branches"
+        ),
+        "D1：没有 upstream 时不再把空串归一成 None",
+    ),
+    (
+        "postel_studio/gitops/repo.py",
+        'run_git(["for-each-ref", "refs/heads/", f"--format={BRANCH_FORMAT}"], root=root)',
+        'run_git(["for-each-ref", f"--format={BRANCH_FORMAT}"], root=root)',
+        _target_test("test_only_local_branches_are_listed_after_push", file="test_branches"),
+        "D2：不限定 refs/heads/（remote-tracking 会混进分支列表）",
     ),
 )
 

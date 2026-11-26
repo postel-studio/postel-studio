@@ -157,8 +157,10 @@ MSG_NOT_A_REPO: Final = "路径不是 git 仓库"
 
 | 测试 | 守什么 |
 |---|---|
-| `test_service_branches_payload_has_exactly_the_four_contract_fields` | D1：四字段、`sha` 8 位小写 hex、顺序为 refname 字典序 |
-| `test_service_branch_error_codes`（参数化） | D7 第 8 行 / D5：未知 `repoId` → `REPO_NOT_BOUND`；缺/非字符串 → `INVALID_PARAMS`；目录被删 → `REPO_NOT_BOUND` |
-| `test_service_branches_empty_repo_is_success` | D5：空仓库 `data == []`，不是错误 |
-| `test_service_branches_git_missing_is_adapter_unavailable` | D5：`PATH=""` → `ADAPTER_UNAVAILABLE`（进程内注入，不 mock git） |
-| `test_websocket_branches_roundtrip_matches_service_layer` | D7 第 9 行：真 WS 帧 `result.data` 形状与 `seq`，与直调服务层一致 |
+| `test_branches_returns_names_in_refname_order_with_short_shas` | D7 第 1 行 / D1：四字段、`sha` 8 位小写 hex、顺序为 refname 字典序 |
+| `test_branch_error_codes_for_bad_params`（4 组参数化） | D7 第 8 行 / D5：缺/非字符串/空串 → `INVALID_PARAMS`；未知 `repoId` → `REPO_NOT_BOUND` |
+| `test_deleted_repo_path_maps_to_repo_not_bound` / `test_repo_whose_dot_git_was_removed_maps_to_repo_not_bound` | D5：路径没了 / `.git` 被删 → `REPO_NOT_BOUND`（文案「仓库路径已不存在」） |
+| `test_empty_repo_returns_empty_list_as_success` | D5：空仓库 `data == []`，不是错误 |
+| `test_missing_git_executable_maps_to_adapter_unavailable` | D5：`PATH=""` → `ADAPTER_UNAVAILABLE`（真让 git 找不到，不 mock 解析） |
+| `test_git_timeout_maps_to_internal` | D5：超时 → `INTERNAL`（只在边界注入异常，钉住码映射） |
+| `test_websocket_branches_roundtrip_matches_service_layer` | D7 第 9 行：真 WS 帧 `result.data` 形状与 `seq`，与直调服务层逐字段一致 |

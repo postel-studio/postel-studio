@@ -554,6 +554,59 @@ S3.5 修完之后两处都被修好，于是单独回退任意一处都不会让
 
 ---
 
+## 分支列表与 ref 解析（S4 首次出现）
+
+### T33 ❌ `%(HEAD)` 对非当前分支输出**一个空格**，再被 `_stdout()` 整段 `.strip()` 吃掉（S4 已处理）
+
+**现象**：用一次 `for-each-ref` 同时取"分支列表"与"当前分支"时（S4 D3 的固定命令），
+`%(HEAD)` 的取值不是"空串 / `*`"两种：
+
+```bash
+$ git for-each-ref refs/heads/ \
+    --format='%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)' | od -c
+feature\0<sha>\0\0 \n     ← 非当前分支的 marker 是**一个空格**
+main\0<sha>\0origin/main\0*\n
+```
+
+**两个连招**：
+
+1. 非当前分支的 marker 字段是 `" "`。所以判定必须写 `marker.strip() == "*"`，
+   **不能**写 `if not marker` / `marker == ""`（那样除最后一行外全部判反）。
+2. `_stdout()` 会对**整段** stdout `.strip()`（`gitops/repo.py`，所有探测函数共用），
+   于是**最后一条记录**末尾的空格被吃掉：
+   - 最后一条**没有** upstream → 行尾 `…\x00\x00`，split 后仍是 4 段（末段空串）；
+   - 最后一条**有** upstream → 行尾 `…\x00origin/x\x00 `，整段 strip 后变
+     `…\x00origin/x`，split 只有 **3 段**：marker 字段整个消失。
+
+**怎么复现**（10 秒）：
+
+```bash
+tmp=$(mktemp -d) && git -c init.defaultBranch=main -C "$tmp" init -q
+git -C "$tmp" -c user.email=a@b -c user.name=a commit -q --allow-empty -m init
+git -C "$tmp" branch zz                       # zz 是字典序最后
+git -C "$tmp" init -q --bare "$tmp/r.git"
+git -C "$tmp" remote add origin "$tmp/r.git"
+git -C "$tmp" push -q -u origin main && git -C "$tmp" push -q -u origin zz
+git -C "$tmp" for-each-ref refs/heads/ \
+  --format='%(refname:lstrip=2)%00%(objectname)%00%(upstream:short)%00%(HEAD)' | tail -1 | od -c
+# 整段 .strip() 之后最后一行只剩 3 段（marker 被吞）
+```
+
+**怎么防**（`gitops/repo.py:list_branches`，S4 的写法）：
+
+- marker 字段单独 `.strip()` 后写 `marker == "*"`；
+- `len(fields) == 3` 时补第 4 段空串（"缺 = 非当前"），**不要**当格式错误整体返回 `None`
+  ——那会把正常仓库报成 `REPO_NOT_BOUND`；
+- 每个字段各自 `.strip()`，不要只依赖整段的 strip；
+- 回归测试：`tests/test_branches.py` 的 **D7 第 3 行**（`main` 恰好是最后一条**且**有 upstream，
+  走的正是 3 段路径）与 **第 7 行**（`color.ui always` + 非 ASCII 分支名）。
+  ⚠️ 只断言"列表里有一条 `*` 是当前分支"的测试抓不到——必须断言**每一条**的
+  `is_current`，并覆盖"最后一条有 upstream"的布局。
+
+**教训**：分隔符解析要盯"**段数**"而不是"内容看起来对"；整段 strip 会改变最后一段的段数。
+这也是 S4 禁止解析 `git branch` 人类可读输出的同一条理由：机器可读格式只保证字段是机器可读的，
+**不保证调用方的 strip 不改变它**。
+
 ## 已知未决问题
 
 | # | 问题 | 状态 |
@@ -571,7 +624,7 @@ S3.5 修完之后两处都被修好，于是单独回退任意一处都不会让
 | U11 | **普通目录放在别人工作区里会被校到那个仓库**（`proj/plain/deep` 与 `proj/src` 路径上不可区分） | 按 D2 的字面语义处理的**近似**。真要解决需要"区分子目录与普通目录"的判据（例如要求子目录里有被跟踪的文件），代价大且会引入误判，本刀不做 |
 | U12 | `tmp_path` 属于测试夹具，`repo.bind` 允许绑系统临时目录下的仓库 | 行为正确（用户没理由这么做），但测试里必须注意 T28 |
 | U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** |
-| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 之后对它查分支会报错。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) |
+| U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) |
 
 ---
 

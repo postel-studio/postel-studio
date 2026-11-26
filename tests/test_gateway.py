@@ -231,8 +231,8 @@ def test_seq_restarts_for_a_new_connection(kernel: Kernel):
 def test_unknown_method_is_unknown_method_not_subscribe(kernel: Kernel):
     """只实现已登记的方法：其它（含 `system.subscribe`）一律 UNKNOWN_METHOD。
 
-    S3 起 `repo.bind` **已实现**，不再是反例（它收到空 params 时正确回 `INVALID_PARAMS`），
-    反例换成仍未实现的 `bot.list` / `task.dispatch` / `repo.branches`（S4）。
+    `repo.bind`（S3）与 `repo.branches`（S4）**都已实现**，不再是反例——它们收到空 params 时
+    正确回 `INVALID_PARAMS`。反例保留 5 个仍未实现的方法（D7 要求至少 4 个）。
     """
     ticket, _ = kernel.fetch_page()
 
@@ -244,7 +244,6 @@ def test_unknown_method_is_unknown_method_not_subscribe(kernel: Kernel):
                     "bot.list",
                     "task.dispatch",
                     "agent.list",
-                    "repo.branches",
                     "system.subscribe",
                     "system.echo.x",
                 ]

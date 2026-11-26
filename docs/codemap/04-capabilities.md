@@ -142,6 +142,21 @@
 | 显隐规则 | `web/assets.py:95-135` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
 | 由谁守住 | `tools/acceptance/s3_bind.mjs` 的 `CHECK D1 …` 四行（CDP 断网 → 读 DOM → 恢复 → 点重连，见 06 T27） |
 
+### C14 · 点仓库 → 看到分支列表（`repo.branches`）—— S4
+
+| 项 | 位置 |
+|---|---|
+| 用户路径 | 点左栏仓库行（鼠标，或聚焦后 `Enter`/`Space`）→ 主区分支面板列出该仓库的**本地**分支：当前分支带「当前」徽章、每个 8 位 sha、有 upstream 才显示 |
+| 前端入口 | `web/assets.py:476` `selectRepo()` → `:446` `loadBranches()` → `:416` `renderBranches()`；断连/切换的收口是 `:390` `resetBranches()` |
+| DOM 契约 | `#branches[data-state]`（idle/loading/ready/error）+ `#branches-title` / `#branch-list` / `#branch-empty` / `#branches-error`（D6） |
+| 方法表 | `api/gateway.py:115` `dispatch()` 的 `repo.branches` 分支 |
+| 业务编排 | `api/repository.py:214` `RepositoryService.branches()`；`repoId` → 允许根走 `:195` `_require_repo()`（与 `get()` 共用） |
+| 探测 | `gitops/repo.py:209` `list_branches()`：一次 `for-each-ref refs/heads/`、`%00` 分隔四字段（D2/D3） |
+| 三态 | `list`（空 = 空仓库，**成功**）/ `None`（不是仓库/路径没了 → `REPO_NOT_BOUND`）/ 抛 `GitUnavailableError`·`GitTimeoutError`（D4/D5） |
+| 载荷 | `{name, sha(8 位), isCurrent, upstream}` 四字段（D1）；截 8 位发生在 `api/repository.py` 边界 |
+| 由谁守住 | `tests/test_branches.py` **23 个用例**（真 git + 真 SQLite + 真 WS 帧，零 mock 解析）：D7 第 1–10 行 + 页面契约 5 条 |
+| ⚠️ UI 行为 | pytest 里只有文本断言；验收 1–5 与 D6 由 `node tools/acceptance/s4_branches.mjs` 在真实 Chrome 里跑（T9） |
+
 ---
 
 ## 2. 常见任务 → 文件
@@ -221,8 +236,8 @@
 | Issue | 用户看到什么 | 会新增的东西 | 影响本目录 |
 |---|---|---|---|
 | ~~S3~~ | **已完成（复审通过）**：填仓库路径 → 左栏出现仓库 | `gitops/`、`storage/db.py`、`domain/`、`api/repository.py`、`tools/acceptance/` | 新增 4 页模块页；**L0 第一次碰子进程与 SQLite**；逼出 T25/T26/T27/T29/T30 |
-| S3 遗留 | `repo.unbind` / `REPO_NOT_BOUND` 的帧方法入口 / S4 的 `repo.branches` | — | 见 06 U9（`repo_id` 会变）、U10（store 不关） |
-| S4 | 分支列表 | `gitops` 复用 `run_git(root=已绑定 path)` | 分支名白名单（05 §3.3）首次出现 |
+| S3 遗留 | `repo.unbind` / `repo.list` 之外的 `REPO_NOT_BOUND` 帧方法入口 | — | 见 06 U9（`repo_id` 已稳定）、U10（store 不关）、U14（移动仓库产生两行） |
+| ~~S4~~ | **已完成**：点仓库行 → 主区分支面板列出本地分支（当前徽章 / 8 位 sha / upstream） | `gitops.BranchInfo` + `list_branches`；`api/repository.branches`；前端 `#branches` | 新增 C14；`for-each-ref` 的 ref 解析首次出现，逼出 **T33** |
 | S5 | diff 视图 | patch 生成 + 截断 | |
 | S6 | Bot 与 charter | `memory/`、`store/` | 新增两页 |
 | S7 | worktree 路径 | `git/worktree` | |

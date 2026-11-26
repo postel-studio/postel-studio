@@ -217,11 +217,11 @@ S3 的探测在 `tests/test_bind.py`，S4 的分支列表在 `tests/test_branche
 
 | 测试 | 守什么 |
 |---|---|
-| `test_list_branches_returns_names_sorted_and_full_shas` | D7 第 1 行 / D1 / D4：名称集合、字典序、`sha` 是完整 40 位小写 hex |
-| `test_list_branches_marks_only_the_current_branch` | D7 第 2 行 / D1：只有 HEAD 指向的那条 `is_current=True` |
-| `test_list_branches_reports_upstream_and_none` | D7 第 3 行 / D1：`upstream` 有则短名、无则 `None`（不是 `""`）；含"最后一条记录带 upstream"的 3 字段路径 |
-| `test_list_branches_on_repo_without_commits_is_empty_not_error` | D7 第 4 行 / D4：空列表是成功 |
-| `test_list_branches_on_detached_head_marks_none_current` | D7 第 5 行 / D1 |
-| `test_list_branches_lists_only_local_branches` | D7 第 6 行 / D2 |
-| `test_list_branches_parsing_ignores_human_readable_config` | D7 第 7 行 / T33：`color.ui always` + 非 ASCII 名 |
+| `test_branches_returns_names_in_refname_order_with_short_shas` | D7 第 1 行 / D1 / D4：名称集合、字典序、gitops 层 `sha` 是完整 40 位（帧层截 8 位在 `api/repository.py`） |
+| `test_branch_current_flag_is_only_on_the_head_branch` | D7 第 2 行 / D1：只有 HEAD 指向的那条 `is_current=True` |
+| `test_branch_upstream_is_short_name_and_none_when_missing` | D7 第 3 行 / D1：`upstream` 有则短名、无则 `None`（不是 `""`）；含"最后一条记录带 upstream"的 3 字段路径 |
+| `test_empty_repo_returns_empty_list_as_success` | D7 第 4 行 / D4：空列表是成功 |
+| `test_detached_head_still_lists_all_branches_with_none_current` | D7 第 5 行 / D1 |
+| `test_only_local_branches_are_listed_after_push` | D7 第 6 行 / D2 |
+| `test_parsing_does_not_depend_on_human_readable_output` | D7 第 7 行 / T33：`color.ui always` + 非 ASCII 名（`功能/中文`） |
 | `test_list_branches_returns_none_for_non_repo_and_missing_path` | D7 第 10 行 / D4：三态里的 `None` |
