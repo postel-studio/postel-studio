@@ -58,10 +58,31 @@ def _require_path(params: dict[str, object]) -> str:
     return value
 
 
+def _inside_git_dir(root: Path, target: Path) -> bool:
+    """从已确认的 `root` 走到 `target` 的路上**有 `.git` 段**吗？有就说明用户在粘仓库内部。
+
+    ⚠️ 判据必须**相对于 `root`**，不能看整条绝对路径（S3 复审第二次退回的缺陷，见 T31）。
+    反例：`/tmp/edge/.git/workspace` 是一个**合法仓库**，只是它的父目录正好叫 `.git`——
+    按"绝对路径任意一段是 `.git` 就拒绝"，它会被误杀；而它自己带 `.git`、有提交，理应能绑。
+
+    | root / target | 相对路径 | 结论 |
+    |---|---|---|
+    | `target` 自己就是根（相对路径为空）且不叫 `.git` | `""` | 接受 |
+    | `<repo>` / `<repo>/.git/objects` | `.git/objects` | **拒绝** |
+    | `<repo>` / `<repo>/src` | `src` | 接受（D2 子目录校正） |
+    | `/tmp/edge/.git/workspace`（根是它自己） | `""` | **接受**（T31） |
+    """
+    relative = target.relative_to(root)
+    if any(part == ".git" for part in relative.parts):
+        return True
+    # 根自己就叫 `.git`（例如用户直接粘 `<repo>/.git` 且它碰巧被判定成了根）——仍然拒绝
+    return not relative.parts and target.name == ".git"
+
+
 def _bindable_root(target: Path) -> Path | None:
     """`repo.bind` 的总入口：`target` 可绑定则返回**要落库的仓库根**，否则 `None`。
 
-    四条规则（D2 + D6），顺序有意义。完整来龙去脉见 06-pitfalls T25——
+    五条规则（D2 + D6），顺序有意义。完整来龙去脉见 06-pitfalls T25 / T29 / T31——
     **别把判定改回"`git rev-parse --show-toplevel` 有输出就算仓库"**：那条会让 `/tmp`
     和任何落在别人工作区里的普通目录都"绑定成功"。
 
@@ -69,22 +90,29 @@ def _bindable_root(target: Path) -> Path | None:
     2. **目标自己就是裸仓库根**（`git init --bare`，没有 `.git` 但 git 说 is-bare）→ 绑 `target`。
     3. 目标是**目录**、且在某个工作区里面 → 绑那个工作区根（子目录校正 `proj/src` → `proj`）。
     4. 其它（不存在 / 是文件 / 普通目录）→ `NOT_A_REPO`。
+    5. 求得根之后，若**从根到目标的相对路径里含 `.git` 段** → `NOT_A_REPO`（T29）。
 
+    第 5 条放在**求出根之后**而不是"先看整条路径"：那是 T31 的修法，见 `_inside_git_dir`。
     第 3 条的"在某个工作区里面"用**逐级向上**找最近的带 `.git` 的祖先来确定，而不是问 git：
     git 的 discover 会把"某个祖先恰好是仓库"当成"我在这仓库里"，见 T25。逐级找的答案与
     "最近的祖先"一致，没有歧义；代价是**无法区分** `proj/src`（真子目录）与
     `proj/别的普通目录`（两者都是 `proj` 的子目录），这是本刀接受的近似（见 codemap 未决问题）。
     """
-    if target.is_dir() and gitops.is_worktree_root(target):
-        return target
-    if target.is_dir() and gitops.bare_root(target) is not None:
-        return target
+    root: Path | None
     if not target.is_dir():
         return None  # 不存在 / 是文件（05 §3.2 的路径校验在 git 之前先做一次）
-    for ancestor in target.parents:
-        if gitops.is_worktree_root(ancestor):
-            return ancestor
-    return None
+    if gitops.is_worktree_root(target) or gitops.bare_root(target) is not None:
+        root = target  # 规则 1 / 2：目标自己就是根（工作区根或裸仓库根）
+    else:
+        # 规则 3：D2 子目录校正——逐级向上找最近的带 `.git` 的祖先
+        root = next(
+            (ancestor for ancestor in target.parents if gitops.is_worktree_root(ancestor)),
+            None,
+        )
+    if root is None:
+        return None
+    # T29 + T31：只看"根 → 目标"这一段
+    return None if _inside_git_dir(root, target) else root
 
 
 def _split(repo: Repo) -> dict[str, object]:

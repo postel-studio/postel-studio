@@ -58,7 +58,7 @@ subprocess.run(
 
 | 约束 | 为什么 | 测试守在哪 |
 |---|---|---|
-| 字面数组 + `shell=False` | 05 §3.3 禁止 `shell=True` / `os.system` / 字符串拼接。路径里带 `$(...)` 也伤害不到我们 | `test_bind.py::test_bind_uses_git_in_a_way_that_cannot_prompt`（读环境）+ code review |
+| 字面数组 + `shell=False` | 05 §3.3 禁止 `shell=True` / `os.system` / 字符串拼接。路径里带 `$(...)` 也伤害不到我们 | `test_bind.py::test_git_subprocess_shell_is_disabled`（AST 守卫）+ `test_bind_uses_git_in_a_way_that_cannot_prompt`（读环境） |
 | `GIT_TERMINAL_PROMPT=0` | git 缺省会向 tty 要密码；凭证助手在无 tty 时可能**挂住**，而这里跑在 WS 处理链路上 | 同上 |
 | `timeout=5` | 坏仓库 / 锁文件 / 网络文件系统会让 git 卡住 → 整个网关无响应 | `GIT_TIMEOUT_SECONDS > 0` 断言 |
 | `GIT_CONFIG_NOSYSTEM=1` | 用户机器的系统级配置不该影响探测结果 | 同上 |
@@ -86,6 +86,32 @@ $ mkdir -p /tmp/ps/plain && git -C /tmp/ps/plain rev-parse --show-toplevel
 实测踩到：`tmp_path` 下的普通目录、`/tmp` 本身都被"绑定成功"了（06-pitfalls T25）。
 所以本层的探测函数只回答"git 怎么说"，**总判定**在 `api/repository.py:_bindable_root()`：
 目标自己带 `.git`、或自己是裸仓库、或它在某个工作区目录**里面**（逐级向上找最近的 `.git`）。
+
+### ⚠️ `origin_url` / `default_branch` 对 **worktree** 会答"链接工作区自己的事"（S3 未解决）
+
+```bash
+$ git worktree add ../wt          # 链接工作区；wt/.git 是**文件**（gitdir: …）
+$ git -C ../wt config --get remote.origin.url      # 无输出 / rc=1
+$ git -C ../wt symbolic-ref --short HEAD
+wt                             # ← 链接工作区的分支名
+```
+
+两处偏差都是**实测**的（不是推测），S3 保留、未修：
+
+| 情形 | 现状 | 期望（未做） |
+|---|---|---|
+| worktree 里的 origin | `origin_url()` 得 `None` → **id 退化成路径哈希** | 读 `commondir`（`<wt>/.git` 里的路径）指向的主仓库 config；或者绑 worktree 时直接拒绝 |
+| worktree 的默认分支 | 答链接工作区**自己的分支**（`wt`），不是主仓库的 `main` | 主仓库 HEAD，或干脆不展示 |
+
+**为什么本刀不修**：S7 才引入 worktree 概念（04-task-breakdown）。现在"能绑 worktree"
+是 D2 字面语义的顺带结果，S3 的验收里没有它，也没有任何下游在用它。已记进
+[06 §已知未决 U13](../06-pitfalls.md#已知未决问题)。
+
+**test 的口径**：`test_worktree_root_with_git_file_still_binds` 只断言"能绑、落库的是
+worktree 根、id 是 12 位、branch 是字符串"——**不**断言 `main`，因为那正是上面这条已知偏差。
+别为了让测试好看去"修" `default_branch` 的语义（那要连 S4 一起想）。
+如果 S7 决定**不支持** worktree，正确的做法是让 `_bindable_root` 拒绝 `.git` 是文件的根，
+而不是在这里猜。
 
 ### `origin_url` 用 `git config --get` 而不是 `git remote get-url`
 
@@ -138,3 +164,9 @@ $ mkdir -p /tmp/ps/plain && git -C /tmp/ps/plain rev-parse --show-toplevel
 | `test_bind_uses_git_in_a_way_that_cannot_prompt` | `GIT_TERMINAL_PROMPT` / `GIT_CONFIG_NOSYSTEM` / timeout |
 | `test_root_level_plain_directory_that_contains_a_repo_is_not_a_repo` | T25 回归锁 |
 | `test_bind_writes_nothing_into_the_user_repository` | 只读（`git status --porcelain` 前后一致） |
+| `test_git_subprocess_shell_is_disabled` | AST 静态守卫：命令是字面数组、`shell=False`、有 timeout、全项目只有这里起子进程 |
+| `test_kernel_subprocess_ignores_pythonpath_like_gateway_util_does` | 端到端那条验的是**安装版**内核（不是被注入的副本） |
+
+> **机制的守护者**：`tests/test_reverse_checks.py` 把上面若干条**注入缺陷后必须红**钉成可执行
+> 用例（`GIT_TERMINAL_PROMPT` / `GIT_CONFIG_NOSYSTEM` / 超时 / shell / 子目录校正 / `.git` 判定 …）。
+> 加一条新约束时，顺手在里面加一行注入——那是最省事的"这条测试真的守得住"的证明。

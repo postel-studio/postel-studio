@@ -112,13 +112,14 @@
 | 前端入口 | `web/assets.py:266` `submitBind()`（真 `<form>`，回车也可） |
 | 方法表 | `api/gateway.py:109` `dispatch()` 的 `repo.bind` 分支 |
 | 业务编排 | `api/repository.py:115` `RepositoryService.bind()` |
-| 路径校验 | 相对 → `BAD_CWD`（`repository.py:124`）；`resolve()` 见 `repository.py:128` |
-| **子目录校正** | `api/repository.py:61` `_bindable_root()`（D2，见 06 T25） |
+| 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
+| **`.git` 判定** | `api/repository.py:61` `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
+| **子目录校正** | `api/repository.py:_bindable_root()`（D2，见 06 T25） |
 | 探测 | `gitops/repo.py:149` `origin_url()`、`:163` `default_branch()` |
 | id | `domain/models.py:100` `repo_id()` |
 | 落库 | `storage/db.py:151` `RepoStore.upsert()` |
-| 由谁守住 | `test_bind.py`（38 例，真实 git + 真 SQLite），端到端 `test_websocket_bind_then_list_returns_the_repo` |
-| ⚠️ UI 行为 | 同上：**pytest 里只有文本断言**，验收 1–4 靠人工浏览器（T9） |
+| 由谁守住 | `tests/test_bind.py`：**44 个 `def test_` → 51 个用例**（5+4 个参数化各展开），真实 git + 真 SQLite；端到端 `test_websocket_bind_then_list_returns_the_repo` |
+| ⚠️ UI 行为 | pytest 里只有文本断言；验收 1–4 由 `node tools/acceptance/s3_bind.mjs` 在真实 Chrome 里跑（T9） |
 
 ### C12 · 左栏仓库列表（`repo.list`）
 
@@ -138,7 +139,7 @@
 | 用户路径 | 内核不在 / 断连时，左栏仓库区显示「已断开：内核没有连着，仓库列表未知」，**不显示**空态 |
 | 状态源 | `web/assets.py:217` `setRepoState()` → `#repos[data-state]` |
 | 显隐规则 | `web/assets.py:95-135` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
-| 由谁守住 | **没有 pytest**。人工浏览器：CDP 断网 → 读 DOM → 恢复 → 点重连（见 06 T27） |
+| 由谁守住 | `tools/acceptance/s3_bind.mjs` 的 `CHECK D1 …` 四行（CDP 断网 → 读 DOM → 恢复 → 点重连，见 06 T27） |
 
 ---
 
@@ -218,7 +219,7 @@
 
 | Issue | 用户看到什么 | 会新增的东西 | 影响本目录 |
 |---|---|---|---|
-| ~~S3~~ | **已完成**：填仓库路径 → 左栏出现仓库 | `gitops/`、`storage/db.py`、`domain/`、`api/repository.py` | 新增 4 页模块页；**L0 第一次碰子进程与 SQLite** |
+| ~~S3~~ | **已完成（复审通过）**：填仓库路径 → 左栏出现仓库 | `gitops/`、`storage/db.py`、`domain/`、`api/repository.py`、`tools/acceptance/` | 新增 4 页模块页；**L0 第一次碰子进程与 SQLite**；逼出 T25/T26/T27/T29/T30 |
 | S3 遗留 | `repo.unbind` / `REPO_NOT_BOUND` 的帧方法入口 / S4 的 `repo.branches` | — | 见 06 U9（`repo_id` 会变）、U10（store 不关） |
 | S4 | 分支列表 | `gitops` 复用 `run_git(root=已绑定 path)` | 分支名白名单（05 §3.3）首次出现 |
 | S5 | diff 视图 | patch 生成 + 截断 | |

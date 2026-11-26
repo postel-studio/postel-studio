@@ -218,7 +218,8 @@ S3 也没有退出收场（连接不显式 close，靠进程退出回收；WAL �
 7. `src/postel_studio/domain/models.py` — 104 行，纯函数，S3 的 id 规则
 8. `src/postel_studio/gitops/repo.py` — 197 行，**先读模块 docstring 的三条硬约束**
 9. `src/postel_studio/storage/db.py` — 226 行，schema v1 + upsert
-10. `src/postel_studio/api/repository.py` — 164 行，S3 的业务编排
+10. `src/postel_studio/api/repository.py` — 192 行，S3 的业务编排
 11. `src/postel_studio/web/assets.py` — 465 行，页面 + 内联 JS（JS 从 `<script>` 开始看）
 12. `tests/test_bind.py` — 一条真实的端到端：真实 git + 真实 SQLite + 真实 WebSocket
 13. `tests/test_gateway_inprocess.py` — 看一个「真端口真连接」的测试怎么写
+14. `tests/test_reverse_checks.py` — 反向验证（注入缺陷 → 已存在测试必须红），**先读文件头**

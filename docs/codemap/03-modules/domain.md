@@ -77,3 +77,4 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：`repo_id` �
 | `tests/test_bind.py::test_https_and_ssh_origins_share_the_same_repo_id` | D3 的硬不变量（真实 git） |
 | `tests/test_bind.py::test_repo_id_without_origin_is_derived_from_the_absolute_path` | 无 origin 分支 |
 | `tests/test_bind.py::test_absolute_path_hash_is_stable_across_calls` | id 稳定（同路径同 id） |
+| `tests/test_reverse_checks.py`（`REPO_ID_LENGTH→16` / 去掉归一化两条注入） | 改这两处会让上面的测试红（反向锁） |

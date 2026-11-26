@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -27,7 +29,9 @@ import pytest
 import websockets
 
 from postel_studio.api import frames
+from postel_studio.api import repository as repository_mod
 from postel_studio.api.repository import RepositoryService
+from postel_studio.gitops import repo as gitops
 from postel_studio.storage import db as state_db
 from postel_studio.storage import paths
 
@@ -40,6 +44,10 @@ INVALID_PARAMS = "INVALID_PARAMS"
 ADAPTER_UNAVAILABLE = "ADAPTER_UNAVAILABLE"
 
 HEX12 = r"^[0-9a-f]{12}$"
+# 源码树（静态 AST 守卫与"子进程不读 PYTHONPATH"那条用）
+# 源码树：从**已 import 的包**反推（`…/src/postel_studio/api/repository.py` → `…/src`），
+# 不要从测试文件反推——反向验证在源码**副本**里跑测试，那时测试文件仍在仓库里（实测坑，见 T30）。
+REPO_ROOT_SRC = Path(repository_mod.__file__).resolve().parents[2]
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +101,13 @@ def repo_factory(tmp_path: Path) -> Callable[..., Path]:
         bare: bool = False,
         commit: bool = True,
         origin: str | None = None,
+        worktree: bool = False,
     ) -> Path:
+        """建一个真实仓库。
+
+        `worktree=True` 时额外用 `git worktree add` 造一个**链接工作区**：它的 `.git` 是
+        **文件**（`gitdir: …`）而不是目录。这是 `.git` 名字判定最容易被写坏的地方（T29）。
+        """
         path = root / name
         path.mkdir(parents=True)
         _git("init", "-q", "--bare" if bare else "--initial-branch=main", str(path), cwd=root)
@@ -102,6 +116,9 @@ def repo_factory(tmp_path: Path) -> Callable[..., Path]:
             _git("commit", "-q", "--allow-empty", "-m", "init", cwd=path)
         if origin is not None:
             _git("remote", "add", "origin", origin, cwd=path)
+        if worktree:
+            _git("worktree", "add", "-q", str(path.with_name(path.name + "-wt")), cwd=path)
+            return path.with_name(path.name + "-wt")
         return path
 
     return make
@@ -218,6 +235,133 @@ def test_plain_directory_inside_another_working_tree_is_treated_as_that_repos_su
     plain.mkdir(parents=True)
 
     assert service.bind({"path": str(plain)})["path"] == str(outer.resolve())
+
+
+# T29：`.git` 内部结构不是仓库入口（管理者审核发现的逃逸）
+# ---------------------------------------------------------------------------
+
+
+def test_bind_git_directory_itself_is_not_a_repo(
+    service: RepositoryService, repo_factory: Callable[..., Path]
+) -> None:
+    """粘 `<repo>/.git`：`NOT_A_REPO`。
+
+    修复前它会**静默绑到外层仓库**：`.git` 自己的祖先里正好有一个带 `.git` 的目录（它父级），
+    于是"逐级向上找祖先"把用户粘的内部路径校成了另一个目录——D2 说的
+    「用户以为绑了 A 其实绑了 B」换了入口重现（06-pitfalls T29）。
+    """
+    repo = repo_factory("proj")
+
+    assert _bind_code(service, str(repo / ".git")) == NOT_A_REPO
+    assert service.list() == []
+
+
+def test_bind_path_inside_the_git_directory_is_not_a_repo(
+    service: RepositoryService, repo_factory: Callable[..., Path]
+) -> None:
+    """粘 `<repo>/.git/objects`（更深一层）：同样 `NOT_A_REPO`，且**不留半状态**。"""
+    repo = repo_factory("proj")
+    objects = repo / ".git" / "objects"
+    assert objects.is_dir()  # 真仓库里必然有它；不存在就说明夹具坏了
+
+    assert _bind_code(service, str(objects)) == NOT_A_REPO
+    assert service.list() == []
+
+
+def test_repo_root_whose_parent_is_named_dot_git_still_binds(
+    service: RepositoryService, tmp_path: Path
+) -> None:
+    """**T31（复审第二次退回）**：父目录名叫 `.git` 的**合法仓库**必须能绑。
+
+    ```
+    /tmp/edge/.git/workspace       ← 这是一个仓库：它自己带 .git、有提交
+    ```
+    第一版修法是"整条绝对路径任意一段是 `.git` 就拒绝"，于是把这类仓库误杀了——
+    它的父目录**恰好**叫 `.git`，但它本身是合法入口。判据必须**相对于已确认的仓库根**：
+    根就是它自己 → 相对路径为空 → 接受。
+    """
+    parent = tmp_path / ".git"  # 故意让父目录叫 .git
+    workspace = parent / "workspace"
+    workspace.mkdir(parents=True)
+    _git("init", "-q", "--initial-branch=main", str(workspace), cwd=parent)
+    _git("commit", "-q", "--allow-empty", "-m", "init", cwd=workspace)
+
+    payload = service.bind({"path": str(workspace)})
+
+    assert payload["path"] == str(workspace.resolve())
+    assert payload["name"] == "workspace"
+    assert payload["defaultBranch"] == "main"
+
+
+def test_subdirectory_of_a_repo_whos_parent_is_named_dot_git_still_corrects(
+    service: RepositoryService, tmp_path: Path
+) -> None:
+    """T31 的更难一档：`…/.git/workspace/src` → 校到 `…/.git/workspace`（不是更外层）。"""
+    parent = tmp_path / ".git"
+    workspace = parent / "workspace"
+    src = workspace / "src"
+    src.mkdir(parents=True)
+    _git("init", "-q", "--initial-branch=main", str(workspace), cwd=parent)
+
+    payload = service.bind({"path": str(src)})
+
+    assert payload["path"] == str(workspace.resolve())
+
+
+def test_bind_refuses_any_path_with_a_dot_git_segment(
+    service: RepositoryService, repo_factory: Callable[..., Path]
+) -> None:
+    """判定看的是**整条路径里有 `.git` 这一段**，不只是尾段或第一层。
+
+    参数化了三种位置：末尾、中间、以及 `.git` 里面的深层路径。
+    """
+    repo = repo_factory("proj")
+    git_dir = repo / ".git"
+    (git_dir / "objects" / "deep").mkdir(parents=True, exist_ok=True)
+
+    candidates = [
+        git_dir,
+        git_dir / "objects",
+        git_dir / "objects" / "deep",
+        repo / ".." / ".git",  # 绕过字面 `.git` 的写法：resolve 之后仍然落在 .git 里
+    ]
+    for candidate in candidates:
+        if not candidate.resolve().exists():
+            continue
+        assert _bind_code(service, str(candidate)) == NOT_A_REPO, candidate
+
+
+def test_worktree_root_with_git_file_still_binds(
+    service: RepositoryService, repo_factory: Callable[..., Path]
+) -> None:
+    """**防误伤**：worktree 的 `.git` 是**文件**（`gitdir: …`），它是合法的仓库根。
+
+    这条规则若写成"路径里出现 `.git` 就拒绝"，worktree 会被一起打死。判据是**名字等于
+    `.git` 的路径段**——worktree 根自己叫 `proj-wt`，名字不是 `.git`，故不受影响。
+    """
+    worktree = repo_factory("proj", worktree=True)
+    assert (worktree / ".git").is_file(), "worktree 根里 .git 应该是文件"
+
+    payload = service.bind({"path": str(worktree)})
+
+    assert payload["path"] == str(worktree.resolve())
+    assert len(str(payload["repoId"])) == 12
+    # **不断言 defaultBranch == "main"**：worktree 的 `symbolic-ref HEAD` 答的是链接工作区
+    # 自己的分支（`git worktree add` 缺省会建一个同名分支），不是主仓库的 main。
+    # 这是 S3 已知未解决的行为（codemap 03-modules/gitops §worktree / 06 U13），
+    # 要在 S7 随 worktree 一起重新设计，**不要**在这里猜一个值让测试好看。
+    assert isinstance(payload["defaultBranch"], str), payload
+
+
+def test_worktree_subdirectory_still_corrects_to_the_worktree_root(
+    service: RepositoryService, repo_factory: Callable[..., Path]
+) -> None:
+    """worktree 里的子目录：仍然按 D2 校到 worktree 根（不是主仓库根）。"""
+    worktree = repo_factory("proj", worktree=True)
+    sub_dir = worktree / "pkg"
+    sub_dir.mkdir()
+
+    assert service.bind({"path": str(sub_dir)})["path"] == str(worktree.resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +708,77 @@ def test_bind_uses_git_in_a_way_that_cannot_prompt(
     assert RepositoryService(store).bind({"path": str(repo)})["name"] == "proj"
 
 
+def test_git_subprocess_shell_is_disabled() -> None:
+    """05 §3.3 的静态守卫：**唯一**起 git 的地方必须 `shell=False`、命令最终是字面数组。
+
+    为什么这条是"读源码"而不是"跑一次"：`shell=True` 在**没有注入**的前提下行为与
+    `shell=False` 一样（同一个 argv 交给 `/bin/sh -c` 也能跑通），所以只有两种验法：
+    （a）读源码断言；（b）构造带 shell 元字符的路径看它会不会被 sh 解释。
+    （b）要临时改用户目录名、依赖 `git -C` 的引号行为，脆弱且会污染机器。
+    取（a），并配套**反向验证**（`tests/test_reverse_checks.py` 把 `shell=False` 改成
+    `True` 时必须红）—— 静态断言有了反向锁才不是装饰品。
+
+    ⚠️ 命令是 `command = [git_executable(), "-C", str(root), *args]` 这样一个**变量**，
+    不是内联的列表字面量，所以这里顺着赋值回溯一层再判它是列表 —— 第一版没回溯，
+    当场被自己这条测试打红（见 06-pitfalls T30）。
+    """
+    import ast
+
+    source = REPO_ROOT_SRC / "postel_studio" / "gitops" / "repo.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+
+    # 1) 找出模块内所有"名字 → 赋值表达式"，用于把变量回溯成它的列表字面量
+    assigned: dict[str, ast.expr] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                assigned[target.id] = node.value
+
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"run", "Popen", "check_output", "call"}
+    ]
+    assert calls, "找不到子进程调用（代码结构变了？）"
+
+    for call in calls:
+        where = f"第 {call.lineno} 行"
+        keywords = {kw.arg: kw.value for kw in call.keywords}
+        assert "shell" in keywords, f"{where}：必须显式写 shell="
+        shell = keywords["shell"]
+        assert isinstance(shell, ast.Constant), f"{where}：shell 必须是字面量"
+        assert shell.value is False, f"{where}：shell 必须为 False（05 §3.3）"
+        assert "timeout" in keywords, f"{where}：必须有 timeout（D5）"
+
+        # 命令必须是列表：内联列表，或一个被回溯到列表的变量
+        assert call.args, f"{where}：没有命令参数"
+        first = call.args[0]
+        if isinstance(first, ast.Name):
+            assert first.id in assigned, f"{where}：命令变量 {first.id} 找不到赋值"
+            first = assigned[first.id]
+        assert isinstance(first, ast.List), f"{where}：命令必须是字面数组"
+        for element in first.elts:
+            assert not isinstance(element, ast.JoinedStr), f"{where}：命令里有 f-string"
+            assert not isinstance(element, ast.BinOp), f"{where}：命令里有字符串拼接"
+
+    # 2) 全项目只有这一个文件起子进程
+    #    包目录从**被测文件**反推（`repo.py` → `gitops` → `postel_studio`），不要从测试文件的
+    #    位置反推：反向验证在源码**副本**里跑这条测试，那时测试文件还在仓库里、被测文件在 /tmp，
+    #    两者不在同一个树里（实测：第一版从测试文件反推，扫描了 /tmp/src 不存在、offenders 为空、
+    #    断言空过——一个自己会被镀金的守卫）。
+    package_root = source.parent.parent
+    assert (package_root / "__init__.py").exists(), f"反推不到包目录：{package_root}"
+    offenders = [
+        str(path.relative_to(package_root))
+        for path in package_root.rglob("*.py")
+        if path != source and "subprocess" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"除了 gitops/repo.py 还有别的地方起子进程：{offenders}"
+
+
 def test_failed_bind_leaves_no_half_state(
     service: RepositoryService, repo_factory: Callable[..., Path]
 ) -> None:
@@ -610,6 +825,182 @@ def test_get_reports_repo_not_bound_for_unknown_id(store: state_db.RepoStore) ->
     with pytest.raises(frames.FrameError) as excinfo:
         RepositoryService(store).get({"repoId": "000000000000"})
     assert excinfo.value.code == "REPO_NOT_BOUND"
+
+
+# ---------------------------------------------------------------------------
+# 实现层的显式缺陷注入（进程内，monkeypatch）
+#
+# 为什么在这里而不在 `test_reverse_checks.py`：那份文件用**子进程**跑真实 pytest 来验证
+# "删掉实现后某条测试会红"，覆盖面广但每个注入点都要起一个进程；而有些约束只有一条测试
+# 守着，值得在**进程内**再钉一次（免得起进程、跑得快，失败时 traceback 也短）。
+# 两边分工：跨多文件的机制性缺陷走 `test_reverse_checks.py`，单点约束走这里。
+# ---------------------------------------------------------------------------
+
+
+def _root_without_ancestor_walk(target: Path) -> Path | None:
+    """`_bindable_root` 的"缺陷版"：**不做子目录校正**（模拟 D2 的机制被删掉）。
+
+    保留 `.git` 判定（T29/T31 那两条规则），否则这条注入会同时踩两个缺陷，看不出是谁的锅。
+    """
+    if not target.is_dir():
+        return None
+    if gitops.is_worktree_root(target) or gitops.bare_root(target) is not None:
+        return None if repository_mod._inside_git_dir(target, target) else target
+    return None
+
+
+def test_deleting_subdirectory_correction_makes_bind_red(
+    repo_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    store: state_db.RepoStore,
+) -> None:
+    """删掉"逐级向上找祖先" → 绑子目录必须失败（D2 的机制性缺陷，进程内注入）。
+
+    注入前后各测一次：先证明**注入前**它是对的（否则"注入后失败"可能本来就失败）。
+    """
+    repo = repo_factory("outer")
+    deep = repo / "pkg" / "deep"
+    deep.mkdir(parents=True)
+
+    assert RepositoryService(store).bind({"path": str(deep)})["path"] == str(repo.resolve())
+
+    monkeypatch.setattr(repository_mod, "_bindable_root", _root_without_ancestor_walk)
+    assert _bind_code(RepositoryService(store), str(deep)) == NOT_A_REPO
+
+
+def test_deleting_dot_git_guard_lets_git_internals_escape(
+    repo_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    store: state_db.RepoStore,
+) -> None:
+    """把 `.git` 判定删掉 → 粘 `<repo>/.git/objects` 会"绑定成功"（T29 的机制性缺陷）。"""
+    repo = repo_factory("proj")
+    objects = repo / ".git" / "objects"
+    assert objects.is_dir()
+
+    assert _bind_code(RepositoryService(store), str(objects)) == NOT_A_REPO  # 注入前：正确拒绝
+
+    # 注入：规则恒假 = T29 那条判定不存在（签名要跟真实函数一致：root + target）
+    monkeypatch.setattr(repository_mod, "_inside_git_dir", lambda _root, _target: False)
+    payload = RepositoryService(store).bind({"path": str(objects)})
+    assert payload["path"] == str(repo.resolve()), "注入后确实逃逸了——这正说明规则是必要的"
+
+
+# ---------------------------------------------------------------------------
+# 方法注册：`repo.bind` 必须真的接到网关的 dispatch 上
+#
+# 为什么单列一条：端到端那条（真内核子进程）验的是**安装版**内核，进程内 monkeypatch 改不到它
+# （见下一节）。而 `test_reverse_checks.py` 要把"网关不注册 repo.bind"注入成红，就需要一条
+# **进程内**、能在被改过的源码下跑的用例。这条用 `TestClient` 直连进程内 `create_app()`。
+# ---------------------------------------------------------------------------
+
+
+def test_inprocess_dispatch_exposes_repo_bind(
+    state_home: Path, repo_factory: Callable[..., Path]
+) -> None:
+    """进程内 app：`repo.bind` / `repo.list` 经 WS 帧往返（不靠 `Kernel` 子进程）。
+
+    `state_home` 夹具把 `POSTEL_HOME` 指到 `tmp_path`，`create_app()` 会在那里建 `state.db`。
+    这条存在的理由见上一节：它是唯一能在"被注入缺陷的源码"下跑起来的网关用例。
+
+    这里**不用** `fastapi.testclient.TestClient`（它会引入 starlette 的弃用警告，而且走的是
+    ASGI 直调）；照 `test_gateway_inprocess.py` 的做法起一个后台线程里的真 uvicorn + 真端口，
+    再用真 `websockets` 客户端连过去。
+    """
+    from .gateway_util import in_process_kernel
+
+    repo = repo_factory("inproc")
+    with in_process_kernel("/gateway/reverse-check") as kernel:
+        ticket, ws_path = kernel.fetch_page()
+
+        async def roundtrip() -> list[dict[str, object]]:
+            async with websockets.connect(kernel.ws_url(ticket, path=ws_path)) as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "req",
+                            "id": "b1",
+                            "method": "repo.bind",
+                            "params": {"path": str(repo)},
+                        }
+                    )
+                )
+                bound = decode_frame(await ws.recv())
+                await ws.send(json.dumps({"type": "req", "id": "l1", "method": "repo.list"}))
+                listed = decode_frame(await ws.recv())
+                return [bound, listed]
+
+        bound, listed = asyncio.run(roundtrip())
+
+    assert bound["ok"] is True, bound
+    assert listed["ok"] is True, listed
+    bound_data = frame_result(bound)["data"]
+    listed_data = frame_result(listed)["data"]
+    assert isinstance(bound_data, dict) and isinstance(listed_data, list)
+    assert [row["repoId"] for row in listed_data] == [bound_data["repoId"]]
+
+
+# ---------------------------------------------------------------------------
+# 显式证明：**端到端**那条测的是真的内核进程（已安装的包，不是注入后的副本）
+#
+# `gateway_util.Kernel` 起的子进程有两个特性共同决定了这件事：
+#   1. 它跑的是 `.venv/bin/postel-studio`（站点包里的包），不是 `src/` 布局；
+#   2. 它显式 `env.pop("PYTHONPATH", None)`。
+# 于是**进程内 monkeypatch 改不到那个内核**，`test_reverse_checks.py` 里"改源码 → 端到端
+# 变红"的注入对它无效。这不是推测 —— 第一版这条测试漏了第 1 条（没 pop），当场被自己打红，
+# 见 06-pitfalls T30。
+# ---------------------------------------------------------------------------
+
+
+def _version_seen_by_cli(clone_root: Path, *, drop_pythonpath: bool) -> str:
+    """跑一次真实 `postel-studio version`，返回它报告的版本。"""
+    cli = Path(sys.executable).with_name("postel-studio")
+    paths_ = os.pathsep.join([str(clone_root), str(REPO_ROOT_SRC.parent)])
+    env = {**os.environ, "PYTHONPATH": paths_}
+    if drop_pythonpath:
+        env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [str(cli), "version"], env=env, capture_output=True, text=True, check=False, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+@pytest.fixture
+def clone_with_bumped_version(tmp_path: Path) -> Path:
+    """一份 `__version__` 改成哨兵的源码副本（用来判断"跑的是哪份代码"）。"""
+    clone_root = tmp_path / "clone-src"
+    shutil.copytree(REPO_ROOT_SRC / "postel_studio", clone_root / "postel_studio")
+    init_file = clone_root / "postel_studio" / "__init__.py"
+    original = init_file.read_text(encoding="utf-8")
+    assert '__version__ = "0.1.2"' in original
+    init_file.write_text(
+        original.replace('__version__ = "0.1.2"', '__version__ = "9.9.9-CLONE"'),
+        encoding="utf-8",
+    )
+    return clone_root
+
+
+def test_pythonpath_can_override_the_cli_unless_dropped(clone_with_bumped_version: Path) -> None:
+    """**前提 1**：`PYTHONPATH` 确实能改写 CLI 跑的是哪份代码（留着它就是 9.9.9）。
+
+    这条是上一条的对照：如果连它都不成立，说明 venv 的隔离方式变了，
+    `Kernel` 里那句 `env.pop("PYTHONPATH")` 也就失去意义了。
+    """
+    assert _version_seen_by_cli(clone_with_bumped_version, drop_pythonpath=False) == "9.9.9-CLONE"
+
+
+def test_kernel_subprocess_ignores_pythonpath_like_gateway_util_does(
+    clone_with_bumped_version: Path,
+) -> None:
+    """**前提 2**：按 `Kernel` 的做法（pop 掉 `PYTHONPATH`）跑，子进程读的是原版。
+
+    结论：`test_websocket_bind_then_list_returns_the_repo` 验的是**真的安装版内核**，
+    进程内 monkeypatch 改不到它；要对"网关不注册 repo.bind"做反向验证，必须用
+    `test_reverse_checks.py` 的**子进程**方式（它在副本的 `src/` 上跑真实 pytest），
+    而 `test_webframe_bind_*` 之外的进程内注入只对进程内调用有效。
+    """
+    assert _version_seen_by_cli(clone_with_bumped_version, drop_pythonpath=True) == "0.1.2"
 
 
 # ---------------------------------------------------------------------------

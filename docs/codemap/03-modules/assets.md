@@ -169,9 +169,16 @@ S2 初版有一个 `location.protocol === "https:"` 的病态分支，**从未�
 | `test_page_does_not_carry_the_long_term_token` | 令牌不进页面 |
 | `test_unknown_method_is_unknown_method_not_subscribe` | `repo.bind` 不再是"未实现"的反例（S3 已实现） |
 
-S3 的页面行为**没有**进 pytest（T9 的老问题，S3 也没解决）；验收 1–4 与 D1 的断连可区分
-是用 puppeteer + 本机 Chrome 跑真实内核读 DOM 验的（见交付说明，脚本不在仓库里）。
-pytest 里只有两条文本断言护着结构：`#repos` 的初始 `data-state` 与 `ERROR_TEXT` 的注入。
+S3 的页面行为**没有**进 pytest（T9 的老问题，S3 也没解决）。验收 1–4 与 D1 的断连可区分
+由 **`tools/acceptance/s3_bind.mjs`** 验：真 Chrome + 真内核 + 读真 DOM，**跳过而不失败**
+（没 Chrome/puppeteer 时退出码 0 并说明原因）。它不是 pytest、不进依赖、不跑 CI，
+用法见 [tools/acceptance/README.md](../../../tools/acceptance/README.md)。
+
+改了左栏的 DOM 结构或数据来源，**必须**重跑它：
+
+```bash
+bash scripts/check.sh && node tools/acceptance/s3_bind.mjs
+```
 
 ### ⚠️ 这些断言证明的是「意图存在」，不是「行为正确」
 

@@ -1,6 +1,6 @@
 # 03 · repository — `src/postel_studio/api/repository.py`
 
-> 层 L3 · 164 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1](../../design/07-api-contract.md)
+> 层 L3 · 192 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1](../../design/07-api-contract.md)
 
 ## 职责
 
@@ -17,12 +17,13 @@
 | `MSG_*`（6 个） | 40-45 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
 | `_fail(code, message)` | 48 | 造 `frames.FrameError`（网关原样转发） | 内部 |
 | `_require_path(params)` | 53 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
-| `_bindable_root(target)` | 61 | **D2 子目录校正的总判定**（见下） | `bind` |
-| `_split(repo)` | 90 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
-| `RepositoryService` | 105 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
-| `RepositoryService.list()` | 111 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
-| `RepositoryService.bind(params)` | 115 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
-| `RepositoryService.get(params)` | 152 | 按 `repoId` 取（`REPO_NOT_BOUND` 语义的落点；S4 的入口） | 暂无帧方法调用 |
+| `_inside_git_dir(root, target)` | 61 | **T29/T31：`root` → `target` 的相对路径里有 `.git` 段 → 不是仓库入口** | `_bindable_root` |
+| `_bindable_root(target)` | 82 | **D2 子目录校正的总判定**（见下） | `bind` |
+| `_split(repo)` | 118 | `Repo` → 帧载荷（`camelCase`，07 §4.2） | `list` / `bind` / `get` |
+| `RepositoryService` | 133 | 业务对象（构造时注入 `RepoStore`） | `app.create_app` |
+| `RepositoryService.list()` | 139 | `repo.list`：返回 `repo[]` | `gateway.Providers.repo_list` |
+| `RepositoryService.bind(params)` | 143 | `repo.bind`：探测 + 落库 + 返回落库后的记录 | `gateway.Providers.repo_bind` |
+| `RepositoryService.get(params)` | 180 | 按 `repoId` 取（`REPO_NOT_BOUND` 语义的落点；S4 的入口） | 暂无帧方法调用 |
 
 ## 关键决策与理由
 
@@ -31,12 +32,17 @@
 判定顺序（**别改顺序**，也别改回"git 说有输出就算仓库"）：
 
 ```
+0. target 自身或任何祖先的名字是 ".git"        → None（T29：.git 内部结构不是仓库入口）
 1. target 是目录 且 target/.git 存在            → 绑 target
 2. target 是目录 且 git 说 is-bare-repository   → 绑 target（裸仓库，D2 接受）
 3. target 不是目录（文件 / 不存在）             → None
 4. 从 target 逐级向上，第一个带 .git 的祖先     → 绑它（子目录校正 proj/src → proj）
 5. 都没有                                        → None
 ```
+
+**第 0 条必须排在前面**：`.git/objects` 的祖先链里就有 `.git`，第 4 条会把它校成外层仓库
+（S3 复审退回的缺陷，见 [06 T29](../06-pitfalls.md#t29--粘-git-内部路径会被静默改绑到外层仓库审核发现已修)）。
+判据是**名字**而不是"`.git` 存在"——worktree 根里 `.git` 是**文件**，它是合法根，不能被误杀。
 
 - 第 1、4 步只看 `path/.git` 是否存在（**文件系统检查，不依赖 git**）。worktree 里 `.git`
   是文件，`exists()` 同样为真。
@@ -104,6 +110,8 @@ MSG_NOT_A_REPO: Final = "路径不是 git 仓库"
 | `test_bind_subdirectory_stores_repo_root_not_the_subdirectory` | D2（**必须**断言） |
 | `test_bind_path_with_trailing_slash_and_dotdot_resolves_to_root` / `..._through_symlink_...` | D4 `resolve()` |
 | `test_bind_non_repo_directory_is_not_a_repo` / `test_not_a_repo_message_does_not_echo_any_user_path` | D6 + 05 §4.2 |
+| `test_bind_git_directory_itself_is_not_a_repo` / `..._inside_the_git_directory_...` / `..._with_a_dot_git_segment` | T29：`.git` 内部结构不是入口 |
+| `test_worktree_root_with_git_file_still_binds` / `..._subdirectory_still_corrects_...` | T29 防误伤（`.git` 是文件） |
 | `test_bind_relative_path_is_bad_cwd[~]` 等 5 个 | `BAD_CWD`（含 `~` 不展开） |
 | `test_bind_nonexistent_path_is_not_a_repo_not_a_crash` / `test_bind_file_path_is_not_a_repo` | 不崩 |
 | `test_missing_git_is_adapter_unavailable` | `PATH=""` |
