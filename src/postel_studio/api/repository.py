@@ -1,4 +1,4 @@
-"""`repo.bind` / `repo.list` / `repo.branches` 的业务编排（S3；S4 加分支列表）。
+"""`repo.bind` / `repo.list` / `repo.branches` 的业务编排（S3；S4 加分支列表；S5 结 U15）。
 
 **这一层不碰 fastapi**（S3 涉及文件表的要求）：它只接收 `dict` 参数、返回 `dict`，
 把"路径 → 校验 → 探测 → 落库"串起来，并把下游异常翻成 07 §1.3 的**稳定错误码**。
@@ -38,6 +38,8 @@ NOT_A_REPO: Final = "NOT_A_REPO"
 BAD_CWD: Final = "BAD_CWD"
 ADAPTER_UNAVAILABLE: Final = "ADAPTER_UNAVAILABLE"
 REPO_NOT_BOUND: Final = "REPO_NOT_BOUND"
+# S5：07 §1.3 里**本来就有**的码，只是本模块第一次用到（不是新增码）。
+NOT_SUPPORTED: Final = "NOT_SUPPORTED"
 
 # 错误文案：**可读、面向人、不含任何用户输入**（05 §4.2）。改文案不需要改码。
 MSG_BAD_CWD: Final = "path 必须是绝对路径"
@@ -50,6 +52,8 @@ MSG_REPO_ID_INVALID: Final = "repoId 参数缺失或不是字符串"
 # S4 D5：绑定的路径已不是仓库（目录被删 / .git 被删）用 REPO_NOT_BOUND + 这句文案。
 # 不夸大字眼：这不是"未预期错误"（INTERNAL），而是用户自己删了仓库——正常处境。
 MSG_REPO_PATH_MISSING: Final = "仓库路径已不存在"
+# S5 D3.2 / U15 结案：非 UTF-8 refname 的文案（不暴露内部细节、不说"内部错误"）。
+MSG_NOT_SUPPORTED_REFNAME: Final = "仓库含非 UTF-8 的名称，第一版不支持"
 
 # `RepositoryService` 里有个方法叫 `list`，**类作用域**里的 `list[...]` 注解会被 mypy 解析成
 # 那个方法（`valid-type`）。所以分支载荷的列表类型用模块级别名，别在类体里直接写 `list[...]`。
@@ -187,6 +191,10 @@ class RepositoryService:
             raise _fail(ADAPTER_UNAVAILABLE, MSG_ADAPTER_UNAVAILABLE) from None
         except gitops.GitTimeoutError:
             raise _fail(frames.INTERNAL, MSG_GIT_TIMEOUT) from None
+        except gitops.GitOutputUndecodableError:
+            # S5 D3.2 / U15 结案：HEAD 指向非 UTF-8 分支时 symbolic-ref 解不出来。
+            # 严格解码 + NOT_SUPPORTED，绝不把 mangled 名字当默认分支落库 / 回传。
+            raise _fail(NOT_SUPPORTED, MSG_NOT_SUPPORTED_REFNAME) from None
         # D6 的 NOT_A_REPO 在 try 里抛：不要被上面的 except 顺手吞掉——FrameError 不是
         # 它们的子类，这里显式说明一次，免得后来者为了"统一处理"而改成 `except Exception`。
 
@@ -242,6 +250,10 @@ class RepositoryService:
             raise _fail(ADAPTER_UNAVAILABLE, MSG_ADAPTER_UNAVAILABLE) from None
         except gitops.GitTimeoutError:
             raise _fail(frames.INTERNAL, MSG_GIT_TIMEOUT) from None
+        except gitops.GitOutputUndecodableError:
+            # S5 D3.2 / U15 结案：refname 不是合法 UTF-8 → 稳定的 NOT_SUPPORTED + 人话，
+            # 不再是"未捕获 UnicodeDecodeError → INTERNAL（请查看终端）"。
+            raise _fail(NOT_SUPPORTED, MSG_NOT_SUPPORTED_REFNAME) from None
         if found is None:
             # D5：路径被删 / .git 被删是**正常的用户处境**，不是"未预期错误需报障"
             raise _fail(REPO_NOT_BOUND, MSG_REPO_PATH_MISSING)

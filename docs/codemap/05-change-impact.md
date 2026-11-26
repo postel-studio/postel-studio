@@ -36,6 +36,7 @@
 | `scripts/gate-codemap.sh` 的判定范围 | 它自己的 `tests/test_gate_codemap.py`、CONTRIBUTING 门禁表 | 门禁悄悄放行（见 06 §门禁） |
 | `gitops/repo.py:run_git()` | `GIT_TERMINAL_PROMPT=0` / 超时 / `shell=False`、`test_bind.py::test_bind_uses_git_in_a_way_that_cannot_prompt` | **05 §3.3 违规 / 网关被 git 挂住** |
 | `gitops/repo.py` 的 `root` 参数 | 变成可选 = 放弃 D4 的允许根 | 子进程会跑在 cwd 上 |
+| `gitops/repo.py:run_git` 的 `decode_errors` 缺省值 | 06 U15、S5 D3.2；`tests/test_diff.py` 的 D10 第 19/20 行 | 非 UTF-8 refname 又回 `INTERNAL`（U15 复发），或 mangled 名字被回传 git |
 | `gitops/repo.py:list_branches` 的 `--format` / 解析 | 06 T33（`%(HEAD)` 空格 + 整段 strip）、S4 D1/D2/D3；`tests/test_branches.py` 全部解析用例 | 当前分支标记判反 / 最后一条记录解析失败 / remote-tracking 混进列表 |
 | `api/repository.py:branches` 的错误码或文案 | 07 §1.3（**不许新造码**）、S4 D5；`test_branches.py` 的错误码用例 | 空仓库被报成错误 / 删仓库被报成 INTERNAL / 错误文案回显用户路径 |
 | `assets.py` 的 `#branches[data-state]` 状态机 / 行内类名 | S4 D6（DOM 契约）、`node tools/acceptance/s4_branches.mjs`、`test_branches.py` 的页面契约用例 | 断连时留旧数据 / 空仓库显示成错误 / 浏览器验收脚本失效 |

@@ -1,6 +1,6 @@
 # 03 · repository — `src/postel_studio/api/repository.py`
 
-> 层 L3 · 256 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5](../../design/07-api-contract.md)
+> 层 L3 · 268 行 · 上游：[模块索引](README.md) · 相关：[gitops](gitops.md) · [storage-db](storage-db.md) · [domain](domain.md) · 接口：[07 §2.2/§4.1/§4.5](../../design/07-api-contract.md)
 
 ## 职责
 
@@ -14,8 +14,8 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `NOT_A_REPO` / `BAD_CWD` / `ADAPTER_UNAVAILABLE` / `REPO_NOT_BOUND` | 37-40 | 07 §1.3 的码（**不许新造**） | `bind` / `get` / `branches` |
-| `MSG_*`（9 个） | 43-52 | 错误文案常量，**没有一个字来自用户输入** | `_fail` 调用点 |
+| `NOT_A_REPO` / `BAD_CWD` / `ADAPTER_UNAVAILABLE` / `REPO_NOT_BOUND` / `NOT_SUPPORTED` | 37-44 | 07 §1.3 的码（**不许新造**；`NOT_SUPPORTED` 是 S5 第一次用） | `bind` / `get` / `branches` |
+| `MSG_*`（10 个） | 46-59 | 错误文案常量，**没有一个字来自用户输入**；含 S5 的「仓库含非 UTF-8 的名称，第一版不支持」 | `_fail` 调用点 |
 | `BranchPayloads` | 56 | `list[dict[str, object]]` 的模块级别名（类里有方法叫 `list`，类体里直接写 `list[…]` 注解会被 mypy 判 `valid-type`） | `branches` 返回注解 |
 | `_fail(code, message)` | 59 | 造 `frames.FrameError`（网关原样转发） | 内部 |
 | `_require_path(params)` | 64 | `path` 必须是非空字符串，否则 `INVALID_PARAMS` | `bind` |
@@ -93,6 +93,7 @@ return [
 | 不存在 / 是文件 / 不是仓库 | `NOT_A_REPO` | `_bindable_root` 返回 `None` |
 | `git` 不在 `PATH` / 起不来 | `ADAPTER_UNAVAILABLE` | `except GitUnavailableError` |
 | `git` 超时 | `INTERNAL` | `except GitTimeoutError`（**没有** `GIT_TIMEOUT`，D6 明确不造） |
+| 输出含非 UTF-8 的 ref 名（D3.2 / U15） | `NOT_SUPPORTED` | `except GitOutputUndecodableError` |
 | `repoId` 不存在 | `REPO_NOT_BOUND` | `get` |
 
 ### 05 §4.2：错误 message 不回显用户输入
@@ -120,6 +121,13 @@ MSG_NOT_A_REPO: Final = "路径不是 git 仓库"
 
 两次调用的答案理论上可能不同（用户恰好在改配置），只问一次让"算 id 用的 origin"与
 "落库的 origin"一定是同一个值。
+
+### S5 / U15：非 UTF-8 refname 不再报 INTERNAL
+
+`branches` 与 `bind` 都补了 `except gitops.GitOutputUndecodableError → NOT_SUPPORTED`：
+`for-each-ref` / `symbolic-ref` 的输出解不出合法 UTF-8 时回稳定的 `NOT_SUPPORTED` + 一句人话，
+而不是「内部错误，请查看终端」。**不要**改成 `errors="replace"` 糊过去（mangled ref 名回传 git
+会变 `BAD_REF` 甚至指向别的 ref，见 06 U15 / 本文 gitops 页）。
 
 ## 修改须知
 

@@ -57,6 +57,16 @@ class GitTimeoutError(RuntimeError):
     """`git` 超时（S3 D6 裁决：先按 `INTERNAL` 处理，S19 的 doctor 再细化）。"""
 
 
+class GitOutputUndecodableError(RuntimeError):
+    """git 的输出不是合法 UTF-8（S5 D3.2，结掉 U15）。
+
+    只在 `decode_errors="strict"` 时出现；边界层一律翻成 `NOT_SUPPORTED`（07 §1.3，不新增码）。
+    **不能**用 `errors="replace"` / `surrogateescape` 糊过去：mangled 的 ref 名回传 git 会
+    变成 `BAD_REF`，甚至指向别的 ref——比报错更糟（U15 的裁决）。内容类输出（patch / 文件名）
+    用 `errors="replace"`，因为它只进 DOM、永不回传 git（D3.3）。
+    """
+
+
 @dataclass(frozen=True)
 class BranchInfo:
     """一条**本地**分支（S4 D1 / D4）。
@@ -97,7 +107,9 @@ def git_executable() -> str:
     return found
 
 
-def run_git(args: Sequence[str], *, root: Path) -> subprocess.CompletedProcess[str]:
+def run_git(
+    args: Sequence[str], *, root: Path, decode_errors: str = "strict"
+) -> subprocess.CompletedProcess[str]:
     """在 `root` 下跑一条**只读** git 命令（字面数组，无 shell，有超时）。
 
     `root` 是显式参数（D4）：05 §3.2 要求的"允许根"在这里落地成签名的一部分，
@@ -105,9 +117,15 @@ def run_git(args: Sequence[str], *, root: Path) -> subprocess.CompletedProcess[s
     失败一律抛**不含 `root` 文本**的异常——异常会经 `api/repository.py` 变成帧里的
     `message`，而 05 §4.2 要求错误不回显输入值。
 
-    ⚠️ `text=True` 是**严格 UTF-8 解码**：仓库里有非 UTF-8 的 refname 时，stdout 解码会抛
-    `UnicodeDecodeError`（它**不在** `GIT_ERRORS` 里），一路逃到网关变成 `INTERNAL`。
-    S3/S4 都受影响，本刀不修——策略与建议见 06-pitfalls **U15**。
+    `decode_errors` 原样传给 `subprocess.run(errors=…)`（S5 D3.2 的裁决），两种取值：
+
+    - `"strict"`（缺省）：**身份类**输出（ref 名 / 分支列表 / 解析结果）。解码失败抛
+      `GitOutputUndecodableError` → 帧层 `NOT_SUPPORTED`，**绝不** mangled 回传；
+    - `"replace"`：**内容类**输出（patch 正文 / 文件名 / numstat 文件名）。解码失败出现
+      `�` 但**不失败**——只进 DOM、永不回传 git。
+
+    旧版本（S3/S4）是严格解码但**不捕获** `UnicodeDecodeError`：它不在 `GIT_ERRORS` 里，
+    一路逃到网关变成 `INTERNAL`（U15 的问题）。本刀把它变成显式异常，翻成稳定码。
     """
     command = [git_executable(), "-C", str(root), *args]
     try:
@@ -116,6 +134,7 @@ def run_git(args: Sequence[str], *, root: Path) -> subprocess.CompletedProcess[s
             shell=False,
             capture_output=True,
             text=True,
+            errors=decode_errors,
             timeout=GIT_TIMEOUT_SECONDS,
             env=_environment(),
             stdin=subprocess.DEVNULL,
@@ -125,6 +144,8 @@ def run_git(args: Sequence[str], *, root: Path) -> subprocess.CompletedProcess[s
         raise GitUnavailableError("找不到 git 命令") from None
     except subprocess.TimeoutExpired:
         raise GitTimeoutError(f"git 超时（>{GIT_TIMEOUT_SECONDS}s）") from None
+    except UnicodeDecodeError:  # strict 模式下读到非 UTF-8 字节（U15）
+        raise GitOutputUndecodableError("git 输出不是合法 UTF-8") from None
     except OSError as exc:  # 权限、exec 失败等：语义仍是"起不来"
         raise GitUnavailableError("git 命令无法启动") from exc
 
@@ -266,13 +287,18 @@ def list_branches(root: Path) -> list[BranchInfo] | None:
     return branches
 
 
-GIT_ERRORS: Final[tuple[type[Exception], ...]] = (GitUnavailableError, GitTimeoutError)
+GIT_ERRORS: Final[tuple[type[Exception], ...]] = (
+    GitUnavailableError,
+    GitTimeoutError,
+    GitOutputUndecodableError,
+)
 
 __all__ = [
     "BRANCH_FORMAT",
     "GIT_ERRORS",
     "GIT_TIMEOUT_SECONDS",
     "BranchInfo",
+    "GitOutputUndecodableError",
     "GitTimeoutError",
     "GitUnavailableError",
     "bare_root",

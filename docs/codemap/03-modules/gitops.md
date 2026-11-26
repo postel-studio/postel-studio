@@ -1,6 +1,6 @@
 # 03 · gitops — `src/postel_studio/gitops/`
 
-> 层 L0（**起子进程、碰磁盘**）· 287 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md)
+> 层 L0（**起子进程、碰磁盘**）· 313 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md)
 
 ## 职责
 
@@ -17,7 +17,7 @@
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 6 | 包标记（三条硬约束的一句话摘要 + S4 的 `list_branches`） |
-| `repo.py` | 287 | 子进程外壳 + 五个探测函数（含 S4 的分支列表） |
+| `repo.py` | 313 | 子进程外壳 + 五个探测函数（含 S4 的分支列表）+ **严格解码**（S5 结 U15） |
 
 ## 符号表（`gitops/repo.py`）
 
@@ -27,11 +27,12 @@
 | `BRANCH_FORMAT` | 40 | `for-each-ref` 的 `--format`：`%00` 分隔四字段（S4 D3） | `list_branches` |
 | `_DROPPED_ENV` | 42 | 不继承的 `GIT_DIR` / `GIT_WORK_TREE` 等 | `_environment` |
 | `GitUnavailableError` | 52 | git 不存在 / 起不来 → 帧层 `ADAPTER_UNAVAILABLE` | `api/repository.py` |
-| `GitTimeoutError` | 56 | 超时 → 帧层 `INTERNAL`（D6 裁决，S19 再细化） | 同上 |
+| `GitTimeoutError` | 85 | 超时 → 帧层 `INTERNAL`（D6 裁决，S19 再细化） | 同上 |
+| `GitOutputUndecodableError` | 89 | 输出不是合法 UTF-8（strict 解码）→ 帧层 `NOT_SUPPORTED`（**S5 结 U15**，D3.2） | `api/repository.py` |
 | `BranchInfo` | 61 | frozen dataclass：`name` / `sha`（完整 40 位）/ `upstream` / `is_current`（S4 D1/D4） | `list_branches`、`api/repository.py` |
 | `_environment()` | 78 | 子进程环境：`GIT_TERMINAL_PROMPT=0` + `GIT_CONFIG_NOSYSTEM=1` + `GIT_OPTIONAL_LOCKS=0` | `run_git`、测试 |
 | `git_executable()` | 88 | `shutil.which("git")`，找不到抛 `GitUnavailableError` | `run_git` |
-| `run_git(args, *, root)` | 100 | **字面数组 + `shell=False` + timeout** 跑一条只读命令 | 全部探测函数 |
+| `run_git(args, *, root, decode_errors="strict")` | 153 | **字面数组 + `shell=False` + timeout**；`decode_errors` 原样给 `subprocess.errors`（S5 D3.2） | 全部探测函数 |
 | `_stdout(result)` | 132 | 成功取**整段去空白**的 stdout，否则 `None`（T33 的陷阱源头） | 全部探测函数 |
 | `repo_root(path)` | 139 | `git rev-parse --show-toplevel`（会 discover） | `_bindable_root` 之外的用途小心，见下 |
 | `bare_root(path)` | 154 | 自己就是裸仓库根时返回它 | `_bindable_root` |
@@ -40,7 +41,7 @@
 | `origin_url(root)` | 180 | `git config --get remote.origin.url` → `str \| None` | `api/repository.py:bind` |
 | `default_branch(root)` | 194 | `git symbolic-ref --short HEAD` → `str \| None` | 同上 |
 | `list_branches(root)` | 213 | `for-each-ref refs/heads/` → `list[BranchInfo] \| None`（S4 D3；三态见下） | `api/repository.py:branches` |
-| `GIT_ERRORS` | 269 | 两个异常类的元组（"能抛什么"的显式清单） | 文档用 |
+| `GIT_ERRORS` | 300 | 三个异常类的元组（"能抛什么"的显式清单，S5 加了 `GitOutputUndecodableError`） | `api/repository.py`、测试 |
 
 ## 关键决策与理由
 
@@ -77,6 +78,21 @@ subprocess.run(
 D4 说"绑定之后的所有操作必须以已绑定的 path 为允许根"。落地方式就是：**这个函数只接受一个
 根**，S4 的分支列表复用 `run_git(root=<已绑定 path>)` 就天然无法越界。不要在别处再写一个
 `subprocess.run(["git", ...])`。
+
+### S5 / U15 结案：`run_git(decode_errors=…)` 与 `GitOutputUndecodableError`
+
+S3/S4 的 `run_git(text=True)` 是严格 UTF-8 解码、但**不捕获** `UnicodeDecodeError`：仓库里有
+非 UTF-8 refname 时它一路逃到网关 `except Exception` → `INTERNAL`（06 U15）。按 S5 D3.2 的
+裁决改成显式异常：
+
+| `decode_errors` | 用在 | 解码失败时 |
+|---|---|---|
+| `"strict"`（缺省） | 身份类输出（ref 名 / 分支列表 / 解析结果） | 抛 `GitOutputUndecodableError` → `NOT_SUPPORTED`，**绝不** mangled 回传 |
+| `"replace"` | 内容类输出（patch 正文 / 文件名 / numstat 文件名） | 出现 `�`、**不失败**（只进 DOM、永不回传 git） |
+
+为什么出站标识符必须严格：mangled 的名字回传 git 会变成 `BAD_REF`，**甚至指向别的 ref**——
+比报错更糟。`repo.branches` / `repo.bind` 两条路径的码映射在 `api/repository.py`；
+回归测试是 `tests/test_diff.py` 的 D10 第 19/20 行。
 
 ### `repo_root` / `is_repo` **不要**单独当"能不能绑"的判据（T25）
 
