@@ -178,15 +178,15 @@
 
 | 项 | 位置 |
 |---|---|
-| 用户路径 | 左栏「Bots」区在选中仓库后出现 `builder`（名字 / L1 徽标 / 职责摘要）→ 点它（鼠标或 `Enter`）→ 主区「Charter」面板显示 charter 全文与记忆目录**绝对路径** |
+| 用户路径 | 左栏「Bots」区在选中仓库后列出该仓库的 Bot（名字 / 权限徽标 / 职责摘要）→ 点它（鼠标或 `Enter`）→ 主区「Charter」面板显示 charter 全文与记忆目录**绝对路径**。S6 时这里的 `builder` 是内核播种的；**S8 起由人新建**（C18） |
 | 前端入口 | `web/assets.py` 的 `#bots` / `#charter` 面板：`loadBots()` / `selectBot()` / `loadCharter()`；断连 / 切仓库的收口是 `resetBots()` / `resetCharter()` |
 | DOM 契约 | `#bots[data-state]` / `#charter[data-state]` + `li[data-bot-id]` / `.bot-name` / `.bot-permission` / `.bot-charter-summary` / `#charter-memory` / `#charter-content`（S6 D8） |
-| 方法表 | `api/gateway.py:130` `bot.list` / `api/gateway.py:132` `memory.charter.get` |
-| 业务编排 | `api/bots.py:86` `BotService`：惰性播种（D2）、摘要五条与 `charterRev`（D5）、错误码（D6） |
+| 方法表 | `api/gateway.py:133` `bot.list` / `api/gateway.py:139` `memory.charter.get` |
+| 业务编排 | `api/bots.py:108` `BotService`：摘要五条与 `charterRev`（D5）、错误码（D6）。**S8 删掉了惰性播种**——`bot.list` 现在是纯读（C18） |
 | 数据 | `storage/db.py:284` `BotStore`（v3 的 `bots` 表）；charter **正文在文件**：`storage/paths.py:253` `ensure_memory_space` / `storage/paths.py:272` `read_charter` |
 | 安全 | 记忆目录 `<状态根>/bots/<repo_id>/<name>/`：目录 `0700`、`charter.md` `0600`（D3 / T38）；名字白名单 + resolve 越界断言 |
 | 错误码 | `INVALID_PARAMS`（repoId / botId 形状错、botId 查不到）/ `REPO_NOT_BOUND`（repoId 查不到）/ `INTERNAL`（记忆目录读写失败）——07 §1.3 既有码，**一个不新增** |
-| 由谁守住 | `tests/test_bot_charter.py` **26 个用例**（真 SQLite + 真文件 + 真 WS 帧）：D11 第 1–14 行；反向注入 5 条在 `tests/test_reverse_checks.py` |
+| 由谁守住 | `tests/test_bot_charter.py`（真 SQLite + 真文件 + 真 WS 帧）：D11 第 1–14 行；反向注入 5 条在 `tests/test_reverse_checks.py`。S8 把「首次列表即播种」那条改写成「先建后读」 |
 | M1 收口 | `scripts/accept_m1.py` 一条命令跑通 S1–S6 + 家具（真内核 / 真 git / 真 WS），由 `tests/test_accept_m1.py` 子进程验收 |
 | ⚠️ UI 行为 | pytest 里只有文本断言；D8 的 DOM 行为由 `node tools/acceptance/s6_bots.mjs` 在真实 Chrome 里跑（T9） |
 
@@ -197,7 +197,7 @@
 | 用户路径 | 选中仓库 → 在基础分支输入框（预填默认分支）点「分配工作区」→ 页面显示**路径 / 分支 / Bot**，磁盘上真有那个 worktree → 点「回收工作区」→ 目录消失、`git worktree list` 里不再出现（分支保留） |
 | 前端入口 | `web/assets.py` 的 `#workspace` 卡片：`loadWorkspace()` / `submitWorkspace()` / `releaseWorkspace()`；断连 / 切仓库的收口是 `resetWorkspace()` |
 | DOM 契约 | `#workspace[data-state]` + `#workspace-form` / `#workspace-base` / `#workspace-acquire` / `#workspace-bot` / `#workspace-path` / `#workspace-branch` / `#workspace-release` / `#workspace-empty` / `#workspace-error`（S7 D9） |
-| 方法表 | `api/gateway.py:116` 的 `worktree.acquire` / `worktree.list` / `worktree.release` 三个分支 |
+| 方法表 | `api/gateway.py:141` 的 `worktree.acquire` / `worktree.list` / `worktree.release` 三个分支 |
 | 业务编排 | `api/worktrees.py:78` `WorktreeService`：复用/修复/创建状态机（D7）、Bot 归属校验、错误码（D6）——**不落库**（D4） |
 | 写面（L0） | `gitops/worktrees.py:136` `add_worktree` / `:163` `remove_worktree` / `:172` `prune_worktrees`——**S7 起内核唯一会写用户仓库的地方**，允许清单见 S7 D5 |
 | 路径 | `storage/paths.py:295` `worktree_dir()` / `:311` `ensure_worktree_parent()`：`<状态根>/worktrees/<repo_id>/<bot>/`，白名单 + resolve 越界断言（D2） |
@@ -205,6 +205,22 @@
 | 安全 | 工作区只在状态根下（绝不在用户仓库工作目录里）；**不 `--force`**、不删分支、不 reset；脏工作区回收被拒且文件原样保留（D5） |
 | 由谁守住 | `tests/test_worktree.py` **35 个用例**（真 git + 真 SQLite + 真目录）；反向注入 4 条在 `tests/test_reverse_checks.py`（S7 #1–#4） |
 | ⚠️ UI 行为 | pytest 里只有文本断言；D9 的 DOM 行为由 `node tools/acceptance/s7_worktree.mjs` 在真实 Chrome 里跑（T9） |
+
+### C18 · 人建一个 Bot，并定它的权限（`bot.create` / `bot.set_permission`）—— S8
+
+| 项 | 位置 |
+|---|---|
+| 用户路径 | 左栏「新建 Bot」→ 填名字、选权限（L0/L1/L2/L2+）→ 它出现在 Bots 区、徽标就是选的级别 → 刷新后仍在 → 点开它，在 charter 面板里改权限，左栏徽标跟着变 |
+| 前端入口 | `web/assets.py` 的 `#bot-new` / `#bot-create-form` 与 `#charter-permission`：`openBotCreate()` / `submitBotCreate()` / `submitPermissionChange()` |
+| DOM 契约 | `#bot-create-name` / `#bot-create-permission` / `#bot-create-submit` / `#bot-create-cancel` / `#bot-create-error` / `#charter-permission`（S8 D8）；两个下拉**都只有四个选项**，`L3`/`L4` 连灰掉都不出现 |
+| 方法表 | `api/gateway.py:135` `bot.create` / `api/gateway.py:137` `bot.set_permission` |
+| 业务编排 | `api/bots.py:124` `BotService.create`（七步、先判后写）/ `api/bots.py:158` `BotService.set_permission` |
+| 数据 | `storage/db.py:340` `BotStore.set_permission`；**无迁移**（`bots` 表 v3 已在）；权限阶梯在 `domain/models.py:143` `Permission` |
+| 安全 | 名字白名单（06 §2.2）在**碰磁盘之前**判；错误文案是常量、不回显输入（05 §4.2）；权限只能由人发起（05 §2.3），而「人」就是这条 WS 入口 |
+| 错误码 | `ALREADY_EXISTS`（**S8 新增**，409，撞名）/ `NOT_SUPPORTED`（L3/L4、`agentKind` 给名字）/ `INVALID_PARAMS` / `REPO_NOT_BOUND` / `INTERNAL` |
+| 由谁守住 | `tests/test_bot_create.py`（真 SQLite + 真文件 + 真 WS 帧，56 个用例）；4 条反向注入（白名单 / 可授予集合 / 默认 L1 / 播种复活） |
+| ⚠️ UI 行为 | `node tools/acceptance/s8_create_bot.mjs` 在真实 Chrome 里跑：空态 → 表单 → 建 → 非法名字 → 撞名 → Escape → 回车 → 刷新 → 改权限（T9 的同一课） |
+| 未做 | **权限尚未被强制执行**（S16 的权限门）；`agentKind` 只收 `null`（S9 才验证通道）；改名 / 删除是后续切片 |
 
 ---
 
@@ -291,8 +307,8 @@
 | ~~S4~~ | **已完成**：点仓库行 → 主区分支面板列出本地分支（当前徽章 / 8 位 sha / upstream） | `gitops.BranchInfo` + `list_branches`；`api/repository.branches`；前端 `#branches` | 新增 C14；`for-each-ref` 的 ref 解析首次出现，逼出 **T33** |
 | ~~S5~~ | **已完成**：点分支 → 统计 + 着色 patch（截断不静默丢、非法 ref 可读、键盘可达） | `gitops.resolve_commit`/`diff_stat`/`diff_patch`；`api/repository.diff`；前端 `#diff` | 新增 C15；**第一次把用户 ref 送进 git**，裁决 U15（T34/T35/T36） |
 | ~~S6~~ | **已完成**：左栏 Bots 区 + 主区只读 charter 面板（M1 一条命令复现 S1–S6） | `api/bots.py`、`bots` 表（v3）、paths 的记忆空间；前端 `#bots`/`#charter`；`scripts/accept_m1.py` | 新增 C16；逼出 **T38**（umask 权限）与 **U17**（`bot.list` 惰性播种 / `charter_rev` 未维护） |
-| S7 | worktree 路径 | `git/worktree` | |
-| S8 | 创建 Bot | `api/bots.py` 加 `create`；`bots` 表已在 v3 存在；预置播种改由显式动作负责（U17 到期） | 01-overview 已是"单进程 + 一个库"，再改一张表图；`charter_rev` 的写路径要到 S22 |
+| ~~S7~~ | **已完成**：分配 / 复用 / 回收一个真 worktree（脏工作区回收被拒、分支保留） | `gitops/worktrees.py`（**第一个写面**）、`api/worktrees.py`、前端 `#workspace`；`tools/acceptance/s7_worktree.mjs` | 新增 C17；内核第一次写用户仓库 → 逼出 **T40**（sha 交给 `worktree add` 会游离 HEAD） |
+| ~~S8~~ | **已完成**：新建 Bot（名字 + 权限），刷新后仍在，事后能改权限 | `domain.Permission`、`BotStore.set_permission`、`api/bots.py` 的 `create` / `set_permission`、前端新建表单 + charter 权限下拉 | 新增 C18；**删掉惰性播种**（U17 第一半结案）→ 逼出 **T41**（`disabled` 抢走焦点，form 上的 Escape 失联） |
 | S9 | 检测 Agent | `agent/`（ACP 握手） | **第二个进程模型出现，01-overview 重画** |
 | S10 | 派活跑起来 | 任务状态机、流式输出 | `dispatch()` 会明显变长 |
 | S11 | 收件箱出现候选 | diff → candidate | |

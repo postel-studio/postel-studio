@@ -360,6 +360,42 @@ HEAD 27999c10                                     ← 基础提交，不是分�
 **通用**：一个"幂等"的创建动作，第二次调用必须与第一次**等价**。等价的判据不是
 "命令退出码 0"，而是"产物与第一次一致"——这里一致的是路径，不一致的是 HEAD 与分支。
 
+### T41 ❌ 提交时禁用按钮 → 焦点掉回 `body` → 绑在 `<form>` 上的 Escape 静默失效（S8 已处理）
+
+S8 的新建 Bot 表单有一条"Escape 收起表单"的键盘承诺。第一版把 `keydown` 绑在 `<form>` 上：
+
+```js
+botCreateForm.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape") { ev.preventDefault(); closeBotCreate(); }
+});
+```
+
+点击「创建」时，`submitBotCreate()` 先把提交按钮 `disabled = true`（防连点）。**浏览器在
+"当前聚焦的元素被禁用"时会把焦点移到 `document.body`**——于是回包到达前的这几百毫秒里，
+焦点已经不在表单里，`keydown` 不再冒泡到 `<form>`，Escape 完全没人接。回包失败后按钮虽被
+重新启用，焦点也不会自己回来。
+
+真实后果：填了一个非法名字 → 报错 → 想按 Escape 退出 → **没反应**（只能点「取消」）。
+
+**是谁抓到的**：`tools/acceptance/s8_create_bot.mjs` 的第 6 步（真 Chrome 里按 Escape 再读
+`#bot-create-form.hidden`）。pytest 里的静态断言（"页面里有这行监听"）当时是**绿的**——
+它证明的是"意图存在"，不是"行为正确"（T9 的同一课，这次栽在键盘事件上）。
+
+**正解**：
+
+```js
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape" && !botCreateForm.hidden) { ev.preventDefault(); closeBotCreate(); }
+});
+```
+
+守卫是"表单开着才管"，所以不会抢别的面板的 Escape。另外失败回包会把焦点送回名字输入框
+（人要改的就是那里）。
+
+**通用**：凡是把键盘/焦点行为绑在**容器**上，都要问一句"焦点凭什么还在容器里？"
+`disabled`、`hidden`、`display:none`、DOM 重建都会把它挤出去。**绑定范围要覆盖焦点可能
+去的地方，判定条件要写清楚什么情况下才生效。**
+
 ---
 
 ## 安全
@@ -860,7 +896,7 @@ $ python -c "from pathlib import Path; Path('a/b/c/f.txt').write_text('x'); impo
 | U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) | ✅ **已裁决（S7）：明确豁免，到期 S19** | 修它要把 `origin_hash` 从"只用于识别"升格成**匹配键**，还要定两条尚不存在的规则（`NULL` 老行怎么办、两行同 hash 选哪行）——那是数据模型层的一刀，且 04 §6 禁止一个 PR 混两条用户路径。**后果照旧**：移动仓库后左栏留一条打不开的记录、`~/.postel/worktrees/<旧 id>/` 变成孤儿目录（06 §5：永不自动删除，S19 的 doctor 报告）。S7 本身不依赖身份跨移动存活：工作区按用户**实际点到的**那一行（repo_id）建。 |
 | U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。**→ ✅ 结案（S5）**：按 D3.2 的裁决修 —— `run_git` 增加 `decode_errors`（缺省 `strict`），严格模式解码失败抛新异常 `GitOutputUndecodableError`（加进 `GIT_ERRORS`）；`api/repository.py` 把 `repo.branches` / `repo.bind` / `repo.diff` 三条路径一律翻成 `NOT_SUPPORTED` +「仓库含非 UTF-8 的名称，第一版不支持」，不再回 `INTERNAL`。实测触发：`git branch $'bad-\xff'` 之后 `for-each-ref` 原始输出是 `b'bad-\xff\nmain\n'`（严格解码在 position 4 抛 `UnicodeDecodeError`）；JSON 的 lone surrogate 经 `surrogateescape` 会变成真字节、`rev-parse --verify` 真的能解析成功——所以入站也挡（D3.1）。回归：`tests/test_diff.py` D10 第 19/20 行 + 反向注入 D12 #3。 | ✅ **已修（S5）** | — | ref 名回传 git 会变 `BAD_REF`，甚至指向别的 ref——比报错更糟 |
 | U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **S18（空态/错误态与大仓库体检）前** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）；届时裁决：流式读 + 字节上限，或明确豁免并写进 05 安全红线 |
-| U17 | **`bot.list` 惰性播种 + `charter_rev` 未维护**（S6 的两处临时形态）：① `bot.list` 是读方法，却会在该 repo **一个 Bot 都没有**时落一行（D2 的裁决：`bot.create` 是 S8，M1 没有创建入口，而 S6 之前绑定的老仓库只有惰性播种才能自动补上）；② `bots.charter_rev` 列 v3 就建了，但 **M1 不维护**（D5：charter 正文的事实源是 `charter.md`，载荷里的 `charterRev` 现场按内容算；改 charter 的写路径是 S22 的 `charter.set`）。 | **未修（M1 的临时形态，D2/D5 明确记录）** | **到期 S8（创建入口）/ S22（charter 编辑）** | ① `bot.list` 会写盘（落行 + 收紧目录权限）；将来若有并行客户端，重复播种会被 UNIQUE 拒绝，但调用方会看到 `IntegrityError`；② 有人读 `charter_rev` 列会读到过期值——M1 没有任何读路径，S22 必须改由 `charter.set` 维护它。 |
+| U17 | **`bot.list` 惰性播种 + `charter_rev` 未维护**（S6 的两处临时形态）。① 惰性播种：`bot.list` 是读方法，却会在该 repo **一个 Bot 都没有**时落一行（S6 D2 的权宜：M1 没有创建入口，而 S6 之前绑定的老仓库只有惰性播种才能自动补上）；② `bots.charter_rev` 列 v3 就建了，但**只在创建时写一次**（D5：charter 正文的事实源是 `charter.md`，载荷里的 `charterRev` 现场按内容算；改 charter 的写路径是 S22 的 `charter.set`）。 | **① ✅ 已结案（S8 D7）**：`_seed` 与 `PRESET_BOT_NAME` 删除，`bot.list` 变成纯读，空仓库回 `[]`（`test_bot_list_returns_created_bots_and_repeats_identically` / `test_list_on_a_repo_with_no_bots_writes_nothing`）。**② 仍未修**（`charter_rev` 允许过期）。 | ① 已到期并完成；② 到期 **S22**（`memory.charter.set`） | ① 无——代价已消失。② 有人去读那一列会读到过期值：**今天没有任何读路径**，S22 必须改成由 `charter.set` 维护它，或者直接删掉这一列。 |
 
 ---
 

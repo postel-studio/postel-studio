@@ -53,7 +53,7 @@ Repo ──1:N── Bot ──1:N── Task ──0..1── Candidate
 | `bot_id` | TEXT PK | `{repo_id}/{name}` | 复合主键，天然按仓库隔离 |
 | `repo_id` | TEXT FK → Repo | ON DELETE CASCADE | |
 | `name` | TEXT | `^[a-z][a-z0-9-]{0,31}$` | 白名单校验（见 05 §3.3） |
-| `permission` | TEXT | L0~L2+ 之一 | **默认 L1**；L3/L4 不可写入（`NOT_SUPPORTED`） |
+| `permission` | TEXT | `L0` / `L1` / `L2` / `L2+` 之一 | **默认 L1**（05 §2.2）。L3/L4 是**认识但不可写入**的值（`NOT_SUPPORTED`），不在 `L0<L1<L2<L2+` 这根梯子上（01 §4；S8 D2） |
 | `agent_kind` | TEXT | 注册表中的通道 id | 不含单个 Agent 特判 |
 | `charter_rev` | INTEGER | 单调递增 | charter 内容哈希的版本号，用于注入缓存失效 |
 | `created_at` | REAL | | |
@@ -61,7 +61,7 @@ Repo ──1:N── Bot ──1:N── Task ──0..1── Candidate
 **不变量**：
 
 - 同一 `repo_id` 下 `name` 唯一。
-- **charter 正文在文件、不落库**（S6 D5）：`<状态根>/bots/<repo_id>/<name>/charter.md` 是内容的事实源；`charter_rev` 列 v3 起存在但 **M1 不维护**，写路径是 S22 的 `charter.set`（06 U17）。
+- **charter 正文在文件、不落库**（S6 D5）：`<状态根>/bots/<repo_id>/<name>/charter.md` 是内容的事实源；`charter_rev` 列 v3 起存在，**S8 起在创建时写一次**（那一刻的内容哈希），之后不维护——改 charter 的写路径是 S22 的 `charter.set`（06 U17 的第二半）。
 - `permission` 变更只能由人发起（Agent 无写权限）。
 - Bot 删除时**不删**记忆目录（保留可审计；由显式清理命令处理）。
 

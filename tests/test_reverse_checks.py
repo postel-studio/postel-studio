@@ -353,6 +353,68 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_acquire_rejects_invalid_base_ref_shape", file="test_worktree"),
         "S7 #4：baseRef 不再过 S5 D3.1 的形状（`-x` 会进 git 的选项位，用户输入直接下传）",
     ),
+    # ---- S8：建 Bot 的四条硬约束 + 一条页面契约 ----
+    (
+        "postel_studio/api/bots.py",
+        "        if isinstance(raw, str) and raw in UNASSIGNABLE_PERMISSIONS:\n"
+        "            raise _fail(NOT_SUPPORTED, MSG_PERMISSION_UNSUPPORTED)",
+        "        pass",
+        _target_test("test_create_rejects_l3_and_l4", file="test_bot_create"),
+        "S8 #1：`L3`/`L4` 不再被单独拒绝（会掉进 INVALID_PARAMS——码不再说清'有但不给'）",
+    ),
+    (
+        "postel_studio/domain/models.py",
+        'BOT_NAME_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,31}$")',
+        'BOT_NAME_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,99}$")',
+        _target_test("test_create_rejects_illegal_names", file="test_bot_create"),
+        "S8 #2：名字白名单放宽到 99 字（超长名字被接受并真的建出目录）",
+    ),
+    (
+        "postel_studio/domain/models.py",
+        "BOT_PERMISSION_DEFAULT: Final = Permission.L1",
+        "BOT_PERMISSION_DEFAULT: Final = Permission.L0",
+        _target_test("test_create_defaults_to_l1", file="test_bot_create"),
+        "S8 #3：新建 Bot 的默认级别从 L1 掉到 L0（05 §2.2 的默认值被改掉）",
+    ),
+    (
+        "postel_studio/api/bots.py",
+        "        repo = self._require_repo(params)\n"
+        "        return [self._split(bot) for bot in self._store.list_for_repo(repo.repo_id)]",
+        "        repo = self._require_repo(params)\n"
+        "        found = self._store.list_for_repo(repo.repo_id)\n"
+        "        if not found:\n"
+        "            ensure_memory_space(repo.repo_id, 'seeded')\n"
+        "            found = [\n"
+        "                self._store.insert(\n"
+        "                    Bot(\n"
+        "                        bot_id=bot_id(repo.repo_id, 'seeded'),\n"
+        "                        repo_id=repo.repo_id,\n"
+        "                        name='seeded',\n"
+        "                        permission='L1',\n"
+        "                        agent_kind=None,\n"
+        "                        charter_rev=0,\n"
+        "                        created_at=0.0,\n"
+        "                    )\n"
+        "                )\n"
+        "            ]\n"
+        "        return [self._split(bot) for bot in found]",
+        _target_test("test_list_on_a_repo_with_no_bots_writes_nothing", file="test_bot_create"),
+        "S8 #4：惰性播种复活（一个 GET 又开始落行 + 建目录，U17 第一半被推翻）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        '        <option value="L2+">L2+ · 开本仓库 PR</option>\n'
+        "      </select>\n"
+        '      <div id="bot-create-actions">',
+        '        <option value="L2+">L2+ · 开本仓库 PR</option>\n'
+        '        <option value="L3">L3 · 跨仓库 PR</option>\n'
+        "      </select>\n"
+        '      <div id="bot-create-actions">',
+        _target_test(
+            "test_page_permission_select_lists_exactly_four_levels", file="test_bot_create"
+        ),
+        "S8 #5：新建表单的下拉多出 L3（产品红线：第一版永不授予 L3/L4）",
+    ),
 )
 
 

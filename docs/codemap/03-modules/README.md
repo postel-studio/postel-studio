@@ -8,18 +8,18 @@
 |---|---|---|---|---|
 | L0 | [entry](entry.md) | `src/postel_studio/__init__.py` | 55 | CLI 入口，解析 `serve` / `version` |
 | L0 | [paths](paths.md) | `src/postel_studio/storage/paths.py` | 322 | 状态根、锁、原子写、权限、Bot 记忆空间（S6）、工作区目录（S7） |
-| L0 | [domain](domain.md) | `src/postel_studio/domain/models.py` | 208 | `Repo` / `Bot` 实体、origin 归一化、`repo_id`（**无 IO**） |
+| L0 | [domain](domain.md) | `src/postel_studio/domain/models.py` | 272 | `Repo` / `Bot` 实体、origin 归一化、`repo_id`、权限阶梯（S8）（**无 IO**） |
 | L0 | [gitops](gitops.md) | `src/postel_studio/gitops/repo.py` | 500 | git **只读**探测（子进程，含 S4 分支列表 + S5 diff） |
 | L0 | [gitops](gitops.md) | `src/postel_studio/gitops/worktrees.py` | 226 | git **写**操作（S7）：`worktree add` / `remove` / `prune`——写面只有这一处 |
-| L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 356 | `state.db`、schema 迁移（v3）、`RepoStore` / `BotStore` |
+| L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 376 | `state.db`、schema 迁移（v3）、`RepoStore` / `BotStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 256 | 进程生命周期、信号、日志 |
-| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 110 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store/service 并注入 |
-| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 192 | WS 认证与帧分派（11 个方法） |
+| L3 | [app](app.md) | `src/postel_studio/api/app.py` | 112 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store/service 并注入 |
+| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 199 | WS 认证与帧分派（13 个方法） |
 | L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 378 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的业务编排（**不碰 fastapi**） |
-| L3 | [bots](bots.md) | `src/postel_studio/api/bots.py` | 181 | `bot.list` / `memory.charter.get` 的业务编排（惰性播种 + charter 摘要/rev，**不碰 fastapi**） |
+| L3 | [bots](bots.md) | `src/postel_studio/api/bots.py` | 267 | `bot.list` / `bot.create` / `bot.set_permission` / `memory.charter.get` 的业务编排（判完再写 + charter 摘要/rev，**不碰 fastapi**） |
 | L3 | [worktrees](worktrees.md) | `src/postel_studio/api/worktrees.py` | 300 | `worktree.acquire` / `list` / `release` 的业务编排（复用/回收状态机，**不落库**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 121 | 帧编解码，纯函数 |
-| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 1457 | 页面 HTML + 内联 JS（S3 仓库区 + S4 分支 + S5 差异 + S6 Bots/charter + S7 工作区卡片） |
+| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 1670 | 页面 HTML + 内联 JS（S3 仓库区 + S4 分支 + S5 差异 + S6 Bots/charter + S7 工作区卡片 + S8 新建 Bot 表单） |
 
 **必须有但我还没单列的**（内容已在别处）：
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
@@ -137,8 +138,41 @@ def repo_id(path: str) -> str:
 
 # 06 §2.2 白名单：首字母小写、其余小写字母/数字/连字符，总长 1..32。
 BOT_NAME_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
-# M1 恒为 L1（06 §2.2 默认值）；改权限是 M2 的 bot.set_permission，本刀不做。
-BOT_PERMISSION_DEFAULT: Final = "L1"
+
+
+class Permission(StrEnum):
+    """人可以授予一个 Bot 的**四个**级别（S8 D2；01 §4 / 05 §2.2）。
+
+    **这四个才构成阶梯**：`L0 < L1 < L2 < L2+`（`permission_covers` 回答"持有某级是否够用"）。
+    `L3`（跨仓库 PR）与 `L4`（合并）**不在**这一维上——01 §4 开头就是这么说的：把「合并」与
+    「跨仓库 PR」排成同一根尺子，会让「能往自己仓库开 PR」看起来像「能往别人仓库开 PR」的
+    前一步。所以它们不是本枚举的成员，也不参与任何大小比较（`permission_covers` 对它们答
+    `False`，失败即收紧）。
+
+    为什么是 `StrEnum`：落库、上网关帧、进页面徽标的都是**字符串**（`"L2+"`）。用字符串字面量
+    意味着 `"l1"` / `"L2 +"` 这类拼写错误在运行时才被发现；枚举让"认识的级别"只有一份清单。
+    """
+
+    L0 = "L0"
+    L1 = "L1"
+    L2 = "L2"
+    L2_PLUS = "L2+"
+
+    @property
+    def rank(self) -> int:
+        """在**v1 阶梯**上的位置（0..3）。只对这四个成员有意义。"""
+        return _PERMISSION_LADDER.index(self.value)
+
+
+# 阶梯顺序的唯一事实源：`rank` 与 `permission_covers` 都读它，别在别处再排一次。
+_PERMISSION_LADDER: Final = ("L0", "L1", "L2", "L2+")
+
+# 06 §2.2 / 05 §2.3：这两个级别**认识**但**不可写入**（`NOT_SUPPORTED`）。它们不是"拼错的字符串"
+# ——拼错的是 `INVALID_PARAMS`，这两个是"你说得清，但第一版不做"。
+UNASSIGNABLE_PERMISSIONS: Final[frozenset[str]] = frozenset({"L3", "L4"})
+
+# 新建 Bot 的默认级别（05 §2.2 的"新建 Bot"行；01 §4 的 L0 备注是过时写法，S8 D2 有四个来源）。
+BOT_PERMISSION_DEFAULT: Final = Permission.L1
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +180,8 @@ class Bot:
     """一个仓库下的 Bot（06 §2.2）。`bot_id` 是复合主键 `{repo_id}/{name}`。
 
     `charter_rev` 列先建但 **M1 不维护**（D5：charter 正文的事实源是文件，帧载荷里的
-    `charterRev` 由 `api/bots.py` 现场按内容算）。落库时写播种那一刻的值，之后允许过期。
+    `charterRev` 由 `api/bots.py` 现场按内容算）。落库时写**创建那一刻**的值，之后允许过期
+    （S8 D7：U17 的第二半仍在 S22 到期——改 charter 的写路径是 `memory.charter.set`）。
     """
 
     bot_id: str
@@ -166,6 +201,35 @@ def bot_name_ok(name: str) -> bool:
 def bot_id(repo_id: str, name: str) -> str:
     """复合主键 `{repo_id}/{name}`（06 §2.2）——**唯一的拼接处**，别处不要手写格式。"""
     return f"{repo_id}/{name}"
+
+
+def permission_parse(value: object) -> Permission | None:
+    """入站权限值 → `Permission`；不是那四个之一就 `None`（**纯判定，不抛、不拼文案**）。
+
+    `L3` / `L4` 也走 `None` 这条路（它们不是本枚举的成员）：调用方要先看
+    `UNASSIGNABLE_PERMISSIONS` 再调这里，才能把"第一版不支持"（`NOT_SUPPORTED`）与"根本没这个
+    级别"（`INVALID_PARAMS`）分开。两个判断分开放，是为了让那个区分是**显式**的，而不是靠
+    `None` 的两义性。
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        return Permission(value)
+    except ValueError:  # 含 lone surrogate：`Permission(...)` 只会 ValueError
+        return None
+
+
+def permission_covers(held: object, needed: object) -> bool:
+    """持有 `held` 是否满足 `needed`（S8 D2 的阶梯：`L0 < L1 < L2 < L2+`）。
+
+    **失败即收紧**（05 §2.2）：任何一端解析不出来——`None`、`"L3"`、`"l1"`、`42`——都答 `False`。
+    `L3`/`L4` 在另一根轴（01 §4），所以"持 `L2+`"不构成"能对上游开 PR"，这里也不假装有序。
+    """
+    left = permission_parse(held)
+    right = permission_parse(needed)
+    if left is None or right is None:
+        return False
+    return left.rank >= right.rank
 
 
 # ---------------------------------------------------------------------------

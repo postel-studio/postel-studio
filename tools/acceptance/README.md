@@ -36,6 +36,7 @@ node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分�
 node tools/acceptance/s5_diff.mjs      # S5：点分支行 → 主区出现统计 + 着色 diff
 node tools/acceptance/s6_bots.mjs      # S6：左栏出现 Bot → 点开看 charter 全文与记忆目录
 node tools/acceptance/s7_worktree.mjs  # S7：分配工作区 → 磁盘上真有 worktree → 回收
+node tools/acceptance/s8_create_bot.mjs  # S8：新建 Bot → 左栏出现 → 刷新仍在 → 改权限
 ```
 
 脚本自己会做这些事，**不碰你的真实 `~/.postel`**（06-pitfalls T18）：
@@ -190,3 +191,25 @@ git 的事实**（页面说"路径是 X"，脚本就去 `existsSync(X)` 并 `git
 
 脚本还会打印状态根下 `worktrees/` 的真实内容（`状态根下的 worktrees：["<repoId>"]`），
 截图与内核日志落在 `/tmp/postel-s7-acceptance-XXXX/`。
+
+## S8 · 新建 Bot / 改权限（`s8_create_bot.mjs`）
+
+真 Chrome + 真内核 + 一个真仓库。除了读 DOM，它还用 Node 的 `fs` 核对**磁盘事实**
+（页面说"建好了"，脚本就去 `readdir` 记忆目录并 `stat` 权限位）：
+
+| 输出行 | 对应 |
+|---|---|
+| `0 初始 #bots 是 idle …` / `「新建 Bot」不可见` / `表单是收起的` / `权限下拉不可见` | D8（没选仓库之前不装作能建） |
+| `1 空仓库 → ready + 空列表 + 「这个仓库还没有 Bot。」` / `「新建 Bot」出现` / `工作区卡片指向那个动作` | 验收 1 的前置 + S8 D7（空列表是真实状态） |
+| `2 表单出现` / `名字框拿到焦点` / `默认选中 L1` / `下拉恰好 L0/L1/L2/L2+` / `标签可读` | 验收 3 + 4 + D8 |
+| `3 表单收起` / `左栏出现 builder` / `徽标 L2` / `摘要` / `#bot-empty 隐藏` / `磁盘上真有记忆目录` / `0700+0600` | **验收 1 + 5** |
+| `4 非法名字 → 说出规则` / `表单还在、值还留着` / `仍然 1 行` | **验收 2**（且什么都没建） |
+| `5 同名再建 → 「已经有叫这个名字的 Bot」` / `仍然 1 行` | `ALREADY_EXISTS` 的可见形态 |
+| `6 Escape 收起表单` / `焦点回按钮` / `错误清掉` | D8（这条抓到过 T41） |
+| `7 回车也能创建` / `第二个 Bot 用默认 L1` | 真 `<form>`：回车与点按钮同一条路径 |
+| `8 刷新后回 idle` / `重新选中仓库后两个都在` / `徽标还是原样` | **验收 6**（持久化的真凭据） |
+| `9 charter ready` / `权限下拉显示当前级别` / `改成 L1 → 左栏徽标跟着变` / `面板没被打回 loading` | **验收 7** + 「一处事实源」 |
+| `10 全程无 console 错误` / `无未捕获异常` | T9 的补充 |
+
+脚本还会打印状态根下 `bots/` 的真实内容，截图与内核日志落在
+`/tmp/postel-s8-acceptance-XXXX/`。

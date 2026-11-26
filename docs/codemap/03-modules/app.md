@@ -1,6 +1,6 @@
 # 03 · app — `src/postel_studio/api/app.py`
 
-> 层 L3 · 110 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
+> 层 L3 · 112 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
 
 ## 职责
 
@@ -19,9 +19,9 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 | `create_app(ws_path, host, port)` | 40 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
 | （局部）`store = RepoStore()` | 54 | 打开 `state.db`（状态根下） | 注入链的起点 |
 | （局部）`repositories = RepositoryService(store)` | 55 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的实现 | `gateway.Providers` |
-| （局部）`bot_store = BotStore()` / `bots = BotService(bot_store, store)` | 59-60 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里）。S7 起这一个 `BotStore` 同时给 `WorktreeService` 用 | `gateway.Providers` |
+| （局部）`bot_store = BotStore()` / `bots = BotService(bot_store, store)` | 59-60 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里）。S7 起这一个 `BotStore` 同时给 `WorktreeService` 用；S8 的 `bot.create` / `bot.set_permission` 也在同一个 service 上 | `gateway.Providers` |
 | （局部）`worktrees = WorktreeService(store, bot_store)` | 62 | S7：`worktree.acquire` / `list` / `release` 的实现（**不落库**，事实源是 git） | `gateway.Providers` |
-| `gateway.Providers(health=…, repo_bind=…, repo_list=…, repo_branches=…, repo_diff=…, bot_list=…, memory_charter_get=…, worktree_acquire=…, worktree_list=…, worktree_release=…)` | 93-105 | 注入给网关（**唯一**构造点） | `gateway.install` |
+| `gateway.Providers(health=…, repo_bind=…, repo_list=…, repo_branches=…, repo_diff=…, bot_list=…, bot_create=…, bot_set_permission=…, memory_charter_get=…, worktree_acquire=…, worktree_list=…, worktree_release=…)` | 97-108 | 注入给网关（**唯一**构造点；S8 加了 `bot_create` / `bot_set_permission` 两个） | `gateway.install` |
 
 ### 三个路由
 
@@ -32,7 +32,7 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 | `GET /api/where` | 82 | 无 | `{host, port, wsPath, pid}` |
 | `WS /gateway/<sha16>` | 93（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
 
-**S3~S7 都没有加路由。** `repo.*` / `bot.list` / `worktree.*` 全走 WS，`/api/repos` 是 404
+**S3~S8 都没有加路由。** `repo.*` / `bot.*` / `worktree.*` 全走 WS，`/api/repos` 是 404
 （`test_bind.py::test_no_http_route_for_repositories` 守着）。
 
 ## 关键决策与理由

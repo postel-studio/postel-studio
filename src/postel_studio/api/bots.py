@@ -1,34 +1,51 @@
-"""`bot.list` / `memory.charter.get` 的业务编排（S6 D1–D6）。
+"""`bot.list` / `bot.create` / `bot.set_permission` / `memory.charter.get` 的业务编排
+（S6 D1–D6，S8 D1–D7）。
 
 与 `api/repository.py` 同一层、同一纪律：**不碰 fastapi**，只吃 `dict`、返回 `dict`/`list[dict]`，
-错误一律翻成 07 §1.3 的**既有码**（D6：`botId` 查不到也用 `INVALID_PARAMS`，不新增码）。
+错误一律翻成 07 §1.3 的码。
 
-三处裁决的落点：
+四处裁决的落点：
 
-- **D2 惰性播种**：`bot.list` 是「该 repo 一个 Bot 都没有」时**唯一**播种的地方；已有任何
-  Bot 绝不新建。代价：一个读方法会落一行（M1 的临时形态，U17 到期 S8）。
+- **S8 D7 起 `bot.list` 是纯读**：S6 的惰性播种（一个读方法会落一行）已删除——创建是**人的动作**
+  （`create`），一个 Bot 都没有的仓库就回空数组（U17 的第一半在这里结案）。
+- **S8 D6 先判后写**：`create` 的前五步（repoId / 名字 / 权限 / agentKind / 重名）都不碰磁盘，
+  所以被拒绝的请求**什么都没留下**；第六步建记忆空间，第七步落行。
 - **D5 文件是事实源**：`charterRev` 现场按 charter 内容算、摘要按五条规则提取；DB 的
-  `charter_rev` 列 M1 不维护（写路径是 S22 的 `charter.set`）。
-- **D9 路径显示**：`memoryPath` 给**绝对路径**原样，不伪装成 `~`——状态根可被
-  `POSTEL_HOME` 覆盖，把临时路径显示成 `~/.postel/...` 是假话。
+  `charter_rev` 列只在创建时写一次（U17 的第二半到期 S22 的 `memory.charter.set`）。
+- **D9 路径显示**：`memoryPath` 给**绝对路径**原样，不伪装成 `~`——状态根可被 `POSTEL_HOME`
+  覆盖，把临时路径显示成 `~/.postel/...` 是假话。
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import sqlite3
 import time
 from typing import Final
 
 from postel_studio.api import frames
-from postel_studio.domain.models import BOT_PERMISSION_DEFAULT, Bot, Repo, bot_id
+from postel_studio.domain.models import (
+    BOT_PERMISSION_DEFAULT,
+    UNASSIGNABLE_PERMISSIONS,
+    Bot,
+    Permission,
+    Repo,
+    bot_id,
+    bot_name_ok,
+    permission_parse,
+)
 from postel_studio.storage.db import BotStore, RepoStore
 from postel_studio.storage.paths import bot_memory_dir, ensure_memory_space, read_charter
 
-# 07 §1.3 已登记的码（**不新增码**）。`REPO_NOT_BOUND` 在 frames 里没有定义（那是纯帧层）。
+# 07 §1.3 已登记的码。`REPO_NOT_BOUND` 在 frames 里没有定义（那是纯帧层）。
 INVALID_PARAMS: Final = frames.INVALID_PARAMS
 INTERNAL: Final = frames.INTERNAL
+NOT_SUPPORTED: Final = "NOT_SUPPORTED"
 REPO_NOT_BOUND: Final = "REPO_NOT_BOUND"
+# S8 新增（07 §1.3 同表）：创建撞名。为什么不是 INVALID_PARAMS——页面按**码**选文案，
+# 把一个合法的名字说成"名字不合法"就是假话（S8 D5）。
+ALREADY_EXISTS: Final = "ALREADY_EXISTS"
 
 # 错误文案：**可读、面向人、不含任何用户输入**（05 §4.2）。改文案不需要改码。
 MSG_REPO_ID_INVALID: Final = "repoId 参数缺失或不是字符串"
@@ -36,9 +53,14 @@ MSG_REPO_NOT_BOUND: Final = "仓库未绑定"
 MSG_BOT_ID_INVALID: Final = "botId 参数缺失或不是字符串"
 MSG_BOT_NOT_FOUND: Final = "找不到这个 Bot"
 MSG_MEMORY_FAILED: Final = "记忆目录或 charter 读写失败"
+# 名字被拒时把**规则**说清楚：人不该为了一条白名单去翻文档。规则是固定的，不回显输入。
+MSG_NAME_INVALID: Final = "名字不合法：1–32 位，小写字母开头，只能用小写字母、数字和连接符"
+MSG_PERMISSION_INVALID: Final = "权限级别不合法"
+MSG_PERMISSION_UNSUPPORTED: Final = "第一版不支持这个权限级别（L3 / L4）"
+MSG_AGENT_KIND_UNSUPPORTED: Final = "第一版还不能指定 Agent 通道（S9 才会验证）"
+MSG_AGENT_KIND_INVALID: Final = "agentKind 只能缺省或为 null"
+MSG_ALREADY_EXISTS: Final = "这个仓库已经有叫这个名字的 Bot"
 
-# D2 的预置 Bot（M1 没有创建入口，bot.create 是 S8）。
-PRESET_BOT_NAME: Final = "builder"
 # D5 第 5 条：没有正文时的摘要——不是空串，也不编造职责。
 DEFAULT_SUMMARY: Final = "尚未填写职责"
 SUMMARY_MAX_CHARS: Final = 80
@@ -84,7 +106,7 @@ def charter_summary(content: str) -> str:
 
 
 class BotService:
-    """S6 的两个帧方法。构造时接收两个 store（依赖注入，测试用临时库）。
+    """S6 的两个读方法 + S8 的两个写方法。构造时接收两个 store（依赖注入，测试用临时库）。
 
     `RepoStore` 只用来回答「repoId 查不查得到」（D6 的 `REPO_NOT_BOUND`）；Bot 自己的表在
     `BotStore`。两个 store 各开一条 SQLite 连接，与 `app.py` 里既有的 `RepoStore` 同款。
@@ -95,12 +117,54 @@ class BotService:
         self._repos = repos
 
     def list(self, params: dict[str, object]) -> BotPayloads:
-        """`bot.list`：列出仓库下的 Bot；一个都没有时**惰性播种**（D2，幂等）。"""
+        """`bot.list`：列出仓库下的 Bot。**纯读**——一个都没有就回 `[]`（S8 D7）。"""
         repo = self._require_repo(params)
-        bots = self._store.list_for_repo(repo.repo_id)
-        if not bots:
-            bots = [self._seed(repo.repo_id)]
-        return [self._split(bot) for bot in bots]
+        return [self._split(bot) for bot in self._store.list_for_repo(repo.repo_id)]
+
+    def create(self, params: dict[str, object]) -> dict[str, object]:
+        """`bot.create`：判完再写（S8 D6 的七步，前五步不碰磁盘）。"""
+        repo = self._require_repo(params)
+        name = self._require_name(params)
+        permission = self._permission(params, default=BOT_PERMISSION_DEFAULT)
+        self._refuse_agent_kind(params)
+        composite = bot_id(repo.repo_id, name)
+        if self._store.get(composite) is not None:
+            raise _fail(ALREADY_EXISTS, MSG_ALREADY_EXISTS)
+        try:
+            # 缺什么建什么；已有 charter 绝不覆盖（S6 D3）——所以同名重试是安全的。
+            ensure_memory_space(repo.repo_id, name)
+            content = read_charter(repo.repo_id, name)
+        except OSError as exc:  # 权限 / 磁盘满：D6 的 INTERNAL
+            raise _fail(INTERNAL, MSG_MEMORY_FAILED) from exc
+        try:
+            bot = self._store.insert(
+                Bot(
+                    bot_id=composite,
+                    repo_id=repo.repo_id,
+                    name=name,
+                    permission=str(permission),
+                    agent_kind=None,  # D4：S9 之前没有任何通道被验证过
+                    charter_rev=charter_rev(content),
+                    created_at=time.time(),
+                )
+            )
+        except sqlite3.IntegrityError as exc:
+            # 今天只有一种现实成因：两个并发的同名创建都过了第 5 步（各持自己的锁）。
+            # 仓库行刚被 `_require_repo` 证明存在，而 `repo.unbind` 还没实现——所以这里不会是
+            # 外键错。S22 做 unbind 时必须回来重看这一行（S8 D6）。
+            raise _fail(ALREADY_EXISTS, MSG_ALREADY_EXISTS) from exc
+        return self._split(bot)
+
+    def set_permission(self, params: dict[str, object]) -> dict[str, object]:
+        """`bot.set_permission`：改权限并回载荷（S8 D1/D2）。同值不写库。"""
+        bot = self._require_bot(params)
+        permission = self._permission(params, default=None)
+        if bot.permission == permission:  # 幂等：不制造一次无意义的写
+            return self._split(bot)
+        updated = self._store.set_permission(bot.bot_id, str(permission))
+        if updated is None:  # 竞态：刚读到、现在没了。07 §1.3 没有更贴的码（与 D6 一致）
+            raise _fail(INVALID_PARAMS, MSG_BOT_NOT_FOUND)
+        return self._split(updated)
 
     def charter_get(self, params: dict[str, object]) -> dict[str, object]:
         """`memory.charter.get`：`{content, rev}`，正文与 rev 都来自 charter 文件（D5）。"""
@@ -138,24 +202,46 @@ class BotService:
             raise _fail(INVALID_PARAMS, MSG_BOT_NOT_FOUND)
         return bot
 
-    def _seed(self, repo_id: str) -> Bot:
-        """D2 的预置 Bot：`builder` / L1 / agentKind=NULL，并建记忆空间（权限 0700/0600）。"""
-        try:
-            ensure_memory_space(repo_id, PRESET_BOT_NAME)
-            content = read_charter(repo_id, PRESET_BOT_NAME)
-        except OSError as exc:
-            raise _fail(INTERNAL, MSG_MEMORY_FAILED) from exc
-        return self._store.insert(
-            Bot(
-                bot_id=bot_id(repo_id, PRESET_BOT_NAME),
-                repo_id=repo_id,
-                name=PRESET_BOT_NAME,
-                permission=BOT_PERMISSION_DEFAULT,
-                agent_kind=None,  # M1 未选择适配器：S9 之前没有任何通道被验证过（D1）
-                charter_rev=charter_rev(content),
-                created_at=time.time(),
-            )
-        )
+    def _require_name(self, params: dict[str, object]) -> str:
+        """新名字的形状（06 §2.2 白名单，D3）。非 `str` 走同一句错误，不抛 TypeError。"""
+        value = params.get("name")
+        if not isinstance(value, str) or not bot_name_ok(value):
+            raise _fail(INVALID_PARAMS, MSG_NAME_INVALID)
+        return value
+
+    def _permission(self, params: dict[str, object], *, default: Permission | None) -> Permission:
+        """入站 `permission` → `Permission`。三种拒绝各有各的码（D2）：
+
+        | 入站 | 结果 |
+        |---|---|
+        | 缺字段 / `null` | `default`（创建时是 L1；改权限时没有默认 → `INVALID_PARAMS`） |
+        | `L3` / `L4` | `NOT_SUPPORTED`——"你说得清，但第一版不做" |
+        | 其它（`L9` / `l1` / `42` / `""`） | `INVALID_PARAMS`——"根本没有这个级别" |
+        """
+        raw = params.get("permission")
+        if raw is None:  # 缺字段与显式 null 同义（07 的 `permission?`）
+            if default is None:
+                raise _fail(INVALID_PARAMS, MSG_PERMISSION_INVALID)
+            return default
+        if isinstance(raw, str) and raw in UNASSIGNABLE_PERMISSIONS:
+            raise _fail(NOT_SUPPORTED, MSG_PERMISSION_UNSUPPORTED)
+        parsed = permission_parse(raw)
+        if parsed is None:
+            raise _fail(INVALID_PARAMS, MSG_PERMISSION_INVALID)
+        return parsed
+
+    def _refuse_agent_kind(self, params: dict[str, object]) -> None:
+        """D4：`agentKind` 只收缺省或 `null`。
+
+        给了名字 → `NOT_SUPPORTED`；给了别的类型 → `INVALID_PARAMS`（与 `_permission` 同一条
+        分界线：说得清的拒绝，与根本不合法的参数，不是一回事）。
+        """
+        raw = params.get("agentKind")
+        if raw is None:
+            return
+        if isinstance(raw, str):
+            raise _fail(NOT_SUPPORTED, MSG_AGENT_KIND_UNSUPPORTED)
+        raise _fail(INVALID_PARAMS, MSG_AGENT_KIND_INVALID)
 
     def _split(self, bot: Bot) -> dict[str, object]:
         """实体 → 帧载荷（D1：**恰好 8 个字段**，camelCase 转换只在这个边界发生）。"""

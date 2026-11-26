@@ -13,6 +13,7 @@
  * 覆盖（S7 D9 的 DOM 契约 + 验收 1~4）：
  *   1. 初始 idle：没选仓库之前不说「这个仓库还没有工作区」；
  *   2. 选仓库 → ready + 空态文案 + 基础分支预填默认分支 + 「分配」可用；
+ *      （S8 起 Bot 要先建：剧本用「新建 Bot」表单建一个 `builder` 再分配。）
  *   3. 点「分配工作区」→ 路径与分支出现在页面上，且**磁盘上真有**、git 里真有（fs + git 双证）；
  *   4. 再点一次 → 同一路径，git 里仍只有一条记录（复用，不重复创建）；
  *   5. 脏工作区点「回收」→ 错误文案 + 目录与文件**原样保留**（不 --force）；
@@ -257,6 +258,41 @@ async function replaceBase(page, value) {
   if (actual !== value) throw new Error(`基础分支没被替换：想要 ${value}，实际 ${actual}`);
 }
 
+/**
+ * 用「新建 Bot」表单建一个 Bot（S8 的用户路径）。
+ *
+ * S8 起 `bot.list` 不再惰性播种：任何"左栏要有一个 Bot"的剧本都得自己建一个。输入用
+ * Ctrl+A + Backspace 清空，不用三击——headless 里三击不选中（S7 的实测，见 replaceBase）。
+ */
+async function createBot(page, name, permission) {
+  await page.click("#bot-new");
+  await page.waitForFunction(() => document.getElementById("bot-create-form").hidden === false, {
+    timeout: 5000,
+  });
+  await page.click("#bot-create-name");
+  await page.keyboard.down("Control");
+  await page.keyboard.press("KeyA");
+  await page.keyboard.up("Control");
+  await page.keyboard.press("Backspace");
+  await page.type("#bot-create-name", name);
+  if (permission) await page.select("#bot-create-permission", permission);
+  await page.click("#bot-create-submit");
+  await page.waitForFunction(() => document.getElementById("bot-create-form").hidden === true, {
+    timeout: 15000,
+  });
+  await page.waitForFunction(
+    (want) => {
+      if (document.getElementById("bots").dataset.state !== "ready") return false;
+      return Array.from(document.querySelectorAll("#bot-list li .bot-name")).some(
+        (node) => node.textContent === want,
+      );
+    },
+    { timeout: 15000 },
+    name,
+  );
+  await sleep(150);
+}
+
 let failures = 0;
 function check(name, ok, detail) {
   if (!ok) failures += 1;
@@ -335,6 +371,8 @@ async function main() {
     await bindPath(page, repoMain);
     await bindPath(page, repoTwo);
     await clickRepoRow(page, "demo-main");
+    // S8 起 bot.list 不再播种：工作区要挂在 Bot 上，所以先用新表单建一个。
+    await createBot(page, "builder");
     const picked = await snapshot(page);
     check(
       "2 选仓库后 ready + 空态文案「这个仓库还没有分配工作区」",

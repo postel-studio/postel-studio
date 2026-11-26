@@ -287,16 +287,23 @@ async def ws_steps(runner: Runner, base: str, ws_path: str, ticket: str, repo: P
         except Exception as exc:
             runner.fail("S5", exc)
 
-        # S6：Bot 与 charter（惰性播种、摘要、路径、权限）
+        # S6：Bot 与 charter（S8 起：空仓库列出 []，创建后才有一个 Bot）
         try:
             assert repo_id is not None, "依赖 S3 的 repoId"
-            bots = result_data(await call("m6", "bot.list", {"repoId": repo_id}))
+            empty = result_data(await call("m6", "bot.list", {"repoId": repo_id}))
+            assert empty == [], f"S8 起 bot.list 不再播种，空仓库应回 []：{empty!r}"
+            created = result_data(
+                await call("m6b", "bot.create", {"repoId": repo_id, "name": "builder"})
+            )
+            assert isinstance(created, dict), created
+            assert created.get("name") == "builder", created
+            assert created.get("permission") == "L1", created  # 默认级别（05 §2.2）
+            assert created.get("charterSummary") == "尚未填写职责", created
+            bots = result_data(await call("m6c", "bot.list", {"repoId": repo_id}))
             assert isinstance(bots, list) and len(bots) == 1, bots
             bot = bots[0]
             assert isinstance(bot, dict), bot
-            assert bot.get("name") == "builder", bot
-            assert bot.get("permission") == "L1", bot
-            assert bot.get("charterSummary") == "尚未填写职责", bot
+            assert bot.get("botId") == created.get("botId"), bot
             bot_id = bot.get("botId")
             memory = Path(str(bot.get("memoryPath")))
             charter = result_data(await call("m7", "memory.charter.get", {"botId": bot_id}))

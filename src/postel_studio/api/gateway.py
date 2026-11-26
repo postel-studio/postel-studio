@@ -89,7 +89,8 @@ class Providers:
 
     `repo_bind` / `repo_list` 是 S3 加的两个业务入口，`repo_branches` 是 S4 加的第三个，
     `repo_diff` 是 S5 加的第四个，`bot_list` / `memory_charter_get` 是 S6 加的第五、六个，
-    S7 又加了 `worktree_acquire` / `worktree_list` / `worktree_release`；
+    S7 又加了 `worktree_acquire` / `worktree_list` / `worktree_release`，S8 加 `bot_create` /
+    `bot_set_permission`；
     签名刻意用 `dict → dict`（列表载荷用 `list[dict]`）：闸门只认「帧的参数对象进、载荷对象出」，
     网关不知道仓库、数据库、git、charter 文件、工作区目录的存在。
     抛 `frames.FrameError` 时网关原样转发它的 `code` / `message`（D6 的稳定码）。
@@ -101,6 +102,8 @@ class Providers:
     repo_branches: Callable[[dict[str, object]], list[dict[str, object]]]
     repo_diff: Callable[[dict[str, object]], dict[str, object]]
     bot_list: Callable[[dict[str, object]], list[dict[str, object]]]
+    bot_create: Callable[[dict[str, object]], dict[str, object]]
+    bot_set_permission: Callable[[dict[str, object]], dict[str, object]]
     memory_charter_get: Callable[[dict[str, object]], dict[str, object]]
     worktree_acquire: Callable[[dict[str, object]], dict[str, object]]
     worktree_list: Callable[[dict[str, object]], list[dict[str, object]]]
@@ -127,8 +130,12 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.repo_branches(params)
     if method == "repo.diff":  # S5 / 07 §4.6：两个 ref → 三点 diff 的 stat + patch
         return providers.repo_diff(params)
-    if method == "bot.list":  # S6 / 07 §4.7：一个仓库下的 Bot（空则惰性播种，D2）
+    if method == "bot.list":  # S6 / 07 §4.7：一个仓库下的 Bot（纯读，没有就回 []，S8 D7）
         return providers.bot_list(params)
+    if method == "bot.create":  # S8 / 07 §4.10：建一个 Bot（名字 + 权限由人给）
+        return providers.bot_create(params)
+    if method == "bot.set_permission":  # S8 / 07 §4.10：人改权限（L3/L4 不收）
+        return providers.bot_set_permission(params)
     if method == "memory.charter.get":  # S6 / 07 §4.8：charter 正文 + 内容哈希版本
         return providers.memory_charter_get(params)
     if method == "worktree.acquire":  # S7 / 07 §4.9：分配工作区（幂等，复用返回同一路径）

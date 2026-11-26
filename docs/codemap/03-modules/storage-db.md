@@ -1,6 +1,6 @@
 # 03 · storage-db — `src/postel_studio/storage/db.py`
 
-> 层 L0（**碰磁盘**）· 356 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
+> 层 L0（**碰磁盘**）· 376 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
 
 ## 职责
 
@@ -18,27 +18,28 @@
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
 | `SCHEMA_VERSION` | 32 | `3`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`） | `migrate`、测试 |
-| `_MIGRATIONS` | 42 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
-| `_COLUMNS` | 62 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
-| `state_db_path()` | 65 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
-| `_connect(path)` | 70 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
-| `migrate(conn, *, path_for_chmod)` | 83 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600` | `open_state_db` |
-| `open_state_db(path=None)` | 98 | 建目录 → 打开 → 迁移；失败关连接再抛 | `RepoStore` |
-| `RepoStore` | 114 | `repos` 表的读写门面（带锁） | `api/app.py`、`api/repository.py` |
-| `RepoStore.__init__(path=None)` | 122 | 打开库；`path=None` 表示用状态根 | `app.create_app` |
+| `_MIGRATIONS` | 40 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
+| `_COLUMNS` | 78 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
+| `state_db_path()` | 81 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
+| `_connect(path)` | 86 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
+| `migrate(conn, *, path_for_chmod)` | 99 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600` | `open_state_db` |
+| `open_state_db(path=None)` | 114 | 建目录 → 打开 → 迁移；失败关连接再抛 | `RepoStore` |
+| `RepoStore` | 130 | `repos` 表的读写门面（带锁） | `api/app.py`、`api/repository.py` |
+| `RepoStore.__init__(path=None)` | 138 | 打开库；`path=None` 表示用状态根 | `app.create_app` |
 | `RepoStore.path`（property） | 128 | 这份 store 打开的库文件路径（只读） | 测试 |
 | `RepoStore.close()` / `__enter__` / `__exit__` | 133/138/141 | 关闭；`with` 支持 | 测试、将来的 server 收场 |
-| `RepoStore.list()` | 145 | 全部仓库，`ORDER BY added_at, repo_id`（**输出确定**） | `repo.list` |
-| `RepoStore.get(repo_id)` | 153 | 按 id 取，没有给 `None` | `repo.get`（S4 入口） |
-| `RepoStore.upsert(repo)` | 163 | 绑定写库：同路径**不产生第二行**，且**不改写已有 `repo_id`**；返回落库后的记录 | `repo.bind` |
-| `_row_to_repo(row)` | 235 | `sqlite3.Row` → `Repo`，类型收敛只在这一处 | 内部 |
+| `RepoStore.list()` | 161 | 全部仓库，`ORDER BY added_at, repo_id`（**输出确定**） | `repo.list` |
+| `RepoStore.get(repo_id)` | 169 | 按 id 取，没有给 `None` | `repo.get`（S4 入口） |
+| `RepoStore.upsert(repo)` | 179 | 绑定写库：同路径**不产生第二行**，且**不改写已有 `repo_id`**；返回落库后的记录 | `repo.bind` |
+| `_row_to_repo(row)` | 251 | `sqlite3.Row` → `Repo`，类型收敛只在这一处 | 内部 |
 | `_BOT_COLUMNS` | 281 | `bots` 的列清单（同 `_COLUMNS` 的理由：只写一份） | `BotStore` |
-| `BotStore` | 284 | `bots` 表的读写门面（带锁）：`list_for_repo` / `get` / `insert` | `api/app.py`、`api/bots.py` |
-| `BotStore.list_for_repo(repo_id)` | 304 | 某仓库全部 Bot，`ORDER BY created_at, bot_id`（确定性） | `bot.list` |
+| `BotStore` | 284 | `bots` 表的读写门面（带锁）：`list_for_repo` / `get` / `insert` / `set_permission`（S8） | `api/app.py`、`api/bots.py` |
+| `BotStore.list_for_repo(repo_id)` | 306 | 某仓库全部 Bot，`ORDER BY created_at, bot_id`（确定性） | `bot.list` |
 | `BotStore.get(bot_id)` | 315 | 按复合主键取，没有给 `None` | `memory.charter.get` |
-| `BotStore.insert(bot)` | 326 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:_seed` |
-| `_row_to_bot(row)` | 341 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
-| `open_store(path=None)` | 255 | `with` 版工厂（异常路径也关连接） | 暂无生产调用方（测试与将来的 CLI） |
+| `BotStore.insert(bot)` | 323 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:create`（S8 起；S6 的播种已删） |
+| `BotStore.set_permission(bot_id, permission)` | 340 | **S8**：只改 `permission` 一列并回读；行不存在 → `None`（码由调用方翻） | `bot.set_permission` |
+| `_row_to_bot(row)` | 361 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
+| `open_store(path=None)` | 271 | `with` 版工厂（异常路径也关连接） | 暂无生产调用方（测试与将来的 CLI） |
 
 ## 关键决策与理由
 
