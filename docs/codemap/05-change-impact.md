@@ -57,7 +57,12 @@
 | `api/repository.py:diff` 的错误码 / 顺序 / 文案 | 07 §4.6（**不许新增码**）、S5 D7；`test_diff.py` 的错误码用例 | 仓库被删报成 `BAD_REF`（用户去改 ref）；或码表被悄悄扩 |
 | `api/repository.py` 的 `DEFAULT/MIN/MAX_MAX_CHARS` | 07 §4.6（契约值）、S5 D6；`test_max_chars_rejects_*` / `test_truncation_boundary_both_sides` | 截断边界与契约脱节；调用方以为拿到了它要的长度 |
 | `api/repository.py:diff` 的 `stat`/`patch` 组装 | S5 D5/D6/D8；`test_stat_exact_numbers`、`test_patch_contains_expected_line_kinds` | 字段名漏 camelCase / `stat` 跟着截断变形（等于撒谎） |
-| `gateway.Providers` 的字段（S4 加了 `repo_branches`，S5 加了 `repo_diff`） | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` + 07 §2.2/§4.5 | 启动即崩 / `repo.branches` 回 `UNKNOWN_METHOD` |
+| `gateway.Providers` 的字段（S4 加了 `repo_branches`，S5 加了 `repo_diff`，S6 加了 `bot_list` / `memory_charter_get`） | `app.create_app()`（唯一构造点）+ `test_gateway_inprocess.py` + 07 §2.2/§4.5/§4.7/§4.8 | 启动即崩 / `repo.branches` 回 `UNKNOWN_METHOD` |
+| `api/bots.py:BotService` 的播种 / 摘要 / rev / 错误码 | S6 D1–D6、07 §4.7/§4.8、`tests/test_bot_charter.py`、反向注入 D12 #1~#4 | 载荷多/少字段、摘要规则漂移、`botId` 查不到被报成别的码、或读了过期 `charter_rev` |
+| `storage/paths.py` 的 Bot 记忆空间（`bot_memory_dir` / `ensure_memory_space` / `read_charter`） | S6 D3、05 §4.1（目录 0700 / 文件 0600）、06 T38、`test_ensure_memory_space_*`、D12 #1~#4 | 权限变松 / 覆盖用户编辑的 charter / 名字穿越写出状态根 |
+| `storage/db.py` 的 `bots` 表（v3）/ `BotStore` | 06 §2.2、07 §4.7 的 8 字段、真库 v2→v3 迁移测试 | 老库升级丢 repos 行 / 载荷与列对不上 / 预置播种重复建行 |
+| `assets.py` 的 `#bots[data-state]` / `#charter[data-state]` 状态机与行结构 | S6 D8（DOM 契约）、`node tools/acceptance/s6_bots.mjs`、`test_bot_charter.py` 的页面契约用例 | 断连留旧 charter / 切仓库不清空 / 选中的 Bot 与 repo 脱钩 / charter 进 `innerHTML`（XSS） |
+| `scripts/accept_m1.py` 的步骤与输出格式 | D10 的契约（`PASS S<n>` / `M1 OK`）、`tests/test_accept_m1.py`、README/CONTRIBUTING 的验收命令 | M1 收口静默失效；改格式会让 `test_accept_m1.py` 红 |
 | `assets.py` 的 `#repos[data-state]` 机制 | 06 T8/T27、D1 的验收 | 断连时显示空列表 = 撒谎 |
 | `assets.py` 的 `ERROR_TEXT` | 07 §1.3 的码、`error_text_json()`；S4 补了 `REPO_NOT_BOUND`、分支面板另用 `BRANCH_ERROR_FALLBACK` | 错误显示成「绑定失败」或码本身；分支面板答「绑定失败」 |
 | `assets.py` 左栏的 DOM 结构 / 数据来源 | **`node tools/acceptance/s3_bind.mjs`**（真实浏览器） | pytest 看不出来（T9） |

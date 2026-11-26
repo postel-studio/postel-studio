@@ -11,7 +11,7 @@
   **不要提前建表**（建错的表比没有表更难改回来）。
 - 用**标准库 `sqlite3`**，不引入 ORM / 迁移框架（S3 DoD：不新增依赖）。
 
-文件名的事实源在 `storage/paths.py:26/59`（`STATE_DB_FILE` / `state_db_file()`），本模块只是消费者。
+文件名的事实源在 `storage/paths.py:28/61`（`STATE_DB_FILE` / `state_db_file()`），本模块只是消费者。
 
 ## 符号表
 

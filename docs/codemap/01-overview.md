@@ -48,9 +48,9 @@ S3 的主题是「用户绑一个本地仓库，左栏认得它」。
 ### 2.1 HTTP `GET /`（页面）
 
 ```
-浏览器 → uvicorn → app.index()                        api/app.py:46
-                      └─ gateway.TicketRegistry.issue()   api/gateway.py:45
-                      └─ render_index(ticket=..., ws_path=...)  web/assets.py:242
+浏览器 → uvicorn → app.index()                        api/app.py:58
+                      └─ gateway.TicketRegistry.issue()   api/gateway.py:52
+                      └─ render_index(ticket=..., ws_path=...)  web/assets.py:1198
                    ← HTML（含 <meta name="postel-handshake">）
 ```
 
@@ -60,7 +60,7 @@ S3 的主题是「用户绑一个本地仓库，左栏认得它」。
 
 ```
 浏览器 → new WebSocket("ws://127.0.0.1:PORT/gateway/<sha16>?ticket=XXX")
-       → uvicorn WS 握手 → gateway.handler(ws)                api/gateway.py:99
+       → uvicorn WS 握手 → gateway.handler(ws)                api/gateway.py:136
             ① tickets.consume(ticket)  ── 失败 → ws.close(1008)（未 accept，客户端见 HTTP 403）
             ② ws.accept()
             ③ 登记到 _ACTIVE → finally 里删                （D5，可观测点）
@@ -74,11 +74,11 @@ S3 的主题是「用户绑一个本地仓库，左栏认得它」。
    │
    ▼
 gateway.handler
-   ├─ len(text.encode()) > 1MiB ?        → close(4002)，不回首包     gateway.py:117
+   ├─ len(text.encode()) > 1MiB ?        → close(4002)，不回首包     gateway.py:41
    ├─ frames.decode_incoming(text)       → ReqFrame 或 FrameError    frames.py:56
    │     · FrameError 且 reply_id is None → 记日志 + 忽略，不断连
    │     · FrameError 且有 reply_id      → 回 ok:false 帧
-   ├─ gateway.dispatch(method, params, providers)                     gateway.py:103
+   ├─ gateway.dispatch(method, params, providers)                     gateway.py:111
    │     · "system.echo"   → 原样返回 params
    │     · "system.health" → providers.health()（由 app 注入）
    │     · "repo.bind"     → providers.repo_bind(params)
@@ -96,7 +96,7 @@ gateway.handler
    → fail() → setState("disconnected","已断开")
              → 显示「重连」按钮
              → #content 加 .stale（灰化 + "数据已过期" 角标）
-   → 用户点按钮 → reconnect()                                  assets.py:218
+   → 用户点按钮 → reconnect()                                  assets.py:1163
        → freshTicket():
            fetch("/api/where") → 若 port != location.port → throw PORT_CHANGED
            fetch("/")         → 抠 meta ticket
@@ -106,7 +106,7 @@ gateway.handler
 ### 2.5 `repo.bind` 的完整路径（S3）
 
 ```
-浏览器 左栏「绑定」按钮 → request("repo.bind", {path})           assets.py:266
+浏览器 左栏「绑定」按钮 → request("repo.bind", {path})           assets.py:1074
    │
    ▼
 gateway.dispatch → providers.repo_bind = RepositoryService.bind   repository.py:143
@@ -121,7 +121,7 @@ gateway.dispatch → providers.repo_bind = RepositoryService.bind   repository.p
    ├─ domain.origin_hash(origin)          归一化 URL 的哈希；只识别"同一远端"（S3.5 D2）
    └─ RepoStore.upsert(repo)             同路径不产生第二行；**不改写已有 repo_id**（验收 4 / D1）
    ▼
-浏览器  重读 repo.list → renderRepos() → 左栏一行「名称 / 默认分支」  assets.py:237
+浏览器  重读 repo.list → renderRepos() → 左栏一行「名称 / 默认分支」  assets.py:497
 ```
 
 **这条路径上有三处"看起来对"**：git 的 discover（T25）、`ON CONFLICT` 的次级唯一键（T26）、
@@ -145,17 +145,19 @@ fail()（唯一向下出口）→ setState("disconnected","已断开")
 |---|---|---|---|
 | `MAX_FRAME_BYTES` | 1 MiB | `frames.py:24` | 02b §5 / 05 §3.1 |
 | `MAX_ID_LENGTH` | 128 | `frames.py:25` | 05 §3.1 |
-| `TICKET_TTL_SECONDS` | 60.0 | `gateway.py:33` | 一次性握手票有效期 |
-| `CLOSE_FRAME_INVALID` | 4002 | `gateway.py:35` | 帧层违规的关闭码 |
+| `TICKET_TTL_SECONDS` | 60.0 | `gateway.py:39` | 一次性握手票有效期 |
+| `CLOSE_FRAME_INVALID` | 4002 | `gateway.py:41` | 帧层违规的关闭码 |
 | `GRACE_SECONDS` | 5 | `server.py:55` | uvicorn 优雅关闭上限 |
 | `BUILD_SETTLE_SECONDS` | 0.2 | `server.py:56` | 建设期收到停止信号的等待 |
 | `LISTEN_BACKLOG` | 2048 | `server.py:57` | |
-| `HEARTBEAT_INTERVAL_MS` | 1000 | `assets.py:19` | 心跳间隔 |
-| `RECONNECT_DELAY_MS` | 500 | `assets.py:20` | 点重连后取票的延迟 |
-| `CONNECT_TIMEOUT_MS` | 2000 | `assets.py:97`（JS 内硬编码） | 见 [03/assets](03-modules/assets.md) |
-| `DIR_MODE` / `FILE_MODE` | `0700` / `0600` | `paths.py:28-29` | 05 §4.1 |
+| `HEARTBEAT_INTERVAL_MS` | 1000 | `assets.py:43` | 心跳间隔 |
+| `RECONNECT_DELAY_MS` | 500 | `assets.py:44` | 点重连后取票的延迟 |
+| `CONNECT_TIMEOUT_MS` | 2000 | `assets.py:363`（JS 内硬编码） | 见 [03/assets](03-modules/assets.md) |
+| `DIR_MODE` / `FILE_MODE` | `0700` / `0600` | `paths.py:30-31` | 05 §4.1 |
 | `GIT_TIMEOUT_SECONDS` | 5.0 | `gitops/repo.py:35` | D5：git 卡住不能拖住网关 |
-| `SCHEMA_VERSION` | 2 | `storage/db.py:31` | 06 §7：`PRAGMA user_version`；v1 = S3，v2 = S3.5 加 `origin_hash` |
+| `SCHEMA_VERSION` | 3 | `storage/db.py:32` | 06 §7：`PRAGMA user_version`；v1 = S3，v2 = S3.5 加 `origin_hash`，v3 = S6 加 `bots` |
+| `BOT_NAME_RE` | `^[a-z][a-z0-9-]{0,31}$` | `domain/models.py:139` | 06 §2.2 的 Bot 名字白名单（进路径前必须过，S6 D3） |
+| `SUMMARY_MAX_CHARS` | 80 | `api/bots.py:44` | S6 D5：charter 摘要按字符截断（加 `…`） |
 | `REPO_ID_LENGTH` | 12 | `domain/models.py:22` | 06 §2.1 / 07 §4.1 |
 
 > `HEARTBEAT_INTERVAL_MS + RECONNECT_DELAY_MS < 3000` 是被测试断言的关系
@@ -168,7 +170,8 @@ fail()（唯一向下出口）→ setState("disconnected","已断开")
 | 文件 | 所有者 | 生命周期 | 权限 | 内容 |
 |---|---|---|---|---|
 | `kernel.lock` | 内核 | 进程存活期间 | 0600 | `{pid, version}` |
-| `state.db` | 内核 | **长期**（用户数据，进程退出不删） | 0600 | SQLite：`repos` 表（另有 WAL 的 `state.db-wal` / `state.db-shm`） |
+| `state.db` | 内核 | **长期**（用户数据，进程退出不删） | 0600 | SQLite：`repos` + `bots` 表（v3，S6；另有 WAL 的 `state.db-wal` / `state.db-shm`） |
+| `bots/` | 内核 | **长期**（用户数据） | 目录链 0700 / `${repo_id}/${name}/charter.md` 0600 | Bot 的记忆空间：`<repo_id>/<name>/{charter.md, memory/, sessions/}`。**只在状态根下，绝不写进用户仓库**（S6 D3 / T38） |
 | `server.json` | 内核 | 进程存活期间 | 0600 | 见下 |
 | `token` | 内核 | 进程存活期间 | 0600 | 32 字节 hex 明文 |
 

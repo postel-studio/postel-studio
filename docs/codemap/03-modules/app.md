@@ -58,10 +58,10 @@ S1 时页面是**常量**，只构造一次，避免每请求拼接。S2 起必�
 ### S3：store 与 gitops 在 `create_app` 里构造、经 `Providers` 注入
 
 ```python
-# api/app.py:52-53 —— 状态根下的库 + 业务对象
+# api/app.py:54-56 —— 状态根下的库 + 业务对象
 store = RepoStore()
 repositories = RepositoryService(store)
-# api/app.py:89-94 —— 注入给网关（唯一构造 Providers 的地方）
+# api/app.py:95-100 —— 注入给网关（唯一构造 Providers 的地方）
 gateway.install(
     app,
     ws_path,

@@ -123,7 +123,7 @@ finally:
 ### `dispatch()` 现在有八个分支（S2 两个 + S3 两个 + S4/S5 各一 + S6 两个）
 
 ```python
-# api/gateway.py:110-122（真实代码的形状，别把业务写进来）
+# api/gateway.py:111-129（真实代码的形状，别把业务写进来）
 if method == "system.echo":
     return params  # 通道自检
 if method == "system.health":

@@ -34,6 +34,7 @@ bash scripts/check.sh                  # 先保证代码是绿的（门禁全过
 node tools/acceptance/s3_bind.mjs      # S3：绑定仓库 → 左栏出现
 node tools/acceptance/s4_branches.mjs  # S4：点仓库行 → 主区出现分支列表
 node tools/acceptance/s5_diff.mjs      # S5：点分支行 → 主区出现统计 + 着色 diff
+node tools/acceptance/s6_bots.mjs      # S6：左栏出现 Bot → 点开看 charter 全文与记忆目录
 ```
 
 脚本自己会做这些事，**不碰你的真实 `~/.postel`**（06-pitfalls T18）：
@@ -147,3 +148,23 @@ node tools/acceptance/s5_diff.mjs      # S5：点分支行 → 主区出现统�
 | `CHECK D9 游离 HEAD …`（idle +「不知道默认分支」+ 不发请求） | D9 交互表（defaultBranch=null） |
 | `CHECK 10 …`（SIGKILL → idle + 「已断开：差异未知」+ 清空） | S5 验收 6 |
 | 末尾 ticket / 仓库零改动检查 | 05 §4.1（S2 回归点）、S3 验收 5 的同一纪律 |
+
+## S6 · 左栏 Bot 与它的 charter（`s6_bots.mjs`）
+
+真 Chrome + 真内核 + 两个真仓库，覆盖 S6 的 D8 DOM 契约：
+
+| 输出行 | 对应 |
+|---|---|
+| `S6 初始 #bots 是 idle …` / `初始 #charter …` / `初始 bot-list 为空` | 没选仓库不是「这个仓库没有 Bot」 |
+| `1 恰好 1 行 Bot 且是 builder` / `权限徽标 L1` / `摘要「尚未填写职责」` | 验收 1/2（名单 + 权限 + 摘要） |
+| `1 Bot 行键盘可达（role=button + tabindex=0）` | D8 键盘可达 |
+| `3 记忆目录 = 「记忆目录：<状态根>/bots/<repoId>/builder」` | 验收 3 + D9（绝对路径，不伪装 `~`） |
+| `3 charter 全文含「# builder」与「## 职责」` / `全文是一个 <pre>` | 验收 3（只读全文） |
+| `4 切仓库 → #charter 回 idle、全文与记忆目录清空` | D8（切仓库清空，不留旧 charter） |
+| `5 聚焦 Bot 行 + Enter → #charter ready` | D8（键盘与 click 同一条路径） |
+| `6 charter 里的 <script> 不生成 script 元素` | 不可信文本：charter 只进 `textContent` |
+| `7 断连前无 console 错误、无未捕获异常` | 页面无 JS 错误 |
+| `8 断连 → …`（4 行） | D8（断连回 idle 并清空、`已断开：Bot 列表未知`） |
+
+脚本还会检查：内核日志里没有未脱敏的 ticket（05 §4.1）、两个用户仓库零改动（记忆只在
+状态根下）。截图与内核日志落在 `/tmp/postel-s6-acceptance-XXXX/`（结尾打印路径）。

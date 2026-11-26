@@ -63,7 +63,8 @@ Naming convention: distribution `postel-studio` (hyphen), importable package `po
 ## Quality gates
 
 ```bash
-bash scripts/check.sh    # lint + format + types + tests/coverage + secret scan
+bash scripts/check.sh                 # lint + format + types + tests/coverage + secret scan
+uv run python scripts/accept_m1.py    # M1 全链路验收：一条命令复现 S1–S6（exit 0 + M1 OK）
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

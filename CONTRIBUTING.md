@@ -46,10 +46,20 @@ bash scripts/check.sh build    # 打包冒烟（不在 all 里：慢，且需要
 
 ```bash
 node tools/acceptance/s3_bind.mjs      # 真 Chrome + 真内核 + 读真 DOM
+node tools/acceptance/s4_branches.mjs
+node tools/acceptance/s5_diff.mjs
+node tools/acceptance/s6_bots.mjs
 ```
 
 它**不进依赖、不跑 CI**，缺 Chrome / puppeteer-core 时会打印 `SKIP …` 并以 0 退出。
 用法与覆盖范围见 [`tools/acceptance/README.md`](tools/acceptance/README.md)。
+
+M1 的全链路验收（真内核 + 真 git + 真 WS 帧 + isolated `POSTEL_HOME`）有单独一条命令，
+改了后端/协议也要跑：
+
+```bash
+uv run python scripts/accept_m1.py    # 必须 exit 0 且打印 M1 OK（6/6 步 + 家具）
+```
 
 ## 代码地图（改代码前先看，改完代码必须更新）
 
