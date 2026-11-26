@@ -252,6 +252,33 @@ from partially initialized module`）。**但结论是错的**——环是因为
 
 ---
 
+## 门禁
+
+### T23 ❌ 变更检测只比 `main...HEAD` → 漏掉未提交的改动（已修，自己写的）
+
+`scripts/gate-codemap.sh` 第一版只跑 `git diff --name-only main...HEAD`。结果是：
+代码已经改了、还没提交 → 门禁说「未改代码，无需动代码地图」→ **放行**。
+而 pre-commit 触发时，改动恰好就躺在暂存区，正好是这个被漏掉的状态。
+
+**正解**：取三段并集——`base...HEAD` + `--cached` + 工作区，用 herestring 去重逐行判。
+`tests/test_gate_codemap.py::test_detects_uncommitted_code_change` 专门守这一条；
+把并集逻辑删掉后它会立刻变红（验证过）。
+
+**教训**：门禁自己也要有测试，而且测试要能**让门禁失败**。
+只跑「应该通过」的用例，等于没测。
+
+### T24 ⚠️ 浅克隆下变更检测会静默退化成「跳过」
+
+CI 默认 `actions/checkout` 是 `fetch-depth: 1`，没有 `origin/main`，门禁找不到基准就跳过——
+**看起来是绿的，其实什么都没查**。
+
+**正解**：`ci.yml` 的 checkout 必须带 `fetch-depth: 0`。脚本本身在找不到基准时打
+`⚠️ 找不到基准分支…` 而不是装作通过，是第二道保险。
+
+**通用**：任何「找不到数据就跳过」的检查都要**大声说出来**，否则它会悄悄变成装饰品。
+
+---
+
 ## 安全
 
 ### T20 ❌ ticket 出现在日志里（已修，S2 发现）
@@ -290,6 +317,7 @@ from partially initialized module`）。**但结论是错的**——环是因为
 | U5 | 层依赖检查未进门禁（见 [02-layers §4](02-layers.md#4-可执行检查)） | 规则靠 review |
 | U6 | 版本号有 `pyproject.toml` 与 `__init__.py` 两个副本 | S20 自动化 |
 | U7 | `encode_event()` 从未被调用 | 形状已定，无调用方测试 |
+| U8 | codemap 门禁只判「动没动地图」，不判「动得对不对」 | 内容质量靠 review；一点办法没有之前如实承认 |
 
 ---
 

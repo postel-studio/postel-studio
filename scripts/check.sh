@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 统一质量门禁。本地与 CI 跑同一份，不允许分叉。
 # 用法：bash scripts/check.sh        （全部）
-#       bash scripts/check.sh lint   （只跑某项：lint|format|types|test|secrets）
+#       bash scripts/check.sh lint   （只跑某项：lint|format|types|test|codemap|secrets|build）
 set -uo pipefail
 
 FAILED=0
@@ -20,6 +20,21 @@ gate_lint()   { uv run ruff check .; }
 gate_format() { uv run ruff format --check .; }
 gate_types()  { uv run mypy; }
 gate_test()   { uv run pytest --cov --cov-report=term-missing; }
+# 代码地图保鲜：src/ 或 tests/ 变了，docs/codemap/ 也必须变
+gate_codemap() { bash scripts/gate-codemap.sh; }
+# 打包冒烟：证明产物可安装可运行（与 CI 的 wheel 步骤一致）。慢，不在 all 里。
+gate_build() {
+  uv build || return 1
+  local whl probe rc
+  whl=$(ls -t dist/*.whl | head -1) || return 1
+  probe=$(mktemp -d) || return 1
+  uv venv --python 3.12 "$probe" || { rm -rf "$probe"; return 1; }
+  uv pip install --python "$probe/bin/python" "$whl" || { rm -rf "$probe"; return 1; }
+  "$probe/bin/postel-studio" version
+  rc=$?
+  rm -rf "$probe"
+  return $rc
+}
 gate_secrets() {
   # 只拦真实凭据形态，不拦文档里描述扫描命令的文字
   local hits
@@ -49,11 +64,14 @@ case "${1:-all}" in
   types)  run "types"  gate_types ;;
   test)   run "test"   gate_test ;;
   secrets) run "secrets" gate_secrets ;;
+  codemap) run "codemap" gate_codemap ;;
+  build)   run "build"   gate_build ;;
   all)
     run "lint"   gate_lint
     run "format" gate_format
     run "types"  gate_types
     run "test"   gate_test
+    run "codemap" gate_codemap
     run "secrets" gate_secrets
     ;;
   *) echo "未知目标：$1" >&2; exit 2 ;;
