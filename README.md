@@ -11,9 +11,9 @@ branches, checks and pull requests — not chat replies.
 - **Pluggable agents**: the product is an agent adapter layer, not another agent kernel.
 - **Local execution first**, optional remote sandbox. Git platform agnostic.
 
-> Status: **M1 shipped** (`v0.1`). A local kernel serves a web workbench where you can bind a
-> repository, list its branches, read a branch diff, and read a Bot's charter. Next: M2 (dispatch
-> work to a Bot, review its candidate diffs). One-command acceptance: `uv run python scripts/accept_m1.py`.
+> Status: **M2 shipped** (`v0.2`). A local kernel serves a web workbench where you can bind a
+> repository, dispatch work to a Bot, review its candidate diffs, and approve a candidate.
+> One-command acceptance: `uv run python scripts/accept_m2.py` (`scripts/accept_m1.py` covers M1).
 
 ## Install
 
@@ -77,6 +77,7 @@ Naming convention: distribution `postel-studio` (hyphen), importable package `po
 ```bash
 bash scripts/check.sh                 # lint + format + types + tests/coverage + secret scan
 uv run python scripts/accept_m1.py    # M1 全链路验收：一条命令复现 S1–S6（exit 0 + M1 OK）
+uv run python scripts/accept_m2.py    # M2 全链路验收：派活→候选→批准（exit 0 + M2 OK，需 opencode + deepseek）
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
