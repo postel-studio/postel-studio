@@ -17,7 +17,7 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 5 | 包标记 + 本层"无 IO"的声明 |
-| `models.py` | 453 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8）/ `ulid` / `prompt_ok` / `Task` / `WorktreeLease` / 任务状态机（S10） |
+| `models.py` | 478 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8）/ `ulid` / `prompt_ok` / `Task` / `WorktreeLease` / 任务状态机（S10）/ 审核状态机（S13） |
 
 ## 符号表（`domain/models.py`）
 
@@ -55,6 +55,11 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | `Task` | 346 | **S10** frozen dataclass（06 §2.3 十二字段）：`task_id` / `bot_id` / `trigger` / `trigger_key` / `prompt` / `base_ref` / `state` / `candidate_id` / `error_code` / `created_at` / `started_at` / `ended_at` | `storage/db.py`、`orchestrator.py` |
 | `task_transition_ok(current, target)` | 367 | **S10**：查 `TASK_TRANSITIONS` 的纯判定（非法对 → `False`）；`TaskStore.transition` 在 SQL 之前先问它 | `storage/db.py` |
 | `WorktreeLease` | 383 | **S10** frozen dataclass（06 §2.5）：`lease_id` / `bot_id` / `task_id` / `path` / `created_at` / `released_at` | `storage/db.py`、`orchestrator.py` |
+| `REVIEW_TRANSITIONS` | 393 | **S13**：审核状态机表（`reviewed→approved/rejected`、`approved→reviewed`、`rejected→reviewed`；`merged` 永不可达） | `review_transition_ok`、`db.CandidateStore.transition` |
+| `REASON_MAX_BYTES` | 400 | **S13**：`2000`——拒绝理由的 UTF-8 字节上限 | `candidates.CandidateService.reject` |
+| `review_transition_ok(current, target)` | 403 | **S13**：审核状态机纯判定（非法对 → `False`）；store 在 SQL 之前先问它 | `storage/db.py` |
+| `candidate_branch(bot_name, task_id)` | 421 | **S11**：候选分支名；ULID **随机尾部 8 位**（前缀同毫秒会撞） | `candidates.py` |
+| `Candidate` | 440 | **S11** frozen dataclass：`candidate_id` / `repo_id` / `task_id` / `bot_name` / `branch` / `base_sha` / `head_sha` / `review_state` / `reject_reason` / `created_at` | `storage/db.py`、`candidates.py`、`orchestrator.py` |
 
 ## 关键决策与理由
 

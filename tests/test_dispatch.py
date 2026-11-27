@@ -8,6 +8,7 @@ Agent 会话用**假工厂**替换（单测不碰子进程）；真实 `opencode
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 import threading
@@ -30,6 +31,27 @@ from postel_studio.storage.paths import worktree_dir
 
 PRESET: Final = "builder"
 TERMINAL_WAIT_S: Final = 180.0  # 真实 opencode 建一个文件实测 8.7s，留足余量
+
+# 真实 opencode 用免费额度模型：额度耗尽时 prompt 拿不到终态帧也不报错，只会一直挂着
+# （实测日志 `AI_APICallError: Free usage limit reached`）。这是外部依赖，不是产品缺陷。
+# 只认子进程自己打进日志的明确标记；"等太久了"绝不构成跳过理由——产品卡死必须照常 fail。
+_QUOTA_MARKER: Final = "Free usage limit reached"
+_QUOTA_LOG_TTL_S: Final = 900.0  # 只看最近 15 分钟的日志，旧证据不能豁免今天的卡住
+
+
+def _opencode_quota_exhausted() -> bool:
+    """opencode 日志里最近 15 分钟是否出现免费额度耗尽的明确标记。"""
+    root = Path(os.environ.get("HOME", "")) / ".local" / "share" / "opencode" / "log"
+    if not root.is_dir():
+        return False
+    cutoff = time.time() - _QUOTA_LOG_TTL_S
+    for log in root.glob("*.log"):
+        try:
+            if log.stat().st_mtime >= cutoff and _QUOTA_MARKER in log.read_text(errors="replace"):
+                return True
+        except OSError:  # 日志正在轮转 / 权限问题：宁可 fail，也不拿它当豁免
+            continue
+    return False
 
 
 def _error(exc: BaseException) -> frames.FrameError:
@@ -581,7 +603,14 @@ def test_real_integration_creates_file_and_dirty_worktree(stores, tmp_path: Path
     orch = Orchestrator(bots, tasks, leases, worktrees, NoCandidateMaker(), EventHub())
     data = _dispatch_ok(orch, bot_id)
     task_id = str(data["taskId"])
-    final = _wait_terminal(tasks, task_id, timeout=TERMINAL_WAIT_S)
+    try:
+        final = _wait_terminal(tasks, task_id, timeout=TERMINAL_WAIT_S)
+    except AssertionError:
+        # 外部 opencode 免费额度耗尽时 prompt 会无限挂起；只凭明确日志证据跳过。
+        # 任何其他原因的卡住（含产品 bug）照常失败，绝不用"超时"当豁免。
+        if _opencode_quota_exhausted():
+            pytest.skip("opencode free quota exhausted (external dependency, not a product bug)")
+        raise
     assert final.state == "succeeded", final.error_code
     worktree = worktree_dir(repo_id, PRESET)
     assert worktree.is_dir(), "被分配的 worktree 必须存在"

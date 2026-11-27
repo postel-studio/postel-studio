@@ -17,7 +17,7 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `SCHEMA_VERSION` | 51 | `5`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`、v5 = S11 `candidates`） | `migrate`、测试 |
+| `SCHEMA_VERSION` | 44 | `6`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`、v5 = S11 `candidates`、v6 = S13 `candidates.reject_reason`） | `migrate`、测试 |
 | `_MIGRATIONS` | 59 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
 | `_COLUMNS` | 121 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
 | `state_db_path()` | 124 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
