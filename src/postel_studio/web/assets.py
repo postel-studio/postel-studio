@@ -75,6 +75,9 @@ ERROR_TEXT: Final = {
     # - WORKTREE_CONFLICT 是本刀**新增**的码（三处触发语义相同：需要人先处理目录里的内容）。
     "BAD_BASE_REF": "基础分支不存在或不是提交",
     "WORKTREE_CONFLICT": "工作区目录被占用，或里面有未提交的改动",
+    # S10：task.dispatch 会回这两个码（07 §1.3 既有码，本刀第一次用到）。
+    "BUSY": "这个 Bot 已有任务在跑，等它结束再派",
+    "PERMISSION_DENIED": "这个 Bot 是 L0（只读），先在 Charter 里把权限改到 L1 以上",
 }
 ERROR_TEXT_FALLBACK: Final = "绑定失败"
 
@@ -369,6 +372,29 @@ INDEX_HTML: Final = """<!doctype html>
   #agent[data-state="loading"] #agent-detail,
   #agent[data-state="error"] #agent-detail,
   #agent[data-state="ready"] #agent-state { display: none; }
+  /* 派活卡片（S10）：表单在 idle 不可见（还没选 Bot），running 时禁止再派（BUSY 由内核
+     兜底，但页面先不给入口）；取消按钮只在 running 出现；details（taskId + 状态行）只在
+     ready/running/done 出现。error 状态**不隐藏** details：失败后用户要能看见是哪个任务
+     失败的，并直接再派一次。 */
+  #task-form { display: flex; gap: 8px; margin-top: 8px; }
+  #task-prompt { flex: 1; padding: 7px 10px; font-size: 14px; color: inherit;
+    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; }
+  #task-dispatch, #task-cancel { padding: 7px 14px; font-size: 14px; color: inherit;
+    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
+  #task-dispatch:hover, #task-cancel:hover { border-color: #58627a; }
+  #task-dispatch:disabled { opacity: .5; cursor: progress; }
+  #task-cancel { border-color: rgb(248 81 73 / 55%); color: #ffb4ab; }
+  #task-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
+  #task-details { margin: 10px 0 0; }
+  #task-id, #task-status-line { margin: 4px 0 0; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
+  #task[data-state="idle"] #task-form,
+  #task[data-state="idle"] #task-details,
+  #task[data-state="running"] #task-form,
+  #task[data-state="ready"] #task-cancel,
+  #task[data-state="done"] #task-cancel,
+  #task[data-state="error"] #task-cancel { display: none; }
 </style>
 </head>
 <body>
@@ -463,6 +489,24 @@ INDEX_HTML: Final = """<!doctype html>
       <p id="workspace-path"></p>
       <p id="workspace-branch"></p>
       <button id="workspace-release" type="button">回收工作区</button>
+    </div>
+  </section>
+  <!-- 主区派活卡片（S10）：位置在 #workspace 之后，不重排既有布局。状态灯的形状只有
+       五种（idle / ready / running / done / error），显示什么由 data-state 决定；
+       taskId / prompt 都是用户数据，只进 textContent。 -->
+  <section id="task" data-state="idle" aria-live="polite">
+    <h2 id="task-title">派活</h2>
+    <p id="task-state">选择一个 Bot 后派活</p>
+    <form id="task-form" autocomplete="off">
+      <input id="task-prompt" type="text" spellcheck="false" maxlength="512"
+             placeholder="给这个 Bot 的一句话指令，如：创建一个 hello.txt" aria-label="派活指令">
+      <button id="task-dispatch" type="submit" disabled>派活</button>
+    </form>
+    <button id="task-cancel" type="button" hidden>取消任务</button>
+    <p id="task-error" role="alert" hidden></p>
+    <div id="task-details" hidden>
+      <p id="task-id"></p>
+      <p id="task-status-line"></p>
     </div>
   </section>
   <!-- 左栏 Bots 区（S6 D8）：在 #repos 之前（03-ui-spec §2：左栏上 Bot / 下仓库）。
@@ -650,6 +694,32 @@ INDEX_HTML: Final = """<!doctype html>
   var workspaceBotId = null;      // 卡片作用的 Bot = 这个仓库的第一个 Bot（D9，M1 只有一个）
   var workspaceBotName = "";
 
+  // 派活卡片（S10）。卡片显示的是「选中 Bot 的最近一次任务」：dispatch 的应答与
+  // task.updated 事件都往这里写，taskId 不匹配的事件直接忽略（页面只跟一个任务）。
+  var taskEl = document.getElementById("task");
+  var taskState = document.getElementById("task-state");
+  var taskForm = document.getElementById("task-form");
+  var taskPrompt = document.getElementById("task-prompt");
+  var taskDispatch = document.getElementById("task-dispatch");
+  var taskCancel = document.getElementById("task-cancel");
+  var taskError = document.getElementById("task-error");
+  var taskDetails = document.getElementById("task-details");
+  var taskIdLine = document.getElementById("task-id");
+  var taskStatusLine = document.getElementById("task-status-line");
+  var TASK_HINT = "选择一个 Bot 后派活";
+  var TASK_ERROR_FALLBACK = "派活失败";
+  var currentTaskId = null;       // 卡片正在跟踪的任务（evt 只认这个 id）
+  var taskBusy = false;           // 派活请求在途：按钮置灰（回包即恢复）
+  // 任务状态 → 状态行文案。evt 与应答共用这一张表；表外状态按原样显示（向前兼容）。
+  var TASK_STATE_TEXT = {
+    queued: "排队中",
+    running: "运行中",
+    succeeded: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+    interrupted: "被打断（内核重启过，确认后可重跑）"
+  };
+
   function setState(state, text) {
     statusEl.dataset.state = state;
     statusText.textContent = text;
@@ -694,6 +764,9 @@ INDEX_HTML: Final = """<!doctype html>
     resetAgent("idle", state === "disconnected"
       ? "已断开：Agent 状态未知"
       : AGENT_HINT);
+    // S10：派活卡片同一纪律。任务属于上一次连接——内核重启后它的 worker 已经不在了，
+    // 留着「运行中」的灯就是撒谎； taskId 也一并清（evt 只认连接内产生的任务）。
+    resetTask("idle", state === "disconnected" ? "已断开：任务状态未知" : TASK_HINT);
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -756,6 +829,7 @@ INDEX_HTML: Final = """<!doctype html>
       resetBots("idle", BOT_HINT);    // S6 D8：Bots 与 charter 一起回 idle（选中的 Bot 随仓库消失）
       resetCharter("idle", CHARTER_HINT);
       resetWorkspace("idle", WORKSPACE_HINT);   // S7 D9：工作区同理
+      resetTask("idle", TASK_HINT);   // S10：派活卡片跟着 Bot 走，Bot 作废它就作废
       return;
     }
     applyRepoSelection();
@@ -1572,6 +1646,98 @@ INDEX_HTML: Final = """<!doctype html>
     selectedBotName = botName;
     applyBotSelection();
     loadCharter(botId, botName);
+    // S10：选中的 Bot 变了，卡片跟踪的任务也随之作废——上一个 Bot 的任务不归这个灯管。
+    resetTask("ready", TASK_HINT);
+  }
+
+  // ---- 派活卡片（S10） ------------------------------------------------------
+  // 状态灯五种：idle（没选 Bot）/ ready（选了 Bot，没在跟任务）/ running / done / error。
+  // 显示什么由 data-state 决定；这里只改属性与文本（T8：别逐个 style.display）。
+
+  function resetTask(state, text) {
+    taskBusy = false;
+    currentTaskId = null;
+    taskEl.dataset.state = state;
+    taskState.textContent = text;
+    taskError.textContent = "";
+    taskError.hidden = true;
+    taskDetails.hidden = true;
+    taskIdLine.textContent = "";
+    taskStatusLine.textContent = "";
+    taskPrompt.value = "";
+    taskDispatch.disabled = !selectedBotId;
+    taskCancel.hidden = true;
+  }
+
+  function showTaskError(text) { taskError.textContent = text; taskError.hidden = false; }
+
+  // 把一个任务载荷（dispatch 的应答或 evt 的 data）落到卡片上。
+  function trackTask(taskId, state, errorCode) {
+    currentTaskId = taskId;
+    taskDetails.hidden = false;
+    taskIdLine.textContent = "任务 " + taskId;
+    var label = TASK_STATE_TEXT[state] || state;
+    taskStatusLine.textContent = errorCode ? label + "（" + errorCode + "）" : label;
+    if (state === "running" || state === "queued") {
+      taskEl.dataset.state = "running";
+      taskCancel.hidden = false;
+    } else if (state === "succeeded" || state === "cancelled") {
+      taskEl.dataset.state = "done";
+      taskCancel.hidden = true;
+    } else {  // failed / interrupted / 表外状态：不隐藏 details，用户能看见并重派
+      taskEl.dataset.state = "error";
+      taskCancel.hidden = true;
+    }
+  }
+
+  function submitTask() {
+    var prompt = taskPrompt.value.trim();
+    clearTaskError();
+    if (!prompt) { showTaskError("请输入一句话指令"); return; }
+    if (!selectedBotId) { showTaskError(TASK_HINT); return; }
+    taskBusy = true;
+    taskDispatch.disabled = true;
+    request("task.dispatch", { botId: selectedBotId, prompt: prompt }, function (err, data) {
+      taskBusy = false;
+      taskDispatch.disabled = false;
+      if (err) {
+        // BUSY / PERMISSION_DENIED 按码映射（ERROR_TEXT 注入）；其它的码走卡片自己的兜底。
+        showTaskError(err === "BUSY" || err === "PERMISSION_DENIED"
+          ? errorText(err) : TASK_ERROR_FALLBACK + "（" + err + "）");
+        return;
+      }
+      taskPrompt.value = "";
+      // 应答只有 {taskId, state, botId}：以它为起点建卡，后续变化由 task.updated 接管。
+      trackTask(String(data.taskId), String(data.state || "queued"), null);
+    });
+  }
+
+  function cancelTask() {
+    if (!currentTaskId) { return; }
+    taskCancel.disabled = true;
+    request("task.cancel", { taskId: currentTaskId }, function (err, data) {
+      taskCancel.disabled = false;
+      if (err) {
+        showTaskError(err === "INVALID_PARAMS" ? "任务已结束，不能再取消" : TASK_ERROR_FALLBACK);
+        return;
+      }
+      if (data && data.taskId) { trackTask(String(data.taskId), String(data.state), null); }
+    });
+  }
+
+  function clearTaskError() { taskError.textContent = ""; taskError.hidden = true; }
+
+  // task.updated 事件（S10 D12：载荷恰为 {taskId, state, errorCode?}）。只认卡片正在
+  // 跟踪的任务；失败的码也用 ERROR_TEXT 翻译（ADAPTER_UNAVAILABLE 等在表里）。
+  function onTaskUpdated(data) {
+    if (!data || String(data.taskId) !== currentTaskId) { return; }
+    trackTask(String(data.taskId), String(data.state),
+      data.errorCode ? String(data.errorCode) : null);
+  }
+
+  function subscribeTopics() {
+    // 02b §2.3：重连后必须重新订阅（内核不保存订阅状态，订阅随连接死）。
+    send("subscribe", { topics: ["task.updated"] });  // 忘记订阅的代价是灯不动，不致命
   }
 
   function selectRepo(repoId, name) {
@@ -1652,6 +1818,11 @@ INDEX_HTML: Final = """<!doctype html>
   function onMessage(ev) {
     var frame;
     try { frame = JSON.parse(ev.data); } catch (e) { return; }
+    // 订阅推送（S10 D11）：evt 不带 id，不进 pending 配对，按 topic 分发。
+    if (frame && frame.type === "evt" && frame.topic === "task.updated") {
+      onTaskUpdated(frame.data);
+      return;
+    }
     // 心跳回包：证明内核在做帧往返，而不只是 TCP 还开着
     if (frame && frame.id === awaitingBeatId) {
       awaitingBeatId = null;
@@ -1724,6 +1895,7 @@ INDEX_HTML: Final = """<!doctype html>
       awaitingBeatId = null;
       setNote("");
       setState("connected", "已连接");
+      subscribeTopics();  // S10 D11：先订阅再干活，否则第一批 evt 会漏
       startHeartbeat();
     };
     ws.onmessage = onMessage;
@@ -1750,6 +1922,9 @@ INDEX_HTML: Final = """<!doctype html>
   diffForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitDiff(); });
   // S9：检测是显式按钮（起进程的事不该被回车或页面加载偷偷触发）。
   agentDetect.addEventListener("click", detectAgent);
+  // S10：派活走 <form>（回车 = 点「派活」）；取消是显式按钮（打断会话不该被回车触发）。
+  taskForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitTask(); });
+  taskCancel.addEventListener("click", cancelTask);
   // S7：分配走 <form>（回车与点按钮同一条路径）；回收是显式按钮（删目录不该被回车触发）。
   workspaceForm.addEventListener("submit", function (ev) {
     ev.preventDefault();

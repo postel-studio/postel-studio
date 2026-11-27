@@ -1,11 +1,11 @@
 # 03 · domain — `src/postel_studio/domain/`
 
-> 层 L0（纯函数，**无 IO**）· 208 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1](../../design/06-data-model.md) · [08-repo-id-stability](../../design/08-repo-id-stability.md)
+> 层 L0（纯函数，**无 IO**）· 396 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1](../../design/06-data-model.md) · [08-repo-id-stability](../../design/08-repo-id-stability.md)
 
 ## 职责
 
-领域模型与**纯派生规则**：`Repo` / `Bot` 实体、origin URL 归一化、`repo_id` / `bot_id`
-与名字白名单的算法（S6 加了 Bot，S8 加了权限阶梯）。
+领域模型与**纯派生规则**：`Repo` / `Bot` / `Task` / `WorktreeLease` 实体、origin URL 归一化、
+`repo_id` / `bot_id` 与名字白名单的算法（S6 加了 Bot，S8 加了权限阶梯，S10 加了任务状态机与 ULID）。
 这一层**不碰磁盘、不起子进程、不 import 框架**——它的每个函数都能在一行断言里被验证。
 
 S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算法是被验收断言过的契约
@@ -17,7 +17,7 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 5 | 包标记 + 本层"无 IO"的声明 |
-| `models.py` | 272 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8） |
+| `models.py` | 396 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8）/ `ulid` / `prompt_ok` / `Task` / `WorktreeLease` / 任务状态机（S10） |
 
 ## 符号表（`domain/models.py`）
 
@@ -44,7 +44,17 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | `permission_parse(value)` | 206 | 入站值 → `Permission`；不是那四个就 `None`（**不抛**）。`L3`/`L4` 也走 `None` | `permission_covers`、`api/bots.py:_permission` |
 | `permission_covers(held, needed)` | 222 | 阶梯包含关系（`L2` ⊨ `L1`）；任一端解析不出 → `False`（失败即收紧） | S16 的权限门、测试 |
 | `REF_NAME_MAX_LENGTH` | 244 | `200`：入站 ref 名的长度上限（S5 D3.1）——**S7 从 `api/repository.py` 搬来** | `ref_name_ok` |
-| `ref_name_ok(value)` | 247 | 入站 ref 名的六条形状（S5 D3.1，**纯判定不抛**）——**S7 搬来** | `api/repository._require_ref`、`api/worktrees._base_ref` |
+| `ref_name_ok(value)` | 249 | 入站 ref 名的六条形状（S5 D3.1，**纯判定不抛**）——**S7 搬来** | `api/repository._require_ref`、`api/worktrees._base_ref`、`orchestrator.dispatch`（S10 校验 `baseRef`） |
+| `PROMPT_MAX_BYTES` | 283 | **S10**：`32 * 1024`——prompt 的字节上限（02b §5） | `prompt_ok` |
+| `TASK_TRANSITIONS` | 287 | **S10**：状态机表（06 §3.1 的唯一事实源）：`queued→running/cancelled`、`running→succeeded/failed/cancelled/interrupted` 等 | `task_transition_ok`、`TaskStore.transition` |
+| `TASK_TERMINAL` | 293 | 终态集合（`succeeded` / `failed` / `cancelled` / `interrupted`）：**终态封死**，没有出边 | 同上 |
+| `TASK_ACTIVE` | 298 | `{"queued","running"}`：活跃态（BUSY 检查、重启记账都用它） | `orchestrator._is_terminal`、`db.TaskStore.active_for_bot` |
+| `TASK_TRIGGERS` | 301 | `{"manual","dialogue","local_event"}`：触发源白名单（S10 只用 `manual`） | `Task` |
+| `ulid(now_ms=None, randomness=None)` | 306 | **S10**：手写 ULID（48-bit 时间戳 + 80-bit 随机、Crockford base32、26 字符）——**纯函数**，可注入时间与随机（测试确定性） | `orchestrator.dispatch`、租约 id |
+| `prompt_ok(value)` | 331 | **S10**：非空字符串且 ≤ 32 KiB（**按 UTF-8 字节**，同帧上限的口径） | `orchestrator.dispatch` |
+| `Task` | 346 | **S10** frozen dataclass（06 §2.3 十二字段）：`task_id` / `bot_id` / `trigger` / `trigger_key` / `prompt` / `base_ref` / `state` / `candidate_id` / `error_code` / `created_at` / `started_at` / `ended_at` | `storage/db.py`、`orchestrator.py` |
+| `task_transition_ok(current, target)` | 367 | **S10**：查 `TASK_TRANSITIONS` 的纯判定（非法对 → `False`）；`TaskStore.transition` 在 SQL 之前先问它 | `storage/db.py` |
+| `WorktreeLease` | 383 | **S10** frozen dataclass（06 §2.5）：`lease_id` / `bot_id` / `task_id` / `path` / `created_at` / `released_at` | `storage/db.py`、`orchestrator.py` |
 
 ## 关键决策与理由
 
@@ -91,6 +101,22 @@ S3 的算法是"有 origin 用 URL 哈希、没有才用路径"。后果实测�
 **`charter_rev` 在实体里，但 M1 不拿它当事实源**：D5 规定 charter 正文的事实源是文件，
 帧载荷里的 `charterRev` 由 `api/bots.py` 现场算；DB 里这一列只记播种那一刻的值（U17）。
 
+### 任务状态机与 ULID（S10 D6）
+
+`TASK_TRANSITIONS` 是 06 §3.1 的**唯一**事实源，`task_transition_ok` 是它的纯判定，
+`TaskStore.transition` 在写 SQL 之前先问它——非法迁移在 L0 就被一行断言钉死（06-pitfalls
+的教训：状态机的正确性不该等到集成测试才验证）。终态封死：没有一条出边从终态出发，
+`transition` 对终态的任何调用都拿不到行。
+
+**为什么 ULID 手写**：需求只有「时间有序的随机 id」，引入 `ulid-py` 违反 S3 DoD（不新增依赖）。
+48-bit 毫秒时间 + 80-bit 随机 + Crockford base32，30 行纯函数；时间与随机都可注入，
+测试能断言「同一毫秒不撞车」「字典序 = 时间序」。
+
+### `prompt_ok` 按字节算，与帧上限同口径
+
+「非空」挡掉空白 prompt；32 KiB 按 **UTF-8 字节**（`len(value.encode("utf-8"))`），
+与 02b §5 的帧大小口径一致——中文一个字 3 字节，按字符数判会放行超限载荷。
+
 ### 为什么 `name` 是 property 而不是字段
 
 `name` 是**派生**的（`Path(path).name`），落库的只有 `path`。存两列会让"路径改名"时
@@ -120,3 +146,5 @@ S3 的算法是"有 origin 用 URL 哈希、没有才用路径"。后果实测�
 | `tests/test_bind.py::test_absolute_path_hash_is_stable_across_calls` | 纯函数稳定性 |
 | `tests/test_reverse_checks.py`（`REPO_ID_LENGTH→16` / 去掉归一化 / U9 组合注入） | 改这些会让上面的测试红（反向锁） |
 | `tests/test_bot_charter.py::test_bot_name_whitelist` | S6 D11 #11：`../x` / `Builder` / `a_b` / 33 字符被拒 |
+| `tests/test_dispatch.py::test_illegal_transitions_are_refused` | S10 D6：`queued→succeeded` 等非法对被 `TaskStore.transition` 拒绝（事实源在本模块的表） |
+| `tests/test_dispatch.py::test_l0_bot_refused_before_any_execution` | S10 D4：权限判定先于建行/起线程（`permission_covers` 的消费方） |

@@ -430,6 +430,17 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_child_is_reaped_after_timeout", file="test_acp_detect"),
         "S9 #2：超时后不再回收子进程（每点一次检测漏一个 opencode 进程）",
     ),
+    # ---- S10：派活的两道闸（权限判定、BUSY 双锁）----
+    (
+        "postel_studio/orchestrator.py",
+        "        if not permission_covers(bot.permission, DISPATCH_MIN_PERMISSION):"
+        "  # D4：先于一切执行",
+        "        if False:  # 注入：权限判定整段跳过（L0 也放行）",
+        _target_test("test_l0_bot_refused_before_any_execution", file="test_dispatch"),
+        "S10 #1：dispatch 跳过权限判定（05 §2.1：判定必须先于执行，且无第二路径）",
+    ),
+    # S10 #2 是**组合注入**（见下方 COMPOSITE_INJECTIONS）：BUSY 有两道锁（D5），只拆
+    # 其中一道时另一道必须独立兜住——所以"单拆检查"的注入**不该**让测试红；两道一起拆才红。
 )
 
 
@@ -491,6 +502,27 @@ COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], .
         _OLD_ID_ALGORITHM + _UPSERT_COVERS_ID,
         _target_test("test_binding_an_existing_v1_row_keeps_its_legacy_id"),
         "U9 完整形态：v1 老行的 id 在下一次 bind 被覆盖（D3 的留痕被抹掉）",
+    ),
+    # ---- S10 #2：BUSY 的两道锁一起拆（D5）----
+    # 只拆 orchestrator 的检查时，`tasks_active_per_bot` 唯一索引照样拦（上面 S10 #2 注释
+    # 里的单条注入已实测：目标测试保持绿——这正是"两道锁互为后备"的证据）。两道一起拆，
+    # 第二次 dispatch 必然插进活跃行 → 目标测试必须红。
+    (
+        (
+            (
+                "postel_studio/orchestrator.py",
+                "        if self._tasks.active_for_bot(bot.bot_id) is not None:",
+                "        if False:  # 注入：活跃任务检查跳过",
+            ),
+            (
+                "postel_studio/storage/db.py",
+                "    CREATE UNIQUE INDEX tasks_active_per_bot ON tasks (bot_id)"
+                " WHERE state IN ('queued', 'running');",
+                "    -- 注入：唯一索引拆掉",
+            ),
+        ),
+        _target_test("test_second_dispatch_while_active_is_busy", file="test_dispatch"),
+        "S10 #2（组合）：检查 + 唯一索引一起拆 → 第二刀并发派活必须被拒（测试红）",
     ),
 )
 

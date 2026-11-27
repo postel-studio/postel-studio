@@ -86,6 +86,14 @@ Repo ──1:N── Bot ──1:N── Task ──0..1── Candidate
 - `state = failed` 必须有 `error_code`。
 - `trigger_key` 在 `(bot_id, trigger, trigger_key)` 上唯一（同一事件不重复派活）。
 
+> **S10 落地注记**：本表与 `worktree_leases` 在 schema v4 一次建齐（`_MIGRATIONS` append）。
+> `candidate_id` **先建列、恒 NULL**（S11 才有值）——现在占住，S11 不用再迁移。
+> 两个部分唯一索引落了数据级锁：`(bot_id) WHERE state IN ('queued','running')` 唯一
+> （**BUSY 的兜底**——orchestrator 的「检查-再插入」竞态由它收口，D5）；
+> `(bot_id, trigger, trigger_key) WHERE trigger_key IS NOT NULL`（06 §6 的部分索引口径）。
+> 状态机的唯一事实源是 `domain/models.py` 的 `TASK_TRANSITIONS`（纯函数层），
+> `TaskStore.transition` 用 `UPDATE … WHERE state=<from>` 原子迁移，竞态输家拿 `None`。
+
 ### 2.4 Candidate
 
 | 字段 | 类型 | 约束 | 说明 |
@@ -129,6 +137,14 @@ Repo ──1:N── Bot ──1:N── Task ──0..1── Candidate
 
 **不变量**：同一 `bot_id` 上 `released_at IS NULL` 的记录 ≤ 1（串行队列的实现基础）。
 
+> **S10 落地注记**：本表已在 schema v4 建齐（与 `Task` 一起，兑现 S7 的裁决）。
+> 一处与上表的偏差：建表用的列名是 **`created_at`**（与 `tasks`/`repos`/`bots` 的
+> 时间列同名，读路径的 `_row_to_lease` 依赖这个统一命名），而不是 `acquired_at`——
+> 语义相同（租约建立时刻）。`task_id` UNIQUE + `(bot_id) WHERE released_at IS NULL`
+> 部分唯一索引照上表；**释放只置 `released_at`**，不删行（审计留痕，06 §5 精神）。
+> orchestrator 在 worker 的 `finally` 里释放——`cancelled` / `failed` / `interrupted`
+> 的每一条路径都必须走到。
+
 ---
 
 ## 3. 状态机
@@ -145,12 +161,19 @@ interrupted  ← 进程重启时，原 running 被标记（不是 succeeded！�
 | 迁移 | 允许来源 | 副作用 |
 |---|---|---|
 | `queued → running` | 租约获取成功 | `started_at` |
+| `queued → cancelled` | 人取消（**worker 尚未开工**，零副作用——S10 实测） | 回收排队位置 |
 | `running → succeeded` | 会话结束且无异常 | 有改动则建 Candidate |
 | `running → failed` | 会话失败 / 越界检查失败 | 必须写 `error_code` |
 | `running → cancelled` | 人取消 | 回收租约 |
 | `running → interrupted` | **内核重启** | 需人工确认是否重跑 |
 
 **禁止**：`queued → succeeded`（跳过执行）；`interrupted → succeeded`（撒谎）。
+
+> **S10 落地注记**：表里补上了 `queued → cancelled`（原始图漏了这条——取消排队中的任务
+> 是必须支持的用户动作）。`queued → interrupted` 也实现了：重启记账（D7）把 queued 和
+> running **一起**标 `interrupted`——queued 的 worker 已经不在了，留着它就是假承诺。
+> `stopReason → 状态` 的映射 fail-closed：只认 `end_turn` / `cancelled`，其余全 `failed`
+> + `INTERNAL`（不猜没见过的值）。
 
 ### 3.2 Candidate
 
@@ -215,6 +238,12 @@ local_only ──push──> pushed ──pr──> pr_open ──approve──>
 - 每个版本一个迁移函数，**只增不减**（不删列，改为停止使用）。
 - 迁移必须可重入：同一版本重复执行不改变状态。
 - 迁移失败时**回滚并保留原库**（先复制备份），不得半迁移。
+
+> **已落地的版本**：v1（S3 `repos`）→ v2（S3.5 `origin_hash` 列）→ v3（S6 `bots`）→
+> **v4（S10 `tasks` + `worktree_leases`，含两个部分唯一索引）**。实现见
+> `storage/db.py` 的 `_MIGRATIONS`；每版一个真库升级测试（v1→v4 全链路）。
+> 注意 sqlite3 的 `Connection` 上下文管理器是**事务边界**不是连接开关：`transition`
+> 忘拿连接会让 UPDATE 的写事务永不提交、堵死其它连接（T44 的实测教训）。
 
 ---
 

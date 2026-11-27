@@ -18,18 +18,27 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
-from postel_studio.domain.models import Bot, Repo
+from postel_studio.domain.models import (
+    TASK_TERMINAL,
+    Bot,
+    Repo,
+    Task,
+    WorktreeLease,
+    task_transition_ok,
+)
 from postel_studio.storage.paths import _chmod, ensure_state_root, state_db_file
 
 # 06-data-model §7：user_version 是 schema 版本。
 # v1 = S3 的初始 schema（只有 repos）；v2 = S3.5 加的 `origin_hash`（D2）；
-# v3 = S6 加的 `bots` 表（D7：只加表、不动 repos）。
-SCHEMA_VERSION: Final = 3
+# v3 = S6 加的 `bots` 表（D7：只加表、不动 repos）；v4 = S10 加 `tasks` + `worktree_leases`
+# （06 §2.3 / §2.5，S7 裁决的"到期一起建"）。
+SCHEMA_VERSION: Final = 4
 
 # ---------------------------------------------------------------------------
 # 迁移（每个版本一个函数，索引即版本号；新增版本=往后 append，不改历史）
@@ -69,6 +78,40 @@ _MIGRATIONS: Final[tuple[str, ...]] = (
         created_at  REAL NOT NULL,
         UNIQUE (repo_id, name)
     );
+    """,
+    # v4（S10 D5）：`tasks`（06 §2.3）与 `worktree_leases`（06 §2.5）一次建齐。
+    # `candidate_id` 列先建、S10 恒 NULL（S11 才有值）；`trigger_key` 的唯一约束以部分
+    # 索引表达（06 §2.3 不变量："同一事件的重复触发在此去重"）。
+    # **两个 BUSY 后备锁**（S10 D5）：tasks 的部分唯一索引把"活跃任务每 Bot 至多一条"
+    # 钉在数据层——检查-再插入的竞态即使发生在 orchestrator 的检查之后也会被这条索引拦住；
+    # leases 的部分唯一索引照 06 §2.5 原文。SQLite 的部分索引 WHERE 支持任意表达式。
+    """
+    CREATE TABLE tasks (
+        task_id      TEXT PRIMARY KEY,
+        bot_id       TEXT NOT NULL REFERENCES bots(bot_id) ON DELETE CASCADE,
+        trigger      TEXT NOT NULL,
+        trigger_key  TEXT,
+        prompt       TEXT NOT NULL,
+        base_ref     TEXT,
+        state        TEXT NOT NULL,
+        candidate_id TEXT,
+        error_code   TEXT,
+        created_at   REAL NOT NULL,
+        started_at   REAL,
+        ended_at     REAL
+    );
+    CREATE UNIQUE INDEX tasks_active_per_bot ON tasks (bot_id) WHERE state IN ('queued', 'running');
+    CREATE UNIQUE INDEX tasks_trigger_key ON tasks (bot_id, trigger, trigger_key)
+        WHERE trigger_key IS NOT NULL;
+    CREATE TABLE worktree_leases (
+        lease_id    TEXT PRIMARY KEY,
+        bot_id      TEXT NOT NULL REFERENCES bots(bot_id) ON DELETE CASCADE,
+        task_id     TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+        path        TEXT NOT NULL,
+        created_at  REAL NOT NULL,
+        released_at REAL
+    );
+    CREATE UNIQUE INDEX leases_active_per_bot ON worktree_leases (bot_id) WHERE released_at IS NULL;
     """,
 )
 
@@ -373,4 +416,237 @@ def _row_to_bot(row: sqlite3.Row) -> Bot:
         agent_kind=str(raw_agent) if isinstance(raw_agent, str) else None,
         charter_rev=raw_rev,
         created_at=float(raw_created),
+    )
+
+
+# `tasks` 的列清单只写一份（同 `_COLUMNS` 的理由）。
+_TASK_COLUMNS: Final = (
+    "task_id, bot_id, trigger, trigger_key, prompt, base_ref, state,"
+    " candidate_id, error_code, created_at, started_at, ended_at"
+)
+# `worktree_leases` 同上。
+_LEASE_COLUMNS: Final = "lease_id, bot_id, task_id, path, created_at, released_at"
+
+
+class TaskStore:
+    """`tasks` 表的读写（S10 v4 新增）。锁与连接纪律同 `RepoStore` / `BotStore`。
+
+    状态机的**唯一写入口**是 `transition`（S10 D6）：它做一次原子的
+    `UPDATE ... WHERE state = <from>`，迁移表校验交给 domain（`task_transition_ok`）——
+    store 不重复排布允许边，但它保证"读-判-写"三步不会被打断。
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._conn = open_state_db(path)
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        """关闭连接（`with` 退出时也走这里）。幂等。"""
+        with self._lock:
+            self._conn.close()
+
+    def __enter__(self) -> TaskStore:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def insert(self, task: Task) -> None:
+        """插入一个 `queued` 任务。活跃索引撞上（`BUSY` 竞态的后备锁）抛
+        `sqlite3.IntegrityError`，由调用方翻成码——store 不认识 07 §1.3。"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"INSERT INTO tasks ({_TASK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task.task_id,
+                    task.bot_id,
+                    task.trigger,
+                    task.trigger_key,
+                    task.prompt,
+                    task.base_ref,
+                    task.state,
+                    task.candidate_id,
+                    task.error_code,
+                    task.created_at,
+                    task.started_at,
+                    task.ended_at,
+                ),
+            )
+
+    def get(self, task_id: str) -> Task | None:
+        """按主键取；不存在返回 `None`（帧层翻码）。"""
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return None if row is None else _row_to_task(row)
+
+    def active_for_bot(self, bot_id: str) -> Task | None:
+        """这个 Bot 的活跃任务（`queued` / `running`）；没有就是 `None`（`BUSY` 的判据）。"""
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE bot_id = ?"
+                " AND state IN ('queued', 'running')",
+                (bot_id,),
+            ).fetchone()
+        return None if row is None else _row_to_task(row)
+
+    def transition(
+        self,
+        task_id: str,
+        to_state: str,
+        *,
+        error_code: str | None = None,
+        candidate_id: str | None = None,
+    ) -> Task | None:
+        """`current → to_state` 的一次**原子**迁移（S10 D6）。
+
+        读出当前行 → domain 校验迁移边 → `UPDATE ... WHERE state = <当前值>`。行不存在、
+        迁移非法、或 `WHERE` 没命中（竞态里别人先动了）都返回 `None`——调用方必须把
+        `None` 当作"已是终态"处理，而不是重试。时间戳在这里落：`started_at` 只在
+        `queued→running` 写，`ended_at` 只在进终态写，调用方不用管。
+
+        `with self._lock, self._conn`：**必须**把连接也放进 with——sqlite3 的隐式事务
+        只会由显式 commit / `with conn` 退出收尾；只拿锁不拿连接，UPDATE 开着的写事务
+        会一直堵住其它连接的写（实测复现：下一个 store 的任何写都 `database is locked`）。
+        """
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            task = _row_to_task(row)
+            if not task_transition_ok(task.state, to_state):
+                return None
+            now = time.time()
+            started = now if (task.state, to_state) == ("queued", "running") else task.started_at
+            ended = now if to_state in TASK_TERMINAL else task.ended_at
+            candidate = candidate_id if candidate_id is not None else task.candidate_id
+            updated = self._conn.execute(
+                "UPDATE tasks SET state = ?, error_code = ?, candidate_id = ?,"
+                " started_at = ?, ended_at = ? WHERE task_id = ? AND state = ?",
+                (to_state, error_code, candidate, started, ended, task_id, task.state),
+            )
+            if updated.rowcount == 0:  # pragma: no cover - 锁内的竞态在单进程里不可达
+                return None
+            row2 = self._conn.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return None if row2 is None else _row_to_task(row2)
+
+    def mark_interrupted(self) -> int:
+        """内核重启的记账（S10 D7）：`queued` / `running` 全部标 `interrupted`。
+
+        返回标掉的行数（可观测）。这是**唯一**绕开 `transition` 的写路径——重启时读-
+        判-写逐行做会在锁外留窗口，而"全部标掉"本身是一条原子的批量 UPDATE，
+        语义等价于对每行跑一次 `transition`（两条边都在迁移表里）。
+        """
+        with self._lock, self._conn:
+            now = time.time()
+            cursor = self._conn.execute(
+                "UPDATE tasks SET state = 'interrupted', ended_at = ?"
+                " WHERE state IN ('queued', 'running')",
+                (now,),
+            )
+        return cursor.rowcount
+
+
+class LeaseStore:
+    """`worktree_leases` 表的读写（S10 v4 新增，06 §2.5）。
+
+    每个任务恰好一条租约（`task_id UNIQUE`）；活跃租约每 Bot 至多一条（部分唯一索引，
+    违反抛 `IntegrityError`）。租约**不**代替 orchestrator 持有路径——路径的事实源仍是
+    git 与文件系统（S7 D4 的原则不变），租约回答的只是"这个 Bot 现在占用着哪个工作区"。
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._conn = open_state_db(path)
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        """关闭连接（`with` 退出时也走这里）。幂等。"""
+        with self._lock:
+            self._conn.close()
+
+    def __enter__(self) -> LeaseStore:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def insert(self, lease: WorktreeLease) -> None:
+        """登记一条租约。活跃索引撞上（同 Bot 双任务竞态）抛 `IntegrityError`。"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"INSERT INTO worktree_leases ({_LEASE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    lease.lease_id,
+                    lease.bot_id,
+                    lease.task_id,
+                    lease.path,
+                    lease.created_at,
+                    lease.released_at,
+                ),
+            )
+
+    def active_for_task(self, task_id: str) -> WorktreeLease | None:
+        """这个任务的**活跃**租约；已释放或没有就是 `None`（只读，观测用）。"""
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_LEASE_COLUMNS} FROM worktree_leases"
+                " WHERE task_id = ? AND released_at IS NULL",
+                (task_id,),
+            ).fetchone()
+        return None if row is None else _row_to_lease(row)
+
+    def release(self, task_id: str) -> bool:
+        """按任务释放活跃租约（`released_at` 落当前时刻）。没有活跃租约回 `False`。"""
+        with self._lock, self._conn:
+            updated = self._conn.execute(
+                "UPDATE worktree_leases SET released_at = ?"
+                " WHERE task_id = ? AND released_at IS NULL",
+                (time.time(), task_id),
+            )
+        return updated.rowcount > 0
+
+
+def _row_to_task(row: sqlite3.Row) -> Task:
+    """`sqlite3.Row` → `Task`。类型收敛集中在这里。"""
+    raw_key = row["trigger_key"]
+    raw_base = row["base_ref"]
+    raw_candidate = row["candidate_id"]
+    raw_error = row["error_code"]
+    raw_created = row["created_at"]
+    raw_started = row["started_at"]
+    raw_ended = row["ended_at"]
+    assert isinstance(raw_created, int | float) and not isinstance(raw_created, bool)
+    return Task(
+        task_id=str(row["task_id"]),
+        bot_id=str(row["bot_id"]),
+        trigger=str(row["trigger"]),
+        trigger_key=str(raw_key) if isinstance(raw_key, str) else None,
+        prompt=str(row["prompt"]),
+        base_ref=str(raw_base) if isinstance(raw_base, str) else None,
+        state=str(row["state"]),
+        candidate_id=str(raw_candidate) if isinstance(raw_candidate, str) else None,
+        error_code=str(raw_error) if isinstance(raw_error, str) else None,
+        created_at=float(raw_created),
+        started_at=float(raw_started) if isinstance(raw_started, int | float) else None,
+        ended_at=float(raw_ended) if isinstance(raw_ended, int | float) else None,
+    )
+
+
+def _row_to_lease(row: sqlite3.Row) -> WorktreeLease:
+    """`sqlite3.Row` → `WorktreeLease`。类型收敛集中在这里（同 `_row_to_task`）。"""
+    raw_created = row["created_at"]
+    raw_released = row["released_at"]
+    assert isinstance(raw_created, int | float) and not isinstance(raw_created, bool)
+    return WorktreeLease(
+        lease_id=str(row["lease_id"]),
+        bot_id=str(row["bot_id"]),
+        task_id=str(row["task_id"]),
+        path=str(row["path"]),
+        created_at=float(raw_created),
+        released_at=float(raw_released) if isinstance(raw_released, int | float) else None,
     )

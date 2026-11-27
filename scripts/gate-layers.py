@@ -145,6 +145,21 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "starlette",
         "uvicorn",
     ),
+    # S10：派活编排。L3 纪律（S10 D13）：只向下（agent/ + storage/ + domain/ + frames），
+    # `WorktreeService` 由 app 注入——**不许** import 任何同层 handler，也不碰框架与页面。
+    "orchestrator.py": (
+        "postel_studio.api.app",
+        "postel_studio.api.gateway",
+        "postel_studio.api.server",
+        "postel_studio.api.repository",
+        "postel_studio.api.bots",
+        "postel_studio.api.worktrees",
+        "postel_studio.api.agents",
+        "postel_studio.web",
+        "fastapi",
+        "starlette",
+        "uvicorn",
+    ),
     # ---- L4：页面（被 app import，自己不许反向 import api）----
     "web/assets.py": ("postel_studio.api",),
     # ---- 包入口与包标记：登记为「不设 forbiddin 列表」，但必须被登记 ----

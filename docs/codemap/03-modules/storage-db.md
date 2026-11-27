@@ -1,14 +1,14 @@
 # 03 · storage-db — `src/postel_studio/storage/db.py`
 
-> 层 L0（**碰磁盘**）· 376 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
+> 层 L0（**碰磁盘**）· 652 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
 
 ## 职责
 
-内核的本地状态库 `state.db`：连接、**schema 版本与迁移**、`repos` 与 `bots`（S6）表的读写。
+内核的本地状态库 `state.db`：连接、**schema 版本与迁移**、四张表的读写——
+`repos`（S3）、`bots`（S6）、`tasks` 与 `worktree_leases`（S10）。
 
 - **只写在状态根**（`~/.postel/state.db`，`POSTEL_HOME` 覆盖）。**绝不**写进用户仓库（S3 禁止事项）。
-- S3 只有 `repos`；S6 加了第二张表 `bots`（v3）。Task / Candidate / WorktreeLease 仍是后续切片，
-  **不要提前建表**（建错的表比没有表更难改回来）。
+- S10 的 `tasks.candidate_id` 列**先建、恒 NULL**（S11 才有值）——建表时就把列占住，S11 不用再迁移。
 - 用**标准库 `sqlite3`**，不引入 ORM / 迁移框架（S3 DoD：不新增依赖）。
 
 文件名的事实源在 `storage/paths.py:28/61`（`STATE_DB_FILE` / `state_db_file()`），本模块只是消费者。
@@ -17,33 +17,44 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `SCHEMA_VERSION` | 32 | `3`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`） | `migrate`、测试 |
-| `_MIGRATIONS` | 40 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
-| `_COLUMNS` | 78 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
-| `state_db_path()` | 81 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
-| `_connect(path)` | 86 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
-| `migrate(conn, *, path_for_chmod)` | 99 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600` | `open_state_db` |
-| `open_state_db(path=None)` | 114 | 建目录 → 打开 → 迁移；失败关连接再抛 | `RepoStore` |
-| `RepoStore` | 130 | `repos` 表的读写门面（带锁） | `api/app.py`、`api/repository.py` |
-| `RepoStore.__init__(path=None)` | 138 | 打开库；`path=None` 表示用状态根 | `app.create_app` |
-| `RepoStore.path`（property） | 128 | 这份 store 打开的库文件路径（只读） | 测试 |
-| `RepoStore.close()` / `__enter__` / `__exit__` | 133/138/141 | 关闭；`with` 支持 | 测试、将来的 server 收场 |
-| `RepoStore.list()` | 161 | 全部仓库，`ORDER BY added_at, repo_id`（**输出确定**） | `repo.list` |
-| `RepoStore.get(repo_id)` | 169 | 按 id 取，没有给 `None` | `repo.get`（S4 入口） |
-| `RepoStore.upsert(repo)` | 179 | 绑定写库：同路径**不产生第二行**，且**不改写已有 `repo_id`**；返回落库后的记录 | `repo.bind` |
-| `_row_to_repo(row)` | 251 | `sqlite3.Row` → `Repo`，类型收敛只在这一处 | 内部 |
-| `_BOT_COLUMNS` | 281 | `bots` 的列清单（同 `_COLUMNS` 的理由：只写一份） | `BotStore` |
-| `BotStore` | 284 | `bots` 表的读写门面（带锁）：`list_for_repo` / `get` / `insert` / `set_permission`（S8） | `api/app.py`、`api/bots.py` |
-| `BotStore.list_for_repo(repo_id)` | 306 | 某仓库全部 Bot，`ORDER BY created_at, bot_id`（确定性） | `bot.list` |
-| `BotStore.get(bot_id)` | 315 | 按复合主键取，没有给 `None` | `memory.charter.get` |
-| `BotStore.insert(bot)` | 323 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:create`（S8 起；S6 的播种已删） |
-| `BotStore.set_permission(bot_id, permission)` | 340 | **S8**：只改 `permission` 一列并回读；行不存在 → `None`（码由调用方翻） | `bot.set_permission` |
-| `_row_to_bot(row)` | 361 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
-| `open_store(path=None)` | 271 | `with` 版工厂（异常路径也关连接） | 暂无生产调用方（测试与将来的 CLI） |
+| `SCHEMA_VERSION` | 41 | `4`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`） | `migrate`、测试 |
+| `_MIGRATIONS` | 49 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
+| `_COLUMNS` | 121 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
+| `state_db_path()` | 124 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
+| `_connect(path)` | 129 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
+| `migrate(conn, *, path_for_chmod)` | 142 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600` | `open_state_db` |
+| `open_state_db(path=None)` | 157 | 建目录 → 打开 → 迁移；失败关连接再抛 | `RepoStore` |
+| `RepoStore` | 173 | `repos` 表的读写门面（带锁） | `api/app.py`、`api/repository.py` |
+| `RepoStore.__init__(path=None)` | 181 | 打开库；`path=None` 表示用状态根 | `app.create_app` |
+| `RepoStore.path`（property） | 187 | 这份 store 打开的库文件路径（只读） | 测试 |
+| `RepoStore.close()` / `__enter__` / `__exit__` | 192/197/200 | 关闭；`with` 支持 | 测试、将来的 server 收场 |
+| `RepoStore.list()` | 204 | 全部仓库，`ORDER BY added_at, repo_id`（**输出确定**） | `repo.list` |
+| `RepoStore.get(repo_id)` | 212 | 按 id 取，没有给 `None` | `repo.get`（S4 入口） |
+| `RepoStore.upsert(repo)` | 222 | 绑定写库：同路径**不产生第二行**，且**不改写已有 `repo_id`**；返回落库后的记录 | `repo.bind` |
+| `_row_to_repo(row)` | 294 | `sqlite3.Row` → `Repo`，类型收敛只在这一处 | 内部 |
+| `open_store(path=None)` | 314 | `with` 版工厂（异常路径也关连接） | 暂无生产调用方（测试与将来的 CLI） |
+| `_BOT_COLUMNS` | 324 | `bots` 的列清单（同 `_COLUMNS` 的理由：只写一份） | `BotStore` |
+| `BotStore` | 327 | `bots` 表的读写门面（带锁）：`list_for_repo` / `get` / `insert` / `set_permission`（S8） | `api/app.py`、`api/bots.py` |
+| `BotStore.list_for_repo(repo_id)` | 349 | 某仓库全部 Bot，`ORDER BY created_at, bot_id`（确定性） | `bot.list` |
+| `BotStore.get(bot_id)` | 358 | 按复合主键取，没有给 `None` | `memory.charter.get`、`orchestrator._channel_for` |
+| `BotStore.insert(bot)` | 366 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:create`（S8 起；S6 的播种已删） |
+| `BotStore.set_permission(bot_id, permission)` | 383 | **S8**：只改 `permission` 一列并回读；行不存在 → `None`（码由调用方翻） | `bot.set_permission` |
+| `_row_to_bot(row)` | 404 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
+| `TaskStore` | 431 | **S10**：`tasks` 表的读写门面（带锁）：`insert` / `get` / `active_for_bot` / `transition` / `mark_interrupted` | `orchestrator.py`、`api/app.py` |
+| `TaskStore.insert(task)` | 454 | 插入 queued 行；撞 `tasks_active_per_bot` 索引抛 `IntegrityError`（BUSY 的**数据级后备锁**，D5） | `orchestrator.dispatch` |
+| `TaskStore.get(task_id)` | 476 | 按主键取，没有给 `None` | `orchestrator.status` / `cancel` / `_finish` |
+| `TaskStore.active_for_bot(bot_id)` | 484 | 该 Bot 的活跃任务（`state IN ('queued','running')`），没有给 `None` | `orchestrator.dispatch` 的 BUSY 预检 |
+| `TaskStore.transition(task_id, state, error_code=None)` | 494 | **唯一的迁移入口**（D6）：`UPDATE … WHERE state=<from>` 原子完成，竞态输家拿 `None`；非法迁移直接 `ValueError`（状态机是表的守卫，先于 SQL） | `orchestrator` 全部状态变化 |
+| `TaskStore.mark_interrupted()` | 538 | **S10 D7**：把库里遗留的活跃任务（queued + running）标 `interrupted`；返回行数。构造 `Orchestrator` 时调一次 | `Orchestrator.__init__`（重启记账） |
+| `LeaseStore` | 555 | **S10**：`worktree_leases` 表的读写门面：`insert` / `active_for_task` / `release` | `orchestrator._run` |
+| `LeaseStore.insert(lease)` | 578 | 插入租约；撞 `leases_active_per_bot` 索引抛 `IntegrityError`（每 Bot 活跃租约唯一） | `orchestrator._run` |
+| `LeaseStore.active_for_task(task_id)` | 593 | 只读：这个任务的租约还活跃吗（测试轮询用） | `orchestrator`、测试 |
+| `LeaseStore.release(task_id)` | 603 | `released_at = now`（只对活跃行）；返回是否真的释放了 | `orchestrator._run` 的 `finally` |
+| `_row_to_task(row)` / `_row_to_lease(row)` | 614/640 | `sqlite3.Row` → `Task` / `WorktreeLease`（类型收敛只在这一处） | 内部 |
 
 ## 关键决策与理由
 
-### schema 演进：v1 → v2（S3.5）→ v3（S6）
+### schema 演进：v1 → v2（S3.5）→ v3（S6）→ v4（S10）
 
 ```sql
 -- v1（S3）
@@ -83,6 +94,51 @@ CREATE TABLE bots (
 - `UNIQUE (repo_id, name)` 是 06 §2.2「同一 repo 下 name 唯一」的落点；`bot_id` 是复合主键，
   **天然按仓库隔离**。
 - 迁移只 `CREATE TABLE`，老库（v2）升级后 `repos` 数据原样还在（D11 #12 的真库测试）。
+
+```sql
+-- v4（S10 D5，一次建齐两表 + 两个部分唯一索引）
+CREATE TABLE tasks (
+    task_id      TEXT PRIMARY KEY,
+    bot_id       TEXT NOT NULL REFERENCES bots(bot_id) ON DELETE CASCADE,
+    trigger      TEXT NOT NULL,
+    trigger_key  TEXT,
+    prompt       TEXT NOT NULL,
+    base_ref     TEXT,
+    state        TEXT NOT NULL,
+    candidate_id TEXT,              -- 先建、S10 恒 NULL（S11 才有值）
+    error_code   TEXT,
+    created_at   REAL NOT NULL,
+    started_at   REAL,
+    ended_at     REAL
+);
+CREATE UNIQUE INDEX tasks_active_per_bot ON tasks (bot_id) WHERE state IN ('queued', 'running');
+CREATE UNIQUE INDEX tasks_trigger_key   ON tasks (bot_id, trigger, trigger_key) WHERE trigger_key IS NOT NULL;
+CREATE TABLE worktree_leases (
+    lease_id    TEXT PRIMARY KEY,
+    bot_id      TEXT NOT NULL REFERENCES bots(bot_id) ON DELETE CASCADE,
+    task_id     TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+    path        TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    released_at REAL
+);
+CREATE UNIQUE INDEX leases_active_per_bot ON worktree_leases (bot_id) WHERE released_at IS NULL;
+```
+
+- **两个部分唯一索引是 BUSY 的数据级后备锁**（S10 D5）：orchestrator 的「查活跃 → 插入」
+  是两步，两个并发 dispatch 都可能通过检查；`tasks_active_per_bot` 让第二个 `INSERT`
+  当场抛 `IntegrityError` → `BUSY`。检查只是**提前给出友好错误**，正确性靠索引。
+  反向锁：`tests/test_reverse_checks.py` 的 S10 #2（**组合注入**：删掉 orchestrator 的
+  活跃检查 + 删掉索引，BUSY 测试必须红——实测只删检查时索引会兜住，测试保持绿，所以注入必须两处一起）。
+- `candidate_id` 先建列：S11 加列又是一版迁移，能占住就占住；恒 `NULL` 不撒谎。
+- `leases_active_per_bot` 照 06 §2.5 原文：一个 Bot 同时最多一个活跃工作区租约。
+
+### `TaskStore.transition` 必须同时拿锁**和**连接（T44 的实测教训）
+
+第一版只写了 `with self._lock`，忘了 `self._conn`——`UPDATE` 开的写事务**永不提交**，
+其它连接的任何写操作都 `database is locked`。症状极隐蔽：测试单跑全绿、真实服务里
+第一个任务之后所有写都冻住。修法是 `with self._lock, self._conn:`（连接的 with 语义
+= 提交/回滚事务）。**通用**：sqlite3 的 `Connection` 上下文管理器管事务，不管连接的
+生命周期；手写锁管并发，也**替代不了**事务边界。
 
 **v2 迁移的措辞**：`_MIGRATIONS` 只 append 一条 `ALTER TABLE`。**不要**在这里加
 `UPDATE repos SET repo_id = …`——D3 明确不重写历史 id（详见 08 §3）。
@@ -136,14 +192,16 @@ id 变成 URL 哈希了，但库里仍是路径哈希，**界面与本刀算出�
 
 | 如果你要… | 还波及 |
 |---|---|
-| 加表 / 改列 | `_MIGRATIONS` **append** 一版 + `SCHEMA_VERSION` +1 + `_COLUMNS`（若新列要读）；**必须**补一条"手工建旧库 → migrate → 断言数据未变"的真库测试（v2/v3 就是这么测的） |
+| 加表 / 改列 | `_MIGRATIONS` **append** 一版 + `SCHEMA_VERSION` +1 + `_COLUMNS`（若新列要读）；**必须**补一条"手工建旧库 → migrate → 断言数据未变"的真库测试（v2/v3/v4 就是这么测的） |
 | 改 `bots` 表 | `api/bots.py` 的 8 字段载荷 + `tests/test_bot_charter.py` + 06 §2.2；`charter_rev` 的写路径属于 S22 |
+| 改 `tasks` / `worktree_leases` | 06 §2.3 / §2.5 + `orchestrator.py` + `tests/test_dispatch.py`；状态机的事实源在 `domain/models.py` 的 `TASK_TRANSITIONS` |
 | 改 `upsert` 的冲突规则 | 验收 4（重复绑定一行）+ `test_rebinding_*` + `test_double_bind_is_idempotent_row_and_id` |
 | 把 `repo_id` 加回规则 1 的 `SET` | **禁止**（S3.5 D1 / U9）；反向锁是 `test_each_half_of_u9_alone_*` + 组合注入 |
 | 换回 `INSERT … ON CONFLICT` | **不要**，见 T26：它不会更新次级唯一键对应的列 |
 | 让 `state.db` 落在别处（例如仓库里） | **禁止**（S3 禁止事项）；文件名的事实源在 `paths.py` |
 | 引入 SQLAlchemy / alembic | **禁止**（S3 DoD：不新增依赖） |
 | 把 `sqlite3.Row` 漏到本模块以外 | **不要**：类型收敛在 `_row_to_repo`，帧层只该看到 `Repo` |
+| 在 `transition` 之外写 `state` 列 | **禁止**（S10 D6）：状态机迁移必须原子，竞态输家拿 `None` 而不是覆盖 |
 
 ## 测试
 
@@ -159,3 +217,7 @@ id 变成 URL 哈希了，但库里仍是路径哈希，**界面与本刀算出�
 | `tests/test_bind.py::test_bind_writes_nothing_into_the_user_repository` | 只写状态根 |
 | `tests/test_bind.py::test_list_returns_array_payload_with_camel_case_keys` | 落盘 `snake_case` / 帧层 `camelCase` |
 | `tests/test_bot_charter.py::test_v2_database_upgrades_to_v3_and_keeps_repos` | S6 D11 #12：真库 v2→v3，repos 行原样 |
+| `tests/test_dispatch.py::test_illegal_transitions_are_refused` | S10 D6：状态机表拒绝非法迁移 |
+| `tests/test_dispatch.py::test_taskstore_transition_loses_race_returns_none` | T44 的镜像：transition 原子、竞态输家拿 `None` |
+| `tests/test_dispatch.py::test_restart_marks_running_and_queued_interrupted` | D7：重启把遗留活跃任务标 `interrupted` |
+| `tests/test_dispatch.py::test_second_dispatch_while_active_is_busy` | D5：BUSY（索引兜底，反向注入 S10 #2） |

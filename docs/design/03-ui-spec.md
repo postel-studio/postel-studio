@@ -199,6 +199,45 @@ Insights（v2）——11 个子页，含真实空态：
 - 版本号、能力名都是 Agent 报的字符串：一律 `textContent`，全页零 `innerHTML`；
 - 断连回 `idle` 并清空能力清单，**不**留着上一次的结果装新鲜；重连后要重新点检测。
 
+### 4.6 派活卡片（产品区 · S10）
+
+主区在 `#workspace` **之后**新增一节 `#task`（不重排既有布局）。它显示**选中 Bot 的
+最近一次任务**：`task.dispatch` 的应答与 `task.updated` 事件都写到这里；`taskId` 不匹配
+的事件直接忽略（页面只跟一个任务）。Q3 裁决：入口在**主区**（选中 Bot 后派活），
+不是每个 Bot 行上——左栏行要保持可扫读，操作集中在主区与 S6 建卡片的先例一致。
+
+**状态机**（`#task[data-state]`，显隐只由 CSS 决定，JS 只改属性）：
+
+| 状态 | 何时 | 用户看到 |
+|---|---|---|
+| `idle` | 未选 Bot / 切仓库 / 断连 | 「选择一个 Bot 后派活」；表单与详情**都收起** |
+| `ready` | 选了 Bot 且无活跃任务 | 派活表单（textarea + 按钮）可见 |
+| `running` | 派活成功或收到 `running` 事件 | 「正在执行…」+ taskId + **取消按钮**；**表单收起**——页面先不给第二次派活的入口（BUSY 由内核兜底，但 UI 不该诱导必败操作） |
+| `done` | `succeeded` / `cancelled` | 状态行 + 结束时间；取消按钮消失，表单回到可见 |
+| `error` | `failed` / `interrupted` | 按**码**映射的一行错误；按钮变「重试」入口（表单可见） |
+
+**错误文案**（S10 往全局 `ERROR_TEXT` 加了两条，其余复用全局表）：
+
+| 码 | 文案 |
+|---|---|
+| `BUSY` | 该 Bot 已有任务在跑 |
+| `PERMISSION_DENIED` | 这个 Bot 是 L0（只读），不能派活 |
+
+**DOM 契约**（id 即契约，`s10_dispatch.mjs` 按它断言）：
+
+`#task` · `#task-title` · `#task-state` · `#task-form` · `#task-prompt` · `#task-dispatch` ·
+`#task-cancel` · `#task-error` · `#task-details` · `#task-id` · `#task-status-line`
+
+**其他交互约束**：
+
+- 派活按钮请求在途时禁用（回包即恢复）——不防重入的话双击会发出两次 dispatch，
+  第二个吃 `BUSY`，比按钮灰掉更吵；
+- 订阅是**连接级**的：`onopen` 时发 `subscribe`（`task.updated`）；断连后派活卡片
+  回 `idle` 并清 taskId——任务属于上一次连接，内核重启后它的 worker 已经不在了；
+- taskId 与 prompt 都是用户数据：`textContent`，零 `innerHTML`；
+- 取消在 `running` 态是**异步**的：点了之后状态行提示「正在取消…」，真正的
+  `cancelled` 由 `task.updated` 事件送到（ACP 实测 ~0.3s，UI 不假装它已完成）。
+
 ## 5. 交互约束
 
 - 主题切换：浅/暗两套 token，**必须**同时校验两套下的对比度。
@@ -212,7 +251,7 @@ Insights（v2）——11 个子页，含真实空态：
 |---|---|---|---|
 | Q1 | 变更收件箱入口 | ① 一级 tab ② 左栏仓库条目下 ③ Code 页侧栏卡片 | 决定信息架构 |
 | Q2 | 智能角色叫 Bot 还是 Agents | — | 决定左栏与文案；与 GitHub Agents tab 的区分 |
-| Q3 | 「派活给 Bot」入口位置 | ① 主区右上 ② 每个 Bot 行上 | 决定主要操作路径 |
+| ~~Q3~~ | ~~「派活给 Bot」入口位置~~ | ✅ **已裁决（S10）**：主区派活卡片（§4.6）——选中 Bot 后在主区操作，与 S6/S9 的主区卡片先例一致；左栏 Bot 行只负责选中，不放操作 | 已实现于 `#task` |
 
 ## 7 验收口径
 
