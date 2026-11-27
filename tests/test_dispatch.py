@@ -23,7 +23,7 @@ from postel_studio.api import frames
 from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
 from postel_studio.api.worktrees import WorktreeService
-from postel_studio.domain.models import Task
+from postel_studio.domain.models import Candidate, Task
 from postel_studio.orchestrator import EventHub, Orchestrator
 from postel_studio.storage.db import BotStore, LeaseStore, RepoStore, TaskStore
 from postel_studio.storage.paths import worktree_dir
@@ -79,6 +79,21 @@ def _init_repo(path: Path) -> Path:
 # ---------------------------------------------------------------------------
 # 假会话与假工作区：orchestrator 的两个接缝（S10 D13 的注入面）
 # ---------------------------------------------------------------------------
+
+
+class NoCandidateMaker:
+    """S10 的既有测试不关心候选：假接缝始终回 None（S11 的测试才注入真服务）。"""
+
+    def snapshot_base(self, worktree_path: str) -> str:
+        return "0" * 40
+
+    def emerge(
+        self, *, task: Task, repo_id: str, worktree_path: str, base_sha: str
+    ) -> Candidate | None:
+        return None
+
+    def discard(self, candidate_id: str) -> None:
+        return None
 
 
 class FakeSession:
@@ -211,6 +226,7 @@ def orchestrator(
             tasks,
             leases,
             acquirer,
+            NoCandidateMaker(),
             EventHub(),
             session_factory=factory,  # type: ignore[arg-type]
         )
@@ -562,7 +578,7 @@ def test_real_integration_creates_file_and_dirty_worktree(stores, tmp_path: Path
     BotService(bots, repos).create({"repoId": repo_id, "name": PRESET})
     bot_id = f"{repo_id}/{PRESET}"
     worktrees = WorktreeService(repos, bots)
-    orch = Orchestrator(bots, tasks, leases, worktrees, EventHub())
+    orch = Orchestrator(bots, tasks, leases, worktrees, NoCandidateMaker(), EventHub())
     data = _dispatch_ok(orch, bot_id)
     task_id = str(data["taskId"])
     final = _wait_terminal(tasks, task_id, timeout=TERMINAL_WAIT_S)

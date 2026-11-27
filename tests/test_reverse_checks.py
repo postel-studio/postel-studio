@@ -441,6 +441,35 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     # S10 #2 是**组合注入**（见下方 COMPOSITE_INJECTIONS）：BUSY 有两道锁（D5），只拆
     # 其中一道时另一道必须独立兜住——所以"单拆检查"的注入**不该**让测试红；两道一起拆才红。
+    # ---- S11：候选的四条红线 ----
+    (
+        "postel_studio/domain/models.py",
+        '    safe_name = _BRANCH_SAFE.sub("-", name.lower()) or "unknown"',
+        "    safe_name = name.lower() or 'unknown'  # 注入：分支名不再清洗",
+        _target_test(
+            "test_candidate_branch_name_is_predictable_and_sanitized", file="test_candidate"
+        ),
+        "S11 #1：候选分支名直接用 Bot 名（坏数据能拼出非法 refname）",
+    ),
+    (
+        "postel_studio/orchestrator.py",
+        "            base_sha = self._candidates.snapshot_base(path)"
+        "  # S11 D2：会话之前，复用也不串任务",
+        '            base_sha = ""  # 注入：会话前不快照 HEAD',
+        _target_test("test_second_task_on_reused_worktree_diff_is_isolated", file="test_candidate"),
+        "S11 #2：复用工作区时不再隔离每个任务的 diff（D2）",
+    ),
+    # S11 #3 是组合注入（见 COMPOSITE_INJECTIONS）：no-change 有两道守卫，
+    # 只拆一道时另一道兜住——与 S10 #2 的 BUSY 双锁同一个教训（T45）。
+    (
+        "postel_studio/orchestrator.py",
+        "            self._candidates.discard(candidate.candidate_id)",
+        "            pass  # 注入：竞态输家不删刚插入的候选",
+        _target_test(
+            "test_transition_loser_discards_just_inserted_candidate", file="test_candidate"
+        ),
+        "S11 #4：cancel 赢了竞态还留下指向已取消任务的候选行（D6）",
+    ),
 )
 
 
@@ -487,7 +516,33 @@ _OLD_ID_ALGORITHM: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+# S11 #3：两道「无事可做」守卫必须一起拆，单独拆任一道测试仍是绿的（T45）。
+_S11_NO_CHANGE_GUARDS: tuple[tuple[str, str, str], ...] = (
+    (
+        "postel_studio/candidates.py",
+        "        if not dirty and head == base_sha:\n            return None",
+        "        if False:\n            return None",
+    ),
+    (
+        "postel_studio/candidates.py",
+        "        if head == base_sha:\n            return None",
+        "        if False:\n            return None",
+    ),
+    (
+        "postel_studio/candidates.py",
+        "        if stat is None or stat.files_changed == 0:\n            return None",
+        "        if False:\n            return None",
+    ),
+)
+
 COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], ...] = (
+    (
+        _S11_NO_CHANGE_GUARDS,
+        _target_test(
+            "test_no_change_task_stays_succeeded_without_candidate", file="test_candidate"
+        ),
+        "S11 #3（组合）：两道 no-change 守卫一起拆 → 空任务不得仍无候选",
+    ),
     (
         _OLD_ID_ALGORITHM + _UPSERT_COVERS_ID,
         _target_test("test_rebinding_after_origin_added_updates_the_row"),
