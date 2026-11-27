@@ -16,6 +16,7 @@
   │     api/bots.py       Bot 与 charter 编排（S6）│  不碰 fastapi
   │     api/worktrees.py  工作区编排（S7）        │  不碰 fastapi
   │     api/agents.py     Agent 通道编排（S9）    │  不碰 fastapi
+  │     orchestrator.py   派活编排 + EventHub（S10）│  不碰 fastapi、不 import 同层 handler
   ├─────────────────────────────────────────────┤
   │ L2  api/server.py     进程生命周期            │  唯一拥有 socket / 信号
   ├─────────────────────────────────────────────┤
@@ -42,6 +43,10 @@ S7 还顺手把两条**共享判定**下沉了一层：`ref_name_ok`（→ `doma
 **S9 加了三个**：`agent/acp_client.py` 与 `agent/registry.py`（L0，**第二条子进程线**——与 git 的
 只读探测分开登记；`05 §3.3` 的「字面数组、无 shell、不展开 `~`/`$VAR`」同样适用于它），以及
 `api/agents.py`（L3，同款 handler）。`agent/` 这一层在 §5 的表里早就预告过，S9 只是把它兑现。
+**S10 加了一个**：`orchestrator.py`（L3，同款纪律）。它 Down-import `agent/` / `storage/` /
+`domain/` / `frames`，但**不 import 任何同层 handler**（D13）：需要 `WorktreeService` 时由
+`app` 装配注入（`WorktreeAcquirer` Protocol），环靠构造消掉——与 §3 的注入纪律同一条路，
+只是这次连「同层」都没有例外。
 
 **规则一句话：只能向下 import，不能向上；同层之间尽量不 import（唯一例外见 §3）。**
 
@@ -58,6 +63,7 @@ graph TD
     BT["api/bots.py<br/>Bot 与 charter（S6）"]
     WT["api/worktrees.py<br/>工作区编排（S7）"]
     AGT["api/agents.py<br/>Agent 通道编排（S9）"]
+    ORC["orchestrator.py<br/>派活编排 + EventHub（S10）"]
     AS["web/assets.py<br/>页面"]
     DB["storage/db.py<br/>state.db"]
     PA["storage/paths.py<br/>状态根/文件 IO"]
@@ -96,6 +102,12 @@ graph TD
     AGT --> AC
     AGT --> AR
     AGT --> FR
+    APP -->|"构造 Orchestrator<br/>并注入 WorktreeService"| ORC
+    ORC --> DB
+    ORC -->|"worker 线程里<br/>建会话/发 prompt"| AC
+    ORC --> AR
+    ORC --> DM
+    ORC --> FR
     DB --> PA
     DB --> DM
     PA -.->|"函数内 import<br/>(版本号)"| CLI
@@ -136,6 +148,13 @@ graph TD
 | `agents → agent/acp_client`（S9） | 起进程、握手、回收 | 否 |
 | `agents → agent/registry`（S9） | 读通道表与命令 | 否 |
 | `agents → frames`（S9） | 抛 `FrameError`（与 repository / bots / worktrees 同款） | 否 |
+| `app → orchestrator`（S10） | 构造 `Orchestrator`（TaskStore/LeaseStore/EventHub + `WorktreeService` 注入） | 否 |
+| `orchestrator → db`（S10） | `TaskStore` / `LeaseStore` / `BotStore` 读写 | 否 |
+| `orchestrator → agent/acp_client`（S10） | worker 线程里建会话、发 prompt、取消、回收 | 否 |
+| `orchestrator → agent/registry`（S10） | `_channel_for`：`bot.agentKind` 优先，缺省第一条通道 | 否 |
+| `orchestrator → domain`（S10） | `Task` / `WorktreeLease` / `ulid` / `prompt_ok` / 状态机 / `permission_covers` | 否 |
+| `orchestrator → frames`（S10） | 抛 `FrameError`（同款） | 否 |
+| **`orchestrator → worktrees`** | **不存在，也不许有**（D13）：只持有 `WorktreeAcquirer` Protocol，实例由 `app` 注入 | — |
 | **`gateway → repository`** | **不存在，也不许有**：网关只收到 `Providers` 里的两个函数 | — |
 
 ### 2.0 S3 的分层要点：`repository` 在 L3，但它不认识 fastapi
@@ -189,6 +208,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | `api/repository.py` | `app` / `gateway` / `server` / `web` / `fastapi` / `starlette` / `uvicorn` |
 | `api/bots.py`（S6，L3） | `web`（被 app 装配、被 gateway 注入调用；碰页面就是反向） |
 | `api/agents.py`（S9，L3） | `web` + 同层其它 handler（`app` / `gateway` / `server` / `repository` / `bots` / `worktrees`） |
+| `orchestrator.py`（S10，L3） | `web` + 同层**全部** handler（`app` / `gateway` / `server` / `repository` / `bots` / `worktrees` / `agents`）——`WorktreeService` 靠 `WorktreeAcquirer` Protocol 注入（D13） |
 | `web/assets.py`（L4） | `api`（被 app import，反向即环） |
 
 两条比旧片段更严的地方：
@@ -213,7 +233,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | ~~`git/`~~ → **已出现**：`gitops/`（S3） | L0（碰磁盘/子进程） | `api/repository.py` |
 | ~~`store/`~~ → **已出现**：`storage/db.py`（S3，**有意不叫 `store/`**：`RepoStore` 是类名，包名会让"store 模块"和"store 对象"混淆） | L0 | `api/app.py`、`api/repository.py` |
 | ~~后续 bot 表~~ → **已出现**（S6）：`bots` | `storage/db.py` 的 `_MIGRATIONS` v3 | `api/bots.py` |
-| 后续 task/candidate 表 | 加到 `storage/db.py` 的 `_MIGRATIONS` | |
+| ~~后续 task/candidate 表~~ → **已出现（S10）**：`tasks` + `worktree_leases`（`_MIGRATIONS` v4）；candidate 表仍是 S11 的事 | | `orchestrator.py` |
 | ~~`agent/`（ACP 客户端、子进程）~~ → **已出现（S9）**：`agent/acp_client.py`（协议）+ `agent/registry.py`（通道表） | L0 | `api/agents.py` |
 | `permission/`（纯函数判定） | L1（**无 IO**） | 执行前 |
 | ~~`memory/`（charter 与上下文注入）~~ → **S6 拆成两处**：charter 文件 IO 在 `storage/paths.py`（L0）、编排在 `api/bots.py`（L3） | 不新增包 | `storage/paths.py`、`api/bots.py` |

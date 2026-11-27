@@ -1,6 +1,6 @@
 # 03 · frames — `src/postel_studio/api/frames.py`
 
-> 层 L1 · 121 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol §2.2](../../design/02b-protocol.md)
+> 层 L1 · 126 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol §2.2](../../design/02b-protocol.md)
 
 ## 职责
 
@@ -24,9 +24,10 @@
 | `FrameError(code, message, reply_id)` | 37 | 帧不合法。`reply_id is None` = 「有错但没 id 可回」 |
 | `ReqFrame` | 48 | frozen dataclass：`id` / `method` / `params` |
 | `decode_incoming(text)` | 56 | `str → ReqFrame`，失败抛 `FrameError` |
-| `encode_response(id, seq=, data)` | 97 | 成功帧 |
-| `encode_error(id, code, message)` | 106 | 失败帧 |
-| `encode_event(topic, seq=, data)` | 115 | 推送帧（**S2 从未被调用**） |
+| `encode_response(id, seq=, data)` | 102 | 成功帧 |
+| `encode_error(id, code, message)` | 111 | 失败帧 |
+| `encode_event(topic, seq=, data)` | 120 | 推送帧（**S10 起有真实调用方**：网关的 pump task） |
+| `KNOWN_TOPICS` | 39 | **S10**：可订阅 topic 白名单（`("task.updated",)`）；`subscribe` 的入参校验与 `_topics_of` 都读它 |
 
 ## 关键决策与理由
 
@@ -79,12 +80,15 @@ if not isinstance(params, dict):
 **方法自己负责校验 `params` 里的字段**（frames 只看「是不是对象」）。
 这在方法变多时会出现重复校验 → 届时再引入 schema helper，**现在不要提前抽象**。
 
-### `encode_event` 至今未被调用
+### `encode_event` 的第一个真实调用方（S10 D11 兑现 U7）
 
-S2 不发事件。它存在只是为了把**形状定死**（02b §2.2），供后续切片直接用。
+S2 只是定形状，S10 的网关事件泵开始真正用它：`task.updated` 事件经编排器的 `EventHub`
+投递后由 pump 编码发出。U7 预言的「形状问题」没有出现——形状当初定对了；顺带补上的
+集成测试是 `tests/test_dispatch.py::test_evt_reaches_subscriber_only`（订了才收到）。
 
-> **它没有测试覆盖到调用方**，`test_frames.py` 只测了它的输出形状。
-> 后续实现订阅时，第一个使用者要顺带补集成测试。
+`KNOWN_TOPICS` 是**订阅白名单**：`subscribe` 收到名单外的 topic 回 `INVALID_PARAMS`，
+不静默忽略——客户端拼错 topic 名就该当场报错，而不是收不到事件还以为订阅生效了。
+新增 topic 必须 append 这里 + `07-api-contract §3`。
 
 ### JSON 输出用 `separators=(",", ":")`
 

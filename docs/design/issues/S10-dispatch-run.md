@@ -97,7 +97,7 @@ S10 consumes agent notifications and forwards nothing), `permission.check` as a 
 | 2 | agent cwd is the assigned worktree | `uv run pytest tests/test_dispatch.py -k cwd -v` (fake session records the cwd it was handed) |
 | 3 | worktree `git status` non-empty after success | covered by #1's assertions (the real integration checks `status --porcelain` in the worktree) |
 | 4 | failure yields a stable code, never a silent failed | `uv run pytest tests/test_dispatch.py -k failure -v` (fake session dies mid-prompt → `ADAPTER_UNAVAILABLE`) |
-| 5 | second concurrent dispatch gets `BUSY` | `uv run pytest tests/test_dispatch.py -k busy -v` |
+| 5 | second concurrent dispatch gets `BUSY` | `uv run pytest tests/test_dispatch.py -k busy -v` (the page deliberately offers **no** dispatch entry while running, so BUSY has no UI path by design - D11's card contract) |
 | 6 | page shows the transitions without reload | `node tools/acceptance/s10_dispatch.mjs` (real Chrome, real opencode) |
 | 7 | illegal transitions refused | `uv run pytest tests/test_dispatch.py -k transition -v` |
 | 8 | evt reaches a subscribed client, not an unsubscribed one | `uv run pytest tests/test_dispatch.py -k evt -v` |
@@ -110,7 +110,7 @@ S10 consumes agent notifications and forwards nothing), `permission.check` as a 
 | 2 | `test_session_cwd_is_the_acquired_worktree` |
 | 4 | `test_agent_death_marks_failed_with_stable_code`, `test_unknown_stop_reason_fails_closed` |
 | 5 | `test_second_dispatch_while_active_is_busy` |
-| 6 | `tools/acceptance/s10_dispatch.mjs` CHECK 1-18 |
+| 6 | `tools/acceptance/s10_dispatch.mjs` CHECK 1-24 |
 | 7 | `test_illegal_transitions_are_refused`, `test_taskstore_transition_loses_race_returns_none` |
 | 8 | `test_evt_reaches_subscriber_only`, `test_subscribe_replaces_and_validates_topics` |
 | - (D6) | `test_restart_marks_running_and_queued_interrupted` |
@@ -129,10 +129,18 @@ Estimate at spec time: **~950 lines / 8 files** (models ~110, db ~190, acp_clien
 orchestrator ~200, gateway ~110, frames ~15, app ~25, assets ~150). Cap 1000 / 12. Measured
 numbers go in the PR body; over-budget means splitting, not restating.
 
+Measured after implementation: **8 files / +1294 -23** — over the 1000 warning line. Rationale
+for continuing (04 §1.2.2's three dikes all hold: one user path, 3 public methods, ≤12 files):
+the three biggest surprises are `orchestrator.py` (+384, a new L3 module — the spec's ~200
+ignored the EventHub pub/sub and the thread-safety discipline it needs), `db.py` (+282, two
+stores plus v4 migration and a composite-injection-proof partial index), and
+`assets.py` (+175, the task card plus its five-state CSS machine). The structural justification
+and per-file numbers are reported in the PR body for the user to adjudicate.
+
 ## 7. Reverse injections
 
 - **S10 #1**: remove the `permission_covers` call from dispatch → `test_l0_bot_refused_before_any_execution` must go red. (Guards D4: the check is load-bearing, not decorative.)
-- **S10 #2**: drop the active-task check *and* the partial unique index → `test_second_dispatch_while_active_is_busy` must go red. (Guards D5's two locks: removing one alone must still be caught by the other.)
+- **S10 #2 (composite)**: remove the active-task check **and** the partial unique index together → `test_second_dispatch_while_active_is_busy` must go red. Removing *one* alone must keep the test green - the other lock covers it, and that redundancy is the point of D5's two locks (measured: the check-only injection leaves the test green, which is why this entry lives in `COMPOSITE_INJECTIONS`).
 
 ## 8. Measured evidence (OpenCode 1.19.6, probed 2026-11-27)
 

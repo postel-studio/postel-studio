@@ -1,6 +1,6 @@
 # 03 · gateway — `src/postel_studio/api/gateway.py`
 
-> 层 L3 · 199 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md)
+> 层 L3 · 309 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md) · [orchestrator](orchestrator.md)
 
 ## 职责
 
@@ -13,12 +13,17 @@ WebSocket 网关：**认证 → 接受 → 分派 → 回帧**。
 | `GATEWAY_PATH` | 39 | `"/gateway"`，路径前缀 | `server.gateway_path()` |
 | `TICKET_TTL_SECONDS` | 40 | `60.0` | `TicketRegistry` |
 | `CLOSE_FRAME_INVALID` | 42 | `4002` 关闭码 | `handler` |
-| `TicketRegistry` | 45 | 一次性 ticket 签发/消费 | `app.create_app` |
-| `ConnectionState` | 78 | 每连接的 `seq` 计数器（D4） | `handler` |
-| `Providers` | 87 | frozen dataclass，注入依赖（`health` / `repo_bind` / `repo_list` / `repo_branches` / `repo_diff` / S6 的 `bot_list` / `memory_charter_get` / S7 的 `worktree_acquire` / `worktree_list` / `worktree_release` / S8 的 `bot_create` / `bot_set_permission`） | `app.create_app` |
-| `active_connection_count()` | 113 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
-| `dispatch(method, params, providers)` | 119 | 方法表（**13 个分支**：S8 加了 `bot.create` / `bot.set_permission`） | `handler` |
-| `install(app, path, tickets, providers)` | 150 | 把 WS 路由挂到 app | `app.create_app` |
+| `SUBSCRIBE_METHOD` | 49 | **S10**：`"subscribe"`——连接级方法，**不进 `dispatch()`**（特判在 `handler` 里，D11） | `handler` |
+| `TicketRegistry` | 52 | 一次性 ticket 签发/消费 | `app.create_app` |
+| `ConnectionState` | 85 | 每连接的 `seq` 计数器（D4） | `handler` |
+| `Providers` | 94 | frozen dataclass，注入依赖（S3~S9 逐刀加的字段 + S10 的 `task_dispatch` / `task_status` / `task_cancel`，共 17 个业务入口） | `app.create_app` |
+| `EventHubLike` | 125 | **S10**：编排器 `EventHub` 的形状（Protocol）；网关不反向 import 编排器，T14 的同一纪律 | `install(..., hub=…)` |
+| `active_connection_count()` | 140 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
+| `dispatch(method, params, providers)` | 146 | 方法表（**19 个分支**：S10 加了 `task.dispatch` / `task.status` / `task.cancel`） | `handler` |
+| `_topics_of(params)` | 187 | **S10**：解析 `subscribe` 的 `topics`（白名单 = `frames.KNOWN_TOPICS`，非空；不合法回 `None`） | `handler` 的 subscribe 分支 |
+| `install(app, path, tickets, providers, hub=None)` | 204 | 把 WS 路由挂到 app；**S10 加了 `hub` 参数**（缺省 `None` 时 `subscribe` 回 `UNKNOWN_METHOD`，S2~S9 行为不变） | `app.create_app` |
+| `handler` 内的 `pump()` | 238 | **S10**：每连接的事件泵 task——从队列取 evt、经 `send_lock` 发出 | `handler` |
+| `handler` 内的 `send_frame()` | 244 | **S10**：经 `send_lock` 发一帧（res 与 evt 串行化，两个协程并发写同一条 WS 不保证原子） | `handler` |
 | `_ACTIVE` / `_ACTIVE_LOCK` | 73-74 | 活动连接表（模块级） | 内部 |
 
 ## 关键决策与理由
@@ -120,45 +125,68 @@ finally:
 
 `system.health` 与 `system.echo` **共用同一个计数器**，不另造。
 
-### `dispatch()` 现在有八个分支（S2 两个 + S3 两个 + S4/S5 各一 + S6 两个）
+### `dispatch()` 现在有 19 个分支，但每一行都是**转手**（S10 之后仍如此）
 
 ```python
-# api/gateway.py:111-129（真实代码的形状，别把业务写进来）
+# api/gateway.py:146-184（真实代码的形状，别把业务写进来）
 if method == "system.echo":
-    return params  # 通道自检
-if method == "system.health":
+    return params
+if method == "system.health":  # S2
     return providers.health()
-if method == "repo.bind":  # S3
-    return providers.repo_bind(params)
-if method == "repo.list":  # S3
-    return providers.repo_list()
-if method == "repo.branches":  # S4：参数只有 repoId
-    return providers.repo_branches(params)
-if method == "repo.diff":  # S5：repoId + base + head(+ maxChars)
-    return providers.repo_diff(params)
-if method == "bot.list":  # S6：一个仓库下的 Bot（空则惰性播种，D2）
-    return providers.bot_list(params)
-if method == "memory.charter.get":  # S6：charter 正文 + 内容哈希版本（D5）
-    return providers.memory_charter_get(params)
-raise FrameError(UNKNOWN_METHOD, ...)
+if method in {"repo.bind", "repo.list"}:  # S3
+    ...
+if method == "repo.branches":  # S4
+    ...
+if method == "repo.diff":  # S5
+    ...
+if method in {"bot.list", "memory.charter.get"}:  # S6
+    ...
+if method in {"bot.create", "bot.set_permission"}:  # S8
+    ...
+if method in {"worktree.acquire", "worktree.list", "worktree.release"}:  # S7
+    ...
+if method in {"agent.list", "agent.capabilities"}:  # S9
+    ...
+if method in {"task.dispatch", "task.status", "task.cancel"}:  # S10
+    ...
+raise frames.FrameError(frames.UNKNOWN_METHOD, ...)
 ```
 
-**故意不实现** `system.subscribe` —— 订阅机制属后续切片。
-未实现的方法返回 `UNKNOWN_METHOD`，**不要返回空成功**（客户端会以为订阅生效了）。
+（真实代码里每组是**独立的 `if`**、各做一次 `providers.X(params)` 转手；这里压成组只为读得动。）
 
-S3–S6 的六个业务分支都是**转手**：真正的实现在 `api/repository.py`（`RepositoryService`），
-由 `app.create_app()` 构造后经 `Providers` 注入。网关不认识"仓库/数据库/git"任何一个词。
+`if` 链已经远超当初「6~8 个就换 dict」的阈值，但 S10 的裁决仍然是「本刀只加三行、
+不顺手重构」（预算纪律）：19 行**每行只做一次字段访问**，重构的收益是省十几行，
+风险是动到全部既有方法的回归面。留给真正需要方法元数据（权限表、参数 schema）的切片。
 
-> **后续切片注意**：方法多到 6~8 个时，`if` 链应该改成注册表（dict）。
-> **S6 已经到 8 个分支**（阈值上沿）；S6 的裁决是"本刀只加两行、不顺手重构"（预算），
-> 下一个方法应当把 `if` 链换成 dict 注册表，但**不要**单独为这次重构开一刀。
+### `subscribe` 是连接级方法，不进 `dispatch()`（S10 D11）
 
-> ⚠️ `test_unknown_method_is_unknown_method_not_subscribe` 曾把 `repo.bind` 当"未实现"的反例。
-> S3 实现它之后反例改成 `bot.list` / `task.dispatch` / `agent.list` / `repo.branches` 等；
-> **S4 实现 `repo.branches` 后又拿掉了它**（现在反例是 `bot.list` / `task.dispatch` /
-> `agent.list` / `system.subscribe` / `system.echo.x`，5 个；`repo.diff` **不在**清单里，
-> S5 没有新增反例）。每实现一个方法，都要把它从
-> 那条反例清单里拿掉，否则测试红得莫名其妙。
+订阅状态**属于连接**（`sub_handle`），不属于方法表——`dispatch()` 的签名里没有「这条连接」，
+塞进去就得为它造全局状态。所以 `handler` 里特判一个 `SUBSCRIBE_METHOD`：
+
+- 不合法的 topics → `INVALID_PARAMS`（白名单 = `frames.KNOWN_TOPICS`，空集合也不合法）；
+- 重复 subscribe = **整体替换**（`hub.replace`），不是叠加；
+- 应答载荷是 `{"topics": [...已排序...]}`，让客户端知道现在订的是什么。
+
+`hub=None`（`install` 缺省）时 `subscribe` 回 `UNKNOWN_METHOD`——保持 S2~S9 的行为，
+测试与旧客户端不受影响；生产装配总传。
+
+### 事件泵 + 发送锁（S10 D11）
+
+`handler` 起一个 `pump()` task：编排器线程经 `EventHub` 把 evt 投进**这条连接**的
+`asyncio.Queue`，泵取出来用 `encode_event` 发出。**`send_lock` 串行化所有 `send_text`**：
+主循环发 res、泵发 evt，两个协程并发写同一条 WebSocket 在 ASGI 层不保证原子，帧交错
+就是协议灾难。evt 的 `seq` 与 res 共用同一个 `ConnectionState` 计数器（客户端的丢帧
+检测靠它跨帧连续）。
+
+`finally` 里三条清理缺一不可：`pumper.cancel()`、`hub.unsubscribe(sub_handle)`
+（**订阅随连接死**，不保存任何订阅状态——02b §2.3）、活动表删除。
+
+> ⚠️ `test_unknown_method_is_unknown_method_not_subscribe` 的反例清单随实现推进：
+> S3 时是 `bot.list` 等，S10 实现三个 task 方法后反例是 `task.list` / `candidate.list`
+> （仍属 07 §2.4/§2.5、本刀没做的方法）。**每实现一个方法，都要把它从那条反例清单里
+> 拿掉**，否则测试红得莫名其妙。`system.subscribe` 这个 07 §2.1 的**设计名**最终没有
+> 落地——实现叫 `subscribe`（无前缀，02b §2.3 说它是连接级方法，与 `system.*` 的
+> 请求级方法不同类）。
 
 ### `Providers` 注入消掉循环依赖
 
@@ -173,12 +201,14 @@ S3–S6 的六个业务分支都是**转手**：真正的实现在 `api/reposito
 
 | 如果你要… | 还必须 |
 |---|---|
-| 加一个 WS 方法 | `dispatch()` 加分支 + `07-api-contract §2` 登记 + 测试 `UNKNOWN_METHOD` 反例 |
+| 加一个 WS 方法 | `dispatch()` 加分支 + `07-api-contract §2` 登记 + 测试 `UNKNOWN_METHOD` 反例；**它是连接级的**（如订阅类）则走 `handler` 特判，别进方法表 |
+| 加一个推送 topic | `frames.KNOWN_TOPICS` append + `_topics_of` 白名单自动生效 + `07-api-contract §3` 表 + 编排器侧 `_publish` |
 | 改 ticket 有效期 | `TICKET_TTL_SECONDS` + 05 §1.1.1 的文字 |
 | 改错误码 | `frames.py` 常量 + `07-api-contract §1.3` 表 |
-| 给网关加状态 | 想清楚是**全局**还是**每连接**；`seq` 是每连接，`_ACTIVE` 是全局 |
-| 让网关调用更多业务 | 新增 handler 模块（如 `api/repository.py`），**别把业务写进 dispatch**；在 `Providers` 加一个字段 + `app.create_app()` 里注入 |
+| 给网关加状态 | 想清楚是**全局**还是**每连接**；`seq` 是每连接，`_ACTIVE` 是全局，`sub_handle` 是每连接 |
+| 让网关调用更多业务 | 新增 handler 模块，**别把业务写进 dispatch**；在 `Providers` 加一个字段 + `app.create_app()` 里注入 |
 | 给 `Providers` 加字段 | `app.create_app()` 的 `gateway.Providers(...)` 是**唯一**构造点；`test_gateway_inprocess.py` 若自己构造 `Providers` 也要同步 |
+| 动 pump / send_lock | 断言「res 与 evt 不交错」（顺序发帧）仍是硬约束；evt 的 `seq` 必须与 res 共用计数器 |
 
 ## 测试
 
@@ -200,3 +230,5 @@ S3–S6 的六个业务分支都是**转手**：真正的实现在 `api/reposito
 | `tests/test_diff.py::test_ws_repo_diff_matches_service` | S5 D10 第 21 行：`repo.diff` 帧往返（`result.data` = `{stat,patch,truncated}` + `seq`），与直调服务层逐字段一致 |
 | `tests/test_diff.py::test_ws_repo_diff_error_frame_carries_stable_code` | 坏 `repoId` → `ok:false` + `REPO_NOT_BOUND`（稳定码，不是 500） |
 | `tests/test_bot_charter.py::test_ws_bot_frames_match_service` | S6 D11 #13：`bot.list` / `memory.charter.get` 帧往返，与直调服务层一致、`seq` 递增 |
+| `tests/test_dispatch.py::test_evt_reaches_subscriber_only` | S10 D11：`task.updated` 只投给订了的连接、未订阅者收不到 |
+| `tests/test_dispatch.py::test_subscribe_replaces_and_validates_topics` | subscribe 重复 = 替换；白名单外 / 空集合 → `INVALID_PARAMS` |

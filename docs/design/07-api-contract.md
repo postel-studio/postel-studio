@@ -77,7 +77,7 @@
 | 方法 | 说明 |
 |---|---|
 | `system.health` | 内核存活、版本、`apiVersion`、状态根 |
-| `system.subscribe` | 订阅 topic（02b §2.3） |
+| `subscribe` | **连接级**方法（S10）：订阅 topic、随连接注销；实现名**没有** `system.` 前缀（02b §2.3：连接级与请求级不同类） |
 
 ### 2.2 仓库
 
@@ -100,12 +100,15 @@
 
 ### 2.4 任务
 
-| 方法 | 参数 | 返回 |
-|---|---|---|
-| `task.dispatch` | `botId, prompt, baseRef?` | `task` |
-| `task.cancel` | `taskId` | `task` |
-| `task.status` | `taskId` | `task` |
-| `task.list` | `botId?, state?` | `task[]` |
+> **S10 实现了前三行**（`task.dispatch` / `task.cancel` / `task.status`）；`task.list` 仍是
+> 后续切片（S10 的页面只跟「选中 Bot 的最近一次任务」，不需要列表）。
+
+| 方法 | 参数 | 返回 | S10 |
+|---|---|---|---|
+| `task.dispatch` | `botId, prompt, baseRef?` | `task`（queued 载荷） | ✅ §4.3 |
+| `task.cancel` | `taskId` | `task` | ✅ §4.3（running 时异步生效） |
+| `task.status` | `taskId` | `task` | ✅ §4.3 |
+| `task.list` | `botId?, state?` | `task[]` | 未实现（`UNKNOWN_METHOD`） |
 
 ### 2.5 候选变更
 
@@ -207,7 +210,10 @@
 
 **注意**：字段名用 `camelCase`（帧层统一），数据模型文档用 `snake_case`（落盘统一）。**转换发生在边界，内部不混用。**
 
-### 4.3 `task.dispatch`
+### 4.3 `task.dispatch` / `task.status` / `task.cancel`（S10：派活 → 状态变绿 → 磁盘上真有改动）
+
+`task.dispatch` **立即应答**：帧回 `queued`，全部慢活（建工作区、起 Agent 会话、等 prompt）
+在内核侧的 worker 线程里跑。状态变化经 `subscribe` 订阅的 `task.updated` 事件推送（本节末尾）。
 
 ```json
 {"type":"req","id":"c3","method":"task.dispatch",
@@ -216,15 +222,67 @@
  "result":{"data":{"taskId":"01JC5...","state":"queued","botId":"adec6540a725/builder"},"seq":15}}
 ```
 
-同 Bot 已有任务在跑时：
+`task.status` / `task.cancel` 回**任务载荷**（S10 的 `orchestrator._payload`，恰好 7+3 字段）：
 
-```json
-{"type":"res","id":"c3","ok":false,
- "error":{"code":"BUSY","message":"该 Bot 已有任务在运行","field":"botId"}}
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `taskId` | string | ULID（26 字符，时间有序） |
+| `botId` | string | 复合键 |
+| `state` | string | `queued` / `running` / `succeeded` / `failed` / `cancelled` / `interrupted` |
+| `prompt` | string | 原文回显 |
+| `baseRef` | string \| null | 派活时给的基分支 |
+| `createdAt` | number | epoch 秒 |
+| `startedAt` / `endedAt` / `errorCode` | number / number / string | 各自非 `null` 时才出现（**不给 null 占位**） |
+
+生命周期（06 §3.1 状态机，`TaskStore.transition` 是唯一迁移入口）：
+
 ```
+queued ──worker──▶ running ──stopReason──▶ succeeded | failed | cancelled
+   │                  │
+   └──cancel──▶ cancelled        内核重启：活跃行全部标 interrupted
+```
+
+**`stopReason` → 状态的映射 fail-closed（D9）**：`end_turn` → `succeeded`（**不代表磁盘上有
+改动**——候选变更从磁盘看，S11 的事）、`cancelled` → `cancelled`、其余一律 `failed` +
+`INTERNAL`。
+
+取消的两条路径形状不同（实测 ACP 语义）：
+
+| 任务状态 | `task.cancel` 做什么 | 返回 |
+|---|---|---|
+| `queued` | 直接迁移到 `cancelled`，worker 稍后醒来发现终态就退出（**零副作用**） | `cancelled` 载荷 |
+| `running` | 给会话发 `session/cancel` 通知；迁移**交给** prompt 的应答（实测 ~0.3s 内带 `stopReason: "cancelled"` 回来） | `running` 载荷（取消是异步完成的） |
+| 终态 | 不做任何事 | `INVALID_PARAMS`「任务已结束，不能再取消」 |
+
+错误码（S10 的完整表）：
+
+| 情形 | 码 |
+|---|---|
+| `botId` / `taskId` 缺失、非字符串、查无此行 | `INVALID_PARAMS` |
+| `prompt` 空 / 超 32 KiB（**按 UTF-8 字节**） | `INVALID_PARAMS` |
+| `baseRef` 不合法（`ref_name_ok` 的六条形状） | `INVALID_PARAMS` |
+| Bot 是 L0 | `PERMISSION_DENIED`（**判定先于一切执行**，D4） |
+| 该 Bot 已有活跃任务（queued/running） | `BUSY`（数据级兜底：`tasks_active_per_bot` 部分唯一索引） |
+| Agent 命令不可用 / 超时 / 协议错 | `ADAPTER_UNAVAILABLE` / `ADAPTER_TIMEOUT` / `INTERNAL`（落 `failed` + `errorCode`，不回帧——任务已经发生了） |
+| 未知 `stopReason` | `failed` + `INTERNAL`（fail-closed，不猜） |
 
 > **设计取舍**：`BUSY` 而不是自动排队。自动排队会让调用方无法知道何时真正开始；
 > 排队由客户端重试或 UI 明确显示「已排队」实现。**两条路都可以，但必须选一条并保持一致**——MVP 选 `BUSY`。
+
+**订阅与事件（S10 D11）**：`subscribe` 是**连接级**方法（不在方法表里，重复调用 = 整体替换）：
+
+```json
+{"type":"req","id":"c9","method":"subscribe","params":{"topics":["task.updated"]}}
+{"type":"res","id":"c9","ok":true,"result":{"data":{"topics":["task.updated"]},"seq":9}}
+{"type":"evt","seq":10,"topic":"task.updated","data":{"taskId":"01JC5...","state":"running"}}
+```
+
+- topic 白名单 = `task.updated`（S10 只有一个；07 §3 的其它 topic 仍是后续切片）；
+- 白名单外 / 空数组 → `INVALID_PARAMS`（拼错名字当场报错，不静默吞掉）；
+- `evt` 的 `seq` 与 `res` 共用同一连接计数器（客户端丢帧检测跨帧连续）；
+- 订阅**随连接死**：断开即注销，内核不保存任何订阅状态（02b §2.3）；
+- `task.updated` 载荷恰好 `{taskId, state, errorCode?}`——**不是**完整任务载荷，
+  要细节就发 `task.status`（07 §3 表的既有约定）。
 
 ### 4.4 `permission.check`
 
