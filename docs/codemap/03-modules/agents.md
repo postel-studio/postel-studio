@@ -26,7 +26,7 @@ L3 handler：不碰 fastapi，抛 `frames.FrameError`，只向下依赖 `agent/`
 | `AgentsService.list` | 43 | 每条通道回 `{agentKind, command, available}` |
 | `AgentsService.capabilities` | 57 | 判 `agentKind` → 判 `target` → 取命令 → 握手 → 回载荷 |
 | `_require_channel` | 93 | 缺 / 非字符串 / 未登记 → `INVALID_PARAMS` |
-| `_command_and_availability` | 102 | 覆盖值坏了 → `available: false`（不回退默认） |
+| `_command_and_availability` | 102 | 覆盖值坏了 → `available: false`（不执行默认）；`command` 回默认值仅作诊断 |
 
 ## 3. 关键决策与理由
 
