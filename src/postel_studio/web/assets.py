@@ -407,6 +407,29 @@ INDEX_HTML: Final = """<!doctype html>
   #candidate[data-state="idle"] #candidate-detail,
   #candidate[data-state="idle"] #candidate-error,
   #candidate[data-state="loading"] #candidate-detail { display: none; }
+  /* 变更收件箱（S12）：入口在左栏仓库条目下，列表在主区。状态机只有 CSS 决定显隐。 */
+  #inbox[data-state="idle"] #inbox-body,
+  #inbox[data-state="idle"] #inbox-error,
+  #inbox[data-state="loading"] #inbox-body,
+  #inbox[data-state="error"] #inbox-body,
+  #inbox[data-state="empty"] #inbox-error,
+  #inbox[data-state="ready"] #inbox-empty { display: none; }
+  #inbox[data-state="idle"] #inbox-filter,
+  #inbox[data-state="empty"] #inbox-list { display: none; }
+  #inbox-list { margin: 8px 0 0; padding: 0; list-style: none; }
+  #inbox-list li { margin: 0 0 6px; padding: 8px 10px; border: 1px solid #39404f;
+    border-radius: 6px; cursor: pointer; }
+  #inbox-list li:hover, #inbox-list li:focus { background: #1f2430; outline: none; }
+  .inbox-title { font-size: 14px; }
+  .inbox-meta { display: block; margin-top: 3px; font-size: 12px; color: #aab2c0; }
+  .inbox-state { margin-left: 8px; padding: 1px 6px; font-size: 11px;
+    border: 1px solid #39404f; border-radius: 9px; }
+  #inbox-filter { margin-left: 10px; padding: 4px 8px; font-size: 13px;
+    color: inherit; background: #1f2430; border: 1px solid #39404f; border-radius: 6px; }
+  #inbox-error { margin: 8px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
+  .repo-inbox-link { margin-left: 8px; font-size: 11px; color: #58a6ff; cursor: pointer; }
+  .repo-inbox-link:hover, .repo-inbox-link:focus { text-decoration: underline; outline: none; }
 </style>
 </head>
 <body>
@@ -532,6 +555,25 @@ INDEX_HTML: Final = """<!doctype html>
       <button id="candidate-open" type="button">查看差异</button>
     </div>
     <p id="candidate-error" role="alert" hidden></p>
+  </section>
+  <!-- 变更收件箱（S12 D1）：主区面板，入口在左栏仓库条目下。7 个 tab 保持不变。 -->
+  <section id="inbox" data-state="idle" aria-live="polite">
+    <h2 id="inbox-title">变更收件箱</h2>
+    <p id="inbox-state">选择一个仓库查看它的待审变更</p>
+    <label for="inbox-filter" hidden>状态筛选</label>
+    <select id="inbox-filter">
+      <option value="all">全部状态</option>
+      <option value="local_only">仅本地</option>
+      <option value="pushed">已推远端</option>
+      <option value="pr_open">PR 待审</option>
+      <option value="approved">已批准</option>
+      <option value="rejected">已拒绝</option>
+    </select>
+    <div id="inbox-body">
+      <p id="inbox-empty">暂无待审变更</p>
+      <ul id="inbox-list"></ul>
+    </div>
+    <p id="inbox-error" role="alert" hidden></p>
   </section>
   <!-- 左栏 Bots 区（S6 D8）：在 #repos 之前（03-ui-spec §2：左栏上 Bot / 下仓库）。
        初始 idle：没选仓库之前不装成「这个仓库没有 Bot」。 -->
@@ -737,6 +779,15 @@ INDEX_HTML: Final = """<!doctype html>
   var candidateStat = document.getElementById("candidate-stat");
   var candidateError = document.getElementById("candidate-error");
   var candidateOpen = document.getElementById("candidate-open");
+  // 变更收件箱（S12）：所有用户数据仍走 textContent，不使用 HTML 注入。
+  var inboxEl = document.getElementById("inbox");
+  var inboxState = document.getElementById("inbox-state");
+  var inboxFilter = document.getElementById("inbox-filter");
+  var inboxList = document.getElementById("inbox-list");
+  var inboxError = document.getElementById("inbox-error");
+  var INBOX_HINT = "选择一个仓库查看它的待审变更";
+  var INBOX_ERROR_FALLBACK = "读取收件箱失败";
+  var inboxRequestToken = 0;      // 切仓库/筛选竞态：旧回包一律丢弃
   var CANDIDATE_HINT = "还没有候选";
   var currentCandidate = null;    // 当前展示的候选载荷（candidate.list 的条目）
   var TASK_HINT = "选择一个 Bot 后派活";
@@ -801,6 +852,7 @@ INDEX_HTML: Final = """<!doctype html>
     // 留着「运行中」的灯就是撒谎； taskId 也一并清（evt 只认连接内产生的任务）。
     resetTask("idle", state === "disconnected" ? "已断开：任务状态未知" : TASK_HINT);
     resetCandidate("idle", CANDIDATE_HINT);   // S11：候选也属于上一次连接
+    resetInbox("idle", INBOX_HINT);           // S12：收件箱也属于上一次连接
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -833,6 +885,28 @@ INDEX_HTML: Final = """<!doctype html>
       meta.textContent = "默认分支 " + (repo.defaultBranch || "（未知）");
       li.appendChild(name);
       li.appendChild(meta);
+      // S12 D1：入口在仓库条目下（不新增第 8 个 tab）。stopPropagation 防止冒泡
+      // 触发整行的 selectRepo 两次；入口自己选仓库并展开收件箱。
+      var inboxLink = document.createElement("span");
+      inboxLink.className = "repo-inbox-link";
+      inboxLink.tabIndex = 0;
+      inboxLink.setAttribute("role", "button");
+      inboxLink.textContent = "变更收件箱";
+      (function (rowId, rowName) {
+        var openInbox = function (ev) {
+          ev.stopPropagation();
+          if (ev.preventDefault) { ev.preventDefault(); }
+          selectRepo(rowId, rowName);   // 内部已 loadInbox()
+          inboxEl.scrollIntoView({ block: "nearest" });
+        };
+        inboxLink.addEventListener("click", openInbox);
+        inboxLink.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+            openInbox(ev);
+          }
+        });
+      }(repoId, repoName));
+      li.appendChild(inboxLink);
       // 闭包捕获当前行的 id/name：回调里不能用循环变量（var 是函数作用域）
       (function (rowId, rowName) {
         li.addEventListener("click", function () { selectRepo(rowId, rowName); });
@@ -865,6 +939,7 @@ INDEX_HTML: Final = """<!doctype html>
       resetWorkspace("idle", WORKSPACE_HINT);   // S7 D9：工作区同理
       resetTask("idle", TASK_HINT);   // S10：派活卡片跟着 Bot 走，Bot 作废它就作废
       resetCandidate("idle", CANDIDATE_HINT);  // S11：候选跟着仓库走
+      resetInbox("idle", INBOX_HINT);           // S12：收件箱跟着仓库走
       return;
     }
     applyRepoSelection();
@@ -872,6 +947,7 @@ INDEX_HTML: Final = """<!doctype html>
     loadBots();       // S6 D8：重连仍选中仓库 → 重取 bot.list（charter 面板不清空）
     loadWorkspace();  // S7 D9：重连仍选中仓库 → 重取 worktree.list（D4：git 是事实源）
     loadLatestCandidate();  // S11：重连后候选也重取（连接不保存订阅状态）
+    loadInbox();            // S12：重连后收件箱也重取（筛选保留，列表重读）
   }
 
   function loadRepos() {
@@ -1772,6 +1848,96 @@ INDEX_HTML: Final = """<!doctype html>
       data.errorCode ? String(data.errorCode) : null);
   }
 
+  // ---- 变更收件箱（S12）----------------------------------------------------
+  function relativeTime(epochSeconds, nowMs) {
+    var delta = (nowMs / 1000) - Number(epochSeconds || 0);
+    if (!isFinite(delta) || delta < 60) { return "刚刚"; }
+    if (delta < 3600) { return Math.floor(delta / 60) + " 分钟前"; }
+    if (delta < 86400) { return Math.floor(delta / 3600) + " 小时前"; }
+    return Math.floor(delta / 86400) + " 天前";
+  }
+  function reviewLabel(state) {
+    var labels = { local_only: "仅本地", pushed: "已推远端", pr_open: "PR 待审",
+      approved: "已批准", rejected: "已拒绝" };
+    return labels[state] || String(state || "");
+  }
+  function inboxErrorText(code) {
+    return code === "REPO_NOT_BOUND" ? "仓库路径已不存在"
+      : code === "INVALID_PARAMS" ? "筛选参数不合法" : INBOX_ERROR_FALLBACK;
+  }
+  function resetInbox(state, text) {
+    inboxRequestToken += 1;
+    inboxEl.dataset.state = state;
+    inboxState.textContent = text;
+    inboxList.textContent = "";
+    inboxError.textContent = "";
+    inboxError.hidden = true;
+  }
+  function loadInbox() {
+    if (!selectedRepoId) { resetInbox("idle", INBOX_HINT); return; }
+    var token = ++inboxRequestToken;
+    inboxEl.dataset.state = "loading";
+    inboxState.textContent = "正在读取收件箱…";
+    var filter = inboxFilter.value;
+    var params = { repoId: selectedRepoId };
+    if (filter !== "all") { params.reviewState = filter; }
+    request("candidate.list", params, function (err, data) {
+      if (token !== inboxRequestToken) { return; }
+      if (err) {
+        inboxEl.dataset.state = "error";
+        inboxState.textContent = INBOX_ERROR_FALLBACK;
+        inboxError.textContent = inboxErrorText(err);
+        inboxError.hidden = false;
+        return;
+      }
+      var rows = Array.isArray(data) ? data : [];
+      inboxList.textContent = "";
+      if (rows.length === 0) {
+        inboxEl.dataset.state = "empty";
+        inboxState.textContent = "暂无待审变更";
+        return;
+      }
+      var now = Date.now();
+      rows.forEach(function (candidate) {
+        var li = document.createElement("li");
+        li.tabIndex = 0;
+        li.setAttribute("role", "button");
+        li.dataset.taskId = String(candidate.taskId || "");
+        var title = document.createElement("span");
+        title.className = "inbox-title";
+        title.textContent = "候选 · " + String(candidate.botName || "");
+        var badge = document.createElement("span");
+        badge.className = "inbox-state";
+        badge.textContent = reviewLabel(candidate.reviewState);
+        title.appendChild(badge);
+        var meta = document.createElement("span");
+        meta.className = "inbox-meta";
+        meta.textContent = "+" + String(candidate.insertions || 0) + " −"
+          + String(candidate.deletions || 0) + " · "
+          + String(candidate.filesChanged || 0) + " 个文件 · "
+          + relativeTime(candidate.createdAt, now);
+        li.appendChild(title);
+        li.appendChild(meta);
+        var open = function () {
+          var taskId = String(candidate.taskId || "");
+          if (!taskId) { return; }
+          loadCandidate(taskId);
+          candidateEl.scrollIntoView({ block: "nearest" });
+        };
+        li.addEventListener("click", open);
+        li.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+            ev.preventDefault();
+            open();
+          }
+        });
+        inboxList.appendChild(li);
+      });
+      inboxEl.dataset.state = "ready";
+      inboxState.textContent = "共 " + rows.length + " 条候选";
+    });
+  }
+
   // ---- 候选详情卡（S11）----------------------------------------------------
   function resetCandidate(state, text) {
     currentCandidate = null;
@@ -1830,6 +1996,7 @@ INDEX_HTML: Final = """<!doctype html>
     candidateEl.dataset.state = "loading";
     candidateState.textContent = "正在读取候选…";
     loadCandidate(String(data.taskId));
+    loadInbox();   // S12：新候选也要立即出现在收件箱（同一个 repo，筛选保留）
   }
 
   function subscribeTopics() {
@@ -1858,6 +2025,7 @@ INDEX_HTML: Final = """<!doctype html>
     // S11：刷新/换仓库后取这个仓库最近一条候选，详情不会因为刷新就消失。
     resetCandidate("idle", CANDIDATE_HINT);
     loadLatestCandidate();
+    loadInbox();            // S12：收件箱跟着仓库走（点整行选仓库也会加载）
   }
 
   function submitBind() {
@@ -2031,6 +2199,8 @@ INDEX_HTML: Final = """<!doctype html>
   taskCancel.addEventListener("click", cancelTask);
   // S11：查看差异是显式按钮（不是回车提交）；渲染件复用 S5 的 #diff 面板。
   candidateOpen.addEventListener("click", openCandidateDiff);
+  // S12：筛选改变 = 重发 candidate.list（服务端筛，不在客户端挑）；竞态靠 token。
+  inboxFilter.addEventListener("change", loadInbox);
   // S7：分配走 <form>（回车与点按钮同一条路径）；回收是显式按钮（删目录不该被回车触发）。
   workspaceForm.addEventListener("submit", function (ev) {
     ev.preventDefault();
