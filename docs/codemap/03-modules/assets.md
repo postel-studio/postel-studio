@@ -424,3 +424,13 @@ node tools/acceptance/s4_branches.mjs
 `candidate.proposed` 事件只带 `{candidateId, taskId}`，细节走 `candidate.list`；
 选仓库/重连时 `loadLatestCandidate()` 取最近一条，所以刷新后详情还在（页面状态本身不落盘）。
 断连、换 Bot、换仓库都重置卡片（同 S10 的 `resetTask` 纪律）。
+
+
+### 变更收件箱（S12）
+
+`#inbox`（idle/loading/ready/empty/error）位于 `#candidate` 之后；入口是左栏仓库行里的
+`.repo-inbox-link`（Q1 D1：不新增第 8 个 tab，v2 的 7 tab 逐字不变）。
+筛选 `<select id="inbox-filter">` 的五个值对齐 `REVIEW_STATES` + `all`；筛选走服务端
+`candidate.list({repoId, reviewState})`，`inboxRequestToken` 丢弃竞态回包。
+相对时间是纯函数 `relativeTime(epochSeconds, nowMs)`（刚刚/分钟/小时/天）。
+点行把 `taskId` 交给 S11 的 `loadCandidate()`，**不画第二个详情或 diff 渲染件**。

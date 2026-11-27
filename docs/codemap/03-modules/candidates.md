@@ -42,3 +42,11 @@ S10 把 Agent 的产出留在 linked worktree 里就结束了；S11 要把它**�
 | 改候选载荷 | 07 §2.5 + 03-ui-spec §4.6 + `assets.py` 的 `trackCandidate` |
 | 改 `candidate.list` 的过滤 | `CandidateStore.list_for_repo` 的 join + 订单页 S12 |
 | 在本模块 import `web` / 同层 handler | **禁止**（`scripts/gate-layers.py` 已登记） |
+
+
+### S12 复用（无改动）
+
+S12 的列表/筛选/倒序全部复用 S11 已有的 `CandidateService.list` 与
+`CandidateStore.list_for_repo`（`reviewState` 过滤 + `created_at DESC` + `limit=100`）。
+本刀没有给候选服务加方法、没有改载荷——S11 issue 里预告的「app.py 支持 reviewState」
+其实在 S11 就已兑现，S12 只消费它。
