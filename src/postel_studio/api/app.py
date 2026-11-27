@@ -20,7 +20,8 @@ from postel_studio.api.agents import AgentsService
 from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
 from postel_studio.api.worktrees import WorktreeService
-from postel_studio.storage.db import BotStore, RepoStore
+from postel_studio.orchestrator import EventHub, Orchestrator
+from postel_studio.storage.db import BotStore, LeaseStore, RepoStore, TaskStore
 from postel_studio.storage.paths import state_root
 from postel_studio.web.assets import render_index
 
@@ -63,6 +64,12 @@ def create_app(
     worktrees = WorktreeService(store, bot_store)
     # S9：Agent 通道。检测**不落库**（D12）——能力随 Agent 升级变化，缓存就是下一个 U17。
     agents = AgentsService()
+    # S10：任务编排。`WorktreeService` 注入给编排器（S10 D13：编排器不 import api/*，
+    # 环靠这里的装配消掉）；`EventHub` 是编排器线程 → 网关事件泵的桥（D11）。
+    tasks = TaskStore()
+    leases = LeaseStore()
+    hub = EventHub()
+    orchestrator = Orchestrator(bot_store, tasks, leases, worktrees, hub)
 
     def index() -> HTMLResponse:
         page = render_index(
@@ -112,6 +119,10 @@ def create_app(
             worktree_release=worktrees.release,  # S7
             agent_list=agents.list,  # S9
             agent_capabilities=agents.capabilities,  # S9
+            task_dispatch=orchestrator.dispatch,  # S10
+            task_status=orchestrator.status,  # S10
+            task_cancel=orchestrator.cancel,  # S10
         ),
+        hub=hub,  # S10 D11：subscribe / evt 泵的数据源
     )
     return app

@@ -2,10 +2,12 @@
 
 方法表（`dispatch()`）：S2 的 `system.echo` / `system.health`，S3 加了 `repo.bind` / `repo.list`，
 S4 加了 `repo.branches`，S5 加了 `repo.diff`，S6 加了 `bot.list` / `memory.charter.get`，
-S7 加了 `worktree.acquire` / `worktree.list` / `worktree.release`
-（都**只走 WS 帧**，不新开 HTTP 路由）。
-其余一律 `UNKNOWN_METHOD`；订阅 / topic 机制在 S2 **故意不存在**，S3~S7 也没有加——
-不要在这里提前长出来。
+S7 加了 `worktree.acquire` / `worktree.list` / `worktree.release`，S8 加 `bot.create` /
+`bot.set_permission`，S9 加 `agent.list` / `agent.capabilities`，S10 加 `task.dispatch` /
+`task.status` / `task.cancel`（都**只走 WS 帧**，不新开 HTTP 路由）。
+其余一律 `UNKNOWN_METHOD`。`subscribe`（02b §2.3）是**连接级**方法：需要当前连接的队列
+与事件循环，所以在 WS 处理器里特判、不进方法表——S2~S9 没有 hub，它一律 `UNKNOWN_METHOD`
+（旧行为原样保留）。
 
 业务处理函数**不在本模块实现**：它们由 `app` 侧构造后经 `Providers` 注入（S2 R3 的教训，
 06-pitfalls T14：网关不反向 import `app`，也不要为了绕环写函数内 import）。
@@ -20,13 +22,14 @@ S7 加了 `worktree.acquire` / `worktree.list` / `worktree.release`
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
 from fastapi import FastAPI, WebSocket
 from starlette.websockets import WebSocketDisconnect
@@ -40,6 +43,10 @@ GATEWAY_PATH: Final = "/gateway"
 TICKET_TTL_SECONDS: Final = 60.0
 # 4002 = 帧层判定违规（超大帧 / 无法解码的帧）后的服务端主动关闭
 CLOSE_FRAME_INVALID: Final = 4002
+
+# S10 D11：订阅是**连接级**方法（02b §2.3），需要当前连接的队列与事件循环，
+# 所以在 WS 处理器里特判，不进 `dispatch()`，也不是 Provider。
+SUBSCRIBE_METHOD: Final = "subscribe"
 
 
 class TicketRegistry:
@@ -110,6 +117,24 @@ class Providers:
     worktree_release: Callable[[dict[str, object]], dict[str, object]]
     agent_list: Callable[[], list[dict[str, object]]]
     agent_capabilities: Callable[[dict[str, object]], dict[str, object]]
+    task_dispatch: Callable[[dict[str, object]], dict[str, object]]
+    task_status: Callable[[dict[str, object]], dict[str, object]]
+    task_cancel: Callable[[dict[str, object]], dict[str, object]]
+
+
+class EventHubLike(Protocol):
+    """编排器 `EventHub` 的形状（注入用；网关不反向 import 编排器，T14 的同一纪律）。"""
+
+    def subscribe(
+        self,
+        topics: frozenset[str],
+        queue: asyncio.Queue[tuple[str, dict[str, object]]],
+        loop: asyncio.AbstractEventLoop,
+    ) -> int: ...
+
+    def replace(self, handle: int, topics: frozenset[str]) -> bool: ...
+
+    def unsubscribe(self, handle: int) -> None: ...
 
 
 def active_connection_count() -> int:
@@ -150,11 +175,44 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.agent_list()
     if method == "agent.capabilities":  # S9 / 07 §4.11：真握手，能力来自应答
         return providers.agent_capabilities(params)
+    if method == "task.dispatch":  # S10 / 07 §4.3：建 queued 行、起 worker，立即应答
+        return providers.task_dispatch(params)
+    if method == "task.status":  # S10 / 07 §2.2：按 id 取任务载荷
+        return providers.task_status(params)
+    if method == "task.cancel":  # S10 / 07 §2.2：queued 直接迁移；running 发会话取消
+        return providers.task_cancel(params)
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 
-def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry, providers: Providers) -> None:
-    """把网关挂到 app 上；`gateway_path` 形如 `/gateway/<路径哈希>`（`wsPath`）。"""
+def _topics_of(params: dict[str, object]) -> frozenset[str] | None:
+    """解析 `subscribe` 的入参（D11）：`{topics: [非空字符串]}`，每个都在白名单里。
+
+    合法回 topic 集合；任何不合法回 `None`（调用方翻 `INVALID_PARAMS`）。空集合也算
+    不合法——订阅零个 topic 不是"清空订阅"，那是断开重连的事（02b：不保存订阅状态）。
+    """
+    raw = params.get("topics")
+    if not isinstance(raw, list) or not raw:
+        return None
+    topics: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or item not in frames.KNOWN_TOPICS:
+            return None
+        topics.add(item)
+    return frozenset(topics)
+
+
+def install(
+    app: FastAPI,
+    gateway_path: str,
+    tickets: TicketRegistry,
+    providers: Providers,
+    hub: EventHubLike | None = None,
+) -> None:
+    """把网关挂到 app 上；`gateway_path` 形如 `/gateway/<路径哈希>`（`wsPath`）。
+
+    `hub`（S10 D11）缺省 `None`：不传时 `subscribe` 一律 `UNKNOWN_METHOD`——保持
+    S2~S9 的行为，测试与旧客户端不受影响。生产装配总传。
+    """
 
     @app.websocket(gateway_path)
     async def handler(ws: WebSocket) -> None:
@@ -169,6 +227,25 @@ def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry, providers:
         state = ConnectionState()
         with _ACTIVE_LOCK:
             _ACTIVE[conn_id] = state  # 登记（D5），finally 里删
+        # 事件泵（S10 D11）：编排器线程经 hub 把 evt 塞进这条连接的队列，这里取出来发。
+        # `_send_lock` 串行化**所有** send_text——主循环发 res、泵发 evt，两个协程并发
+        # 写同一条 WebSocket 在 ASGI 层不保证原子，帧交错就是协议灾难。
+        queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        send_lock = asyncio.Lock()
+        sub_handle: int | None = None
+
+        async def pump() -> None:
+            while True:
+                topic, data = await queue.get()
+                async with send_lock:
+                    await ws.send_text(frames.encode_event(topic, seq=state.take_seq(), data=data))
+
+        async def send_frame(text: str) -> None:
+            async with send_lock:
+                await ws.send_text(text)
+
+        pumper = asyncio.create_task(pump())
         try:
             while True:
                 try:
@@ -185,21 +262,48 @@ def install(app: FastAPI, gateway_path: str, tickets: TicketRegistry, providers:
                     if exc.reply_id is None:
                         logger.warning("忽略无法归属的坏帧：%s", exc.code)  # 有错没 id：忽略不断连
                         continue
-                    await ws.send_text(frames.encode_error(exc.reply_id, exc.code, exc.message))
+                    await send_frame(frames.encode_error(exc.reply_id, exc.code, exc.message))
+                    continue
+                if frame.method == SUBSCRIBE_METHOD:  # 连接级方法：不进 dispatch（D11）
+                    if hub is None:
+                        await send_frame(
+                            frames.encode_error(frame.id, frames.UNKNOWN_METHOD, "未知方法")
+                        )
+                        continue
+                    topics = _topics_of(frame.params)
+                    if topics is None:
+                        await send_frame(
+                            frames.encode_error(
+                                frame.id,
+                                frames.INVALID_PARAMS,
+                                "topics 必须是已知 topic 的非空数组",
+                            )
+                        )
+                        continue
+                    if sub_handle is None:
+                        sub_handle = hub.subscribe(topics, queue, loop)
+                    else:  # 重复 subscribe = 整体替换（D11），不是叠加
+                        hub.replace(sub_handle, topics)
+                    await send_frame(
+                        frames.encode_response(
+                            frame.id, seq=state.take_seq(), data={"topics": sorted(topics)}
+                        )
+                    )
                     continue
                 try:
                     data = dispatch(frame.method, frame.params, providers)
                 except frames.FrameError as exc:  # 含 UNKNOWN_METHOD
-                    await ws.send_text(frames.encode_error(frame.id, exc.code, exc.message))
+                    await send_frame(frames.encode_error(frame.id, exc.code, exc.message))
                     continue
                 except Exception:  # 未预期错误：回稳定码，细节只进本地日志（05 §4.2）
                     logger.exception("方法 %s 执行失败", frame.method)
-                    await ws.send_text(frames.encode_error(frame.id, frames.INTERNAL, "内部错误"))
+                    await send_frame(frames.encode_error(frame.id, frames.INTERNAL, "内部错误"))
                     continue
-                await ws.send_text(
-                    frames.encode_response(frame.id, seq=state.take_seq(), data=data)
-                )
+                await send_frame(frames.encode_response(frame.id, seq=state.take_seq(), data=data))
         finally:  # 掉线 / 异常 / 服务端主动关三条路都走这里（D5），不许只在正常路径删
+            pumper.cancel()
+            if hub is not None and sub_handle is not None:
+                hub.unsubscribe(sub_handle)  # 订阅随连接死（D11），不保存任何订阅状态
             with _ACTIVE_LOCK:
                 _ACTIVE.pop(conn_id, None)
             logger.info("网关连接关闭，当前活动连接 %d", active_connection_count())
