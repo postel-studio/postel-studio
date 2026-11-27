@@ -54,6 +54,23 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "postel_studio.storage",
         "postel_studio.domain",
     ),
+    # S9：ACP 客户端。与 gitops 同为 L0（起子进程、碰管道），但它是**另一条子进程线**：
+    # 只认识「命令数组 + 一行应答」，不许碰 api / web / storage / domain / gitops。
+    "agent/acp_client.py": (
+        "postel_studio.api",
+        "postel_studio.web",
+        "postel_studio.storage",
+        "postel_studio.domain",
+        "postel_studio.gitops",
+    ),
+    # S9：通道登记。纯数据 + 一次 `shutil.which`，同样不向上看。
+    "agent/registry.py": (
+        "postel_studio.api",
+        "postel_studio.web",
+        "postel_studio.storage",
+        "postel_studio.domain",
+        "postel_studio.gitops",
+    ),
     # ---- L1：纯数据变换，不许 IO / 框架 ----
     "api/frames.py": (
         "postel_studio.api.app",
@@ -114,6 +131,20 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "starlette",
         "uvicorn",
     ),
+    # S9：Agent 通道编排。与 bots/worktrees 同款 L3 handler：只向下（agent/ + frames/），
+    # 不反向碰页面，也不 import 同层其它 handler（`02-layers §3` 的唯一例外是 app → gateway）。
+    "api/agents.py": (
+        "postel_studio.api.app",
+        "postel_studio.api.gateway",
+        "postel_studio.api.server",
+        "postel_studio.api.repository",
+        "postel_studio.api.bots",
+        "postel_studio.api.worktrees",
+        "postel_studio.web",
+        "fastapi",
+        "starlette",
+        "uvicorn",
+    ),
     # ---- L4：页面（被 app import，自己不许反向 import api）----
     "web/assets.py": ("postel_studio.api",),
     # ---- 包入口与包标记：登记为「不设 forbiddin 列表」，但必须被登记 ----
@@ -121,6 +152,7 @@ LAYERS: dict[str, tuple[str, ...]] = {
     "storage/__init__.py": (),
     "domain/__init__.py": (),
     "gitops/__init__.py": (),
+    "agent/__init__.py": (),
     "api/__init__.py": (),
     "web/__init__.py": (),
 }

@@ -222,6 +222,25 @@
 | ⚠️ UI 行为 | `node tools/acceptance/s8_create_bot.mjs` 在真实 Chrome 里跑：空态 → 表单 → 建 → 非法名字 → 撞名 → Escape → 回车 → 刷新 → 改权限（T9 的同一课） |
 | 未做 | **权限尚未被强制执行**（S16 的权限门）；`agentKind` 只收 `null`（S9 才验证通道）；改名 / 删除是后续切片 |
 
+### C19 · 点「检测 Agent」→ 看到真实版本与能力清单（`agent.list` / `agent.capabilities`）—— S9
+
+| | |
+|---|---|
+| 用户路径 | 主区顶部点「检测 Agent」→ 显示 `Agent：OpenCode 1.19.6`、`protocolVersion：1`、握手耗时、以及 **9 条**能力（`loadSession` / `mcp.http` / `session.list` …）；没装时显示「本机没有可用的 Agent 命令」并可重试 |
+| 前端入口 | `web/assets.py:393` 的 `#agent` 卡片：`detectAgent()`（:1538）/ `renderAgent()`（:1501）/ `resetAgent()`（:1491）/ `agentErrorText()`（:1481） |
+| DOM 契约 | `#agent[data-state]`（idle/loading/ready/error）+ `#agent-state` / `#agent-detect` / `#agent-error` / `#agent-detail` / `#agent-kind` / `#agent-version` / `#agent-protocol` / `#agent-elapsed` / `#agent-flags`（S9 D9）；卡片在 `#branches` **之前** |
+| 方法表 | `api/gateway.py:149` `agent.list` / `api/gateway.py:151` `agent.capabilities` |
+| 业务编排 | `api/agents.py:37` `AgentsService`：`list`（:43，**不启进程**）/ `capabilities`（:57，真握手 + 三种失败码） |
+| 协议（L0） | `agent/acp_client.py:99` `initialize`（起 → 发 → 读 → 回收 → 解析）/ `:144` `reap`（D7）/ `:70` `flatten_capabilities`（D3） |
+| 通道表（L0） | `agent/registry.py:30` `_CHANNELS`（只有 `acp-stdio` 一条）/ `:54` `command_for`（`POSTEL_ACP_COMMAND`，坏值不回退）/ `:73` `is_available`（`which`，不 spawn） |
+| 能力从哪来 | **握手应答**：`result.agentCapabilities` 递归摊平。`sessionCapabilities` 的值是**空对象**，靠「键存在」表达支持——只读布尔会漏掉全部 session 能力（D3） |
+| 超时与回收 | 30 秒（`DEFAULT_TIMEOUT_S`）；`finally` 里 `stdin.close → terminate → wait(5) → kill → wait`；超时也回收（D7） |
+| 安全 | 命令是**字面数组**、无 shell（05 §3.3）；子进程环境滤掉含 `TOKEN`/`KEY`/`SECRET`/`PASSWORD`/`CREDENTIAL`/`AUTH` 的变量（06 T22 的到期项，D8）；帧里给 `target` 一律 `NOT_SUPPORTED`（不许指定可执行文件，D5） |
+| 错误码 | `ADAPTER_UNAVAILABLE`（没有/起不来）/ `ADAPTER_TIMEOUT`（没答）/ `INTERNAL`（答错）/ `INVALID_PARAMS` / `NOT_SUPPORTED`——**一个不新增** |
+| 由谁守住 | `tests/test_acp_detect.py` 30 个用例（真 `opencode` 握手 + 假服务端的噪声/超时/缺字段 + pid 回收 + 凭据过滤）；反向注入 2 条（S9 #1 能力写死 / S9 #2 不回收） |
+| ⚠️ UI 行为 | `node tools/acceptance/s9_agent.mjs`：真 Chrome，正例 19 条 + 负例 13 条 CHECK（含"文案不是 git 那句"） |
+| 未做 | 不建会话、不发 prompt（S10）；`bot.agentKind` 仍不可写（U18，到期 S10）；检测结果不落库（D12） |
+
 ---
 
 ## 2. 常见任务 → 文件

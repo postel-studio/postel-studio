@@ -508,6 +508,75 @@
 2. **`bot.create` 不检查仓库路径是否还在**：它只写状态根、不读 git（S8 D9）。仓库回到原路径
    时 `repo_id` 不变，这一行就能重新用。
 
+### 4.11 `agent.list` / `agent.capabilities`（S9：内核认识哪条通道、真的握手一次）
+
+`agent.list` **不启动进程**：它只读登记表并回答「可执行文件在不在 `PATH` 上」。真正的握手是
+`agent.capabilities`，它起一个子进程、发一次 `initialize`、读一行、把进程回收（S9 D4）。
+
+```json
+{"type":"req","id":"c13","method":"agent.list","params":{}}
+{"type":"res","id":"c13","ok":true,"result":{"seq":13,"data":[
+  {"agentKind":"acp-stdio","command":["opencode","acp"],"available":true}]}}
+```
+
+```json
+{"type":"req","id":"c14","method":"agent.capabilities","params":{"agentKind":"acp-stdio"}}
+{"type":"res","id":"c14","ok":true,"result":{"seq":14,"data":{
+  "agentKind":"acp-stdio","available":true,"protocolVersion":1,
+  "agentName":"OpenCode","agentVersion":"1.19.6",
+  "flags":["loadSession","mcp.http","mcp.sse","prompt.embeddedContext","prompt.image",
+           "session.close","session.fork","session.list","session.resume"],
+  "unsupported":[],"elapsedMs":705}}}
+```
+
+`agent.list` 的条目：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `agentKind` | string | 通道 id，描述**传输**不描述产品（S9 D1） |
+| `command` | string[] | 字面命令数组；可被进程级的 `POSTEL_ACP_COMMAND` 覆盖（D2） |
+| `available` | bool | `shutil.which` 的静态结果，**不代表**握手会成功 |
+
+`agent.capabilities` 的载荷：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `agentKind` / `available` | string / bool | 成功时 `available` 恒为 `true` |
+| `protocolVersion` | int | 顶层字段，来自应答 |
+| `agentName` / `agentVersion` | string \| null | 来自 `agentInfo`；Agent 不给就是 `null` |
+| `flags` | string[] | **从 `agentCapabilities` 算出来的**，已排序（D3） |
+| `unsupported` | string[] | S9 恒为 `[]`（参数里没有「请求某能力」的入口） |
+| `elapsedMs` | int | 本次握手的墙钟耗时 |
+
+`flags` 的命名规则（D3，实现见 `agent/acp_client.py` 的 `flatten_capabilities`）：
+
+| 应答形状 | flag |
+|---|---|
+| `{"loadSession": true}` | `loadSession` |
+| `{"mcpCapabilities": {"http": true}}` | `mcp.http` |
+| `{"sessionCapabilities": {"close": {}}}` | `session.close` ← **空对象也表示支持** |
+| `{"x": false}` 或键不存在 | 不产出 |
+
+错误码：
+
+| 情形 | 码 |
+|---|---|
+| `agentKind` 缺失 / 非字符串 / 空 / 未登记 | `INVALID_PARAMS` |
+| `target` 非 null（S9 保留字） | `NOT_SUPPORTED` |
+| 命令不存在、不可执行、没应答就退出 | `ADAPTER_UNAVAILABLE` |
+| 30 秒内没有匹配 `id` 的应答 | `ADAPTER_TIMEOUT` |
+| 应答不是合法 `initialize` 结果（没有 `protocolVersion`） | `INTERNAL` |
+| `POSTEL_ACP_COMMAND` 不是合法的非空字符串数组 | `ADAPTER_UNAVAILABLE`（**不回退默认**） |
+
+三条如实说明：
+
+1. **能力值来自 Agent，不来自内核**：`flags` 是应答的摊平结果，不是白名单。Agent 升级后
+   同一个方法可能回不同的 `flags`，这是设计意图，不是不稳定。
+2. **`agent.list` 的 `available` 会撒谎一次**：它说「文件在」，但握手仍可能超时或协议不兼容。
+   页面必须在点了检测之后才说「可用」。
+3. **`bot.agentKind` 仍不可写**：S9 没有选通道的 UI，`bot.create` 继续拒绝非 null 的
+   `agentKind`（U18，到期 S10）。
+
 ---
 
 ## 5. 兼容与演进

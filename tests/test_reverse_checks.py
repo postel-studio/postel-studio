@@ -415,6 +415,21 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         ),
         "S8 #5：新建表单的下拉多出 L3（产品红线：第一版永不授予 L3/L4）",
     ),
+    # ---- S9：握手的两条硬约束（能力必须算、子进程必须回收）----
+    (
+        "postel_studio/agent/acp_client.py",
+        "    return tuple(sorted(flags))",
+        '    return ("loadSession",)  # 注入：硬编码一份"看起来对"的能力',
+        _target_test("test_flags_are_derived_not_hardcoded", file="test_acp_detect"),
+        "S9 #1：能力改成写死的列表（界面看起来一样，但 Agent 升级后永远不会变）",
+    ),
+    (
+        "postel_studio/agent/acp_client.py",
+        "    proc.terminate()",
+        "    return  # 注入：不杀，留着孤儿",
+        _target_test("test_child_is_reaped_after_timeout", file="test_acp_detect"),
+        "S9 #2：超时后不再回收子进程（每点一次检测漏一个 opencode 进程）",
+    ),
 )
 
 

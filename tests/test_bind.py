@@ -978,6 +978,10 @@ def test_git_subprocess_shell_is_disabled() -> None:
     **S7 扩展**：写操作（`gitops/worktrees.py`）是第二个起子进程的模块。守卫因此从"只有
     `repo.py`"改成"只有 `gitops/` 下的这两个文件"，并且**对两个文件跑同一套 AST 断言**
     （`shell=False` / timeout / 字面数组 / 无 f-string 拼接）——范围扩大，强度没有降低。
+
+    **S9 扩展**：ACP 客户端（`agent/acp_client.py`）是第三条子进程线，但它用 `Popen`（长连接），
+    `timeout=` 参数不存在（超时在读循环的 deadline 上）。所以对它跑一套**等价强度**但适配
+    `Popen` 的断言（见下面的 `popen_sources`）；「全项目只有这几处起子进程」的白名单同时扩大。
     """
     import ast
 
@@ -1026,20 +1030,50 @@ def test_git_subprocess_shell_is_disabled() -> None:
                 assert not isinstance(element, ast.JoinedStr), f"{where}：命令里有 f-string"
                 assert not isinstance(element, ast.BinOp), f"{where}：命令里有字符串拼接"
 
-    # 2) 全项目只有这两个文件起子进程
+    # S9 扩展：ACP 客户端是第三条子进程线。它用的是 `Popen`（长连接），**没有** `timeout=`
+    # 参数——超时靠读循环里的 deadline，所以「必须有 timeout 关键字」这条对它不适用。
+    # 换成等价强度的三条：显式 `shell=False`、命令不能是字符串、命令里没有 f-string / 拼接。
+    popen_sources = [REPO_ROOT_SRC / "postel_studio" / "agent" / "acp_client.py"]
+    for source in popen_sources:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"run", "Popen", "check_output", "call"}
+        ]
+        assert calls, f"{source.name}：找不到子进程调用（代码结构变了？）"
+        for call in calls:
+            where = f"{source.name} 第 {call.lineno} 行"
+            keywords = {kw.arg: kw.value for kw in call.keywords}
+            assert "shell" in keywords, f"{where}：必须显式写 shell="
+            assert isinstance(keywords["shell"], ast.Constant), f"{where}：shell 必须是字面量"
+            assert keywords["shell"].value is False, f"{where}：shell 必须为 False（05 §3.3）"
+            assert call.args, f"{where}：没有命令参数"
+            first = call.args[0]
+            assert not (isinstance(first, ast.Constant) and isinstance(first.value, str)), (
+                f"{where}：命令不能是字符串（会被当成一个整体可执行名）"
+            )
+            assert not isinstance(first, ast.JoinedStr), f"{where}：命令里有 f-string"
+            assert not isinstance(first, ast.BinOp), f"{where}：命令里有字符串拼接"
+
+    # 2) 全项目只有这几个文件起子进程
     #    包目录从**被测文件**反推（`repo.py` → `gitops` → `postel_studio`），不要从测试文件的
     #    位置反推：反向验证在源码**副本**里跑这条测试，那时测试文件还在仓库里、被测文件在 /tmp，
     #    两者不在同一个树里（实测：第一版从测试文件反推，扫描了 /tmp/src 不存在、offenders 为空、
     #    断言空过——一个自己会被镀金的守卫）。
     package_root = sources[0].parent.parent
     assert (package_root / "__init__.py").exists(), f"反推不到包目录：{package_root}"
+    allowed = {*sources, *popen_sources}
     offenders = [
         str(path.relative_to(package_root))
         for path in package_root.rglob("*.py")
-        if path not in sources and "subprocess" in path.read_text(encoding="utf-8")
+        if path not in allowed and "subprocess" in path.read_text(encoding="utf-8")
     ]
     assert offenders == [], (
-        f"除了 gitops/{'、'.join(s.name for s in sources)} 还有别处起子进程：{offenders}"
+        f"除了 gitops/{'、'.join(s.name for s in sources)} 与 agent/{popen_sources[0].name} "
+        f"还有别处起子进程：{offenders}"
     )
 
 

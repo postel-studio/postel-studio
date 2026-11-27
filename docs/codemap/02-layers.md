@@ -15,6 +15,7 @@
   │     api/repository.py 仓库业务编排（S3）      │  不碰 fastapi
   │     api/bots.py       Bot 与 charter 编排（S6）│  不碰 fastapi
   │     api/worktrees.py  工作区编排（S7）        │  不碰 fastapi
+  │     api/agents.py     Agent 通道编排（S9）    │  不碰 fastapi
   ├─────────────────────────────────────────────┤
   │ L2  api/server.py     进程生命周期            │  唯一拥有 socket / 信号
   ├─────────────────────────────────────────────┤
@@ -22,6 +23,8 @@
   ├─────────────────────────────────────────────┤
   │ L0  gitops/repo.py    git 只读探测（S3）      │  
   │     gitops/worktrees.py git 写面（S7）        │  唯一改 .git/worktrees 的地方
+  │     agent/acp_client.py ACP 客户端（S9）      │  起 Agent 子进程（第二条子进程线）
+  │     agent/registry.py   通道登记（S9）        │  
   │     storage/db.py     state.db（S3）          │  唯一碰 SQLite 的地方
   │     storage/paths.py  文件系统                │  状态根/锁/原子写
   │     domain/models.py  实体与纯派生（S3）      │  无 IO
@@ -36,6 +39,9 @@
 内核第一次改用户的仓库，允许清单见 [S7 D5](../design/issues/S7-worktree-visible.md)）。
 S7 还顺手把两条**共享判定**下沉了一层：`ref_name_ok`（→ `domain`）与 `is_usable_repo`（→ `gitops`），
 就是为了不让 L3 之间互相 import（见 §3）。
+**S9 加了三个**：`agent/acp_client.py` 与 `agent/registry.py`（L0，**第二条子进程线**——与 git 的
+只读探测分开登记；`05 §3.3` 的「字面数组、无 shell、不展开 `~`/`$VAR`」同样适用于它），以及
+`api/agents.py`（L3，同款 handler）。`agent/` 这一层在 §5 的表里早就预告过，S9 只是把它兑现。
 
 **规则一句话：只能向下 import，不能向上；同层之间尽量不 import（唯一例外见 §3）。**
 
@@ -51,11 +57,14 @@ graph TD
     RS["api/repository.py<br/>仓库业务编排"]
     BT["api/bots.py<br/>Bot 与 charter（S6）"]
     WT["api/worktrees.py<br/>工作区编排（S7）"]
+    AGT["api/agents.py<br/>Agent 通道编排（S9）"]
     AS["web/assets.py<br/>页面"]
     DB["storage/db.py<br/>state.db"]
     PA["storage/paths.py<br/>状态根/文件 IO"]
     GO["gitops/repo.py<br/>git 只读探测"]
     GW2["gitops/worktrees.py<br/>git 写面（S7）"]
+    AC["agent/acp_client.py<br/>ACP 客户端（S9）"]
+    AR["agent/registry.py<br/>通道登记（S9）"]
     DM["domain/models.py<br/>实体与纯派生"]
 
     CLI -->|"函数内 import<br/>(懒加载)"| SRV
@@ -83,6 +92,10 @@ graph TD
     WT --> DM
     WT --> FR
     WT --> GW2
+    APP -->|"构造 AgentsService"| AGT
+    AGT --> AC
+    AGT --> AR
+    AGT --> FR
     DB --> PA
     DB --> DM
     PA -.->|"函数内 import<br/>(版本号)"| CLI
@@ -119,6 +132,10 @@ graph TD
 | `worktrees → domain`（S7） | `bot_id` / `bot_name_ok` / `ref_name_ok` | 否 |
 | `worktrees → frames`（S7） | 抛 `FrameError` | 否 |
 | `gitops/worktrees → gitops/repo`（S7） | 复用 `git_env` / `git_executable` / 三个异常（**环境只许一份**） | 否 |
+| `app → agents`（S9） | 构造 `AgentsService` 注入网关 | 否 |
+| `agents → agent/acp_client`（S9） | 起进程、握手、回收 | 否 |
+| `agents → agent/registry`（S9） | 读通道表与命令 | 否 |
+| `agents → frames`（S9） | 抛 `FrameError`（与 repository / bots / worktrees 同款） | 否 |
 | **`gateway → repository`** | **不存在，也不许有**：网关只收到 `Providers` 里的两个函数 | — |
 
 ### 2.0 S3 的分层要点：`repository` 在 L3，但它不认识 fastapi
@@ -164,12 +181,14 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | `storage/paths.py`、`storage/db.py` | `api` / `web` / `gitops` |
 | `domain/models.py` | `api` / `web` / `gitops` / `storage` |
 | `gitops/repo.py` | `api` / `web` / `storage` / `domain` |
+| `agent/acp_client.py`、`agent/registry.py`（S9，L0） | `api` / `web` / `storage` / `domain` / `gitops` |
 | `api/frames.py`（L1，纯数据变换） | 上面全部 + `fastapi` / `starlette` / `uvicorn` / `websockets` / `subprocess` / `sqlite3` |
 | `api/server.py`（L2） | `repository` / `web` / `storage.db` |
 | `api/app.py` | `api/server.py`（反向会成环） |
 | `api/gateway.py` | `api/app.py`（T14：能力靠 `Providers` 注入）/ `api/server.py` / `repository` / `web` / `storage` / `gitops` / `domain` |
 | `api/repository.py` | `app` / `gateway` / `server` / `web` / `fastapi` / `starlette` / `uvicorn` |
 | `api/bots.py`（S6，L3） | `web`（被 app 装配、被 gateway 注入调用；碰页面就是反向） |
+| `api/agents.py`（S9，L3） | `web` + 同层其它 handler（`app` / `gateway` / `server` / `repository` / `bots` / `worktrees`） |
 | `web/assets.py`（L4） | `api`（被 app import，反向即环） |
 
 两条比旧片段更严的地方：
@@ -195,7 +214,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | ~~`store/`~~ → **已出现**：`storage/db.py`（S3，**有意不叫 `store/`**：`RepoStore` 是类名，包名会让"store 模块"和"store 对象"混淆） | L0 | `api/app.py`、`api/repository.py` |
 | ~~后续 bot 表~~ → **已出现**（S6）：`bots` | `storage/db.py` 的 `_MIGRATIONS` v3 | `api/bots.py` |
 | 后续 task/candidate 表 | 加到 `storage/db.py` 的 `_MIGRATIONS` | |
-| `agent/`（ACP 客户端、子进程） | L0 | |
+| ~~`agent/`（ACP 客户端、子进程）~~ → **已出现（S9）**：`agent/acp_client.py`（协议）+ `agent/registry.py`（通道表） | L0 | `api/agents.py` |
 | `permission/`（纯函数判定） | L1（**无 IO**） | 执行前 |
 | ~~`memory/`（charter 与上下文注入）~~ → **S6 拆成两处**：charter 文件 IO 在 `storage/paths.py`（L0）、编排在 `api/bots.py`（L3） | 不新增包 | `storage/paths.py`、`api/bots.py` |
 | 新的 `api/*.py` handler 模块 | L3 | app/gateway |

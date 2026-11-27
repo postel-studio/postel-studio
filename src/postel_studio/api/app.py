@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 
 from postel_studio import __version__
 from postel_studio.api import gateway
+from postel_studio.api.agents import AgentsService
 from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
 from postel_studio.api.worktrees import WorktreeService
@@ -60,6 +61,8 @@ def create_app(
     bots = BotService(bot_store, store)
     # S7：工作区（git worktree）的分配与回收。它**不落库**（D4）：事实源是 git 与文件系统。
     worktrees = WorktreeService(store, bot_store)
+    # S9：Agent 通道。检测**不落库**（D12）——能力随 Agent 升级变化，缓存就是下一个 U17。
+    agents = AgentsService()
 
     def index() -> HTMLResponse:
         page = render_index(
@@ -107,6 +110,8 @@ def create_app(
             worktree_acquire=worktrees.acquire,  # S7
             worktree_list=worktrees.list,  # S7
             worktree_release=worktrees.release,  # S7
+            agent_list=agents.list,  # S9
+            agent_capabilities=agents.capabilities,  # S9
         ),
     )
     return app
