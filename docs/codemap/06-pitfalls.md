@@ -977,7 +977,7 @@ S11 的"无事可做"有三道守卫（commit 前、commit 后、`diff_stat == 0
 
 | # | 问题 | 状态 | 到期（必须裁决的切片） | 不解决会怎样 |
 |---|---|---|---|---|
-| U1 | `test_overwrites_stale_lock_when_pid_is_dead` 偶发失败（`FileNotFoundError: server.json`），S2 期间出现 1 次，之后连跑 12 轮未复现 | **未定位根因**。怀疑与 SIGKILL 掉的子进程/端口残留有关，无证据 | **S15（重启恢复）前** | S15 主体就是重启/锁路径，flaky 会让它分不清「改坏了」还是「本来就不稳」 |
+| U1 | **同族三个 flake，全在 `tests/test_server_boot.py`（锁/启停路径）**：<br>① `test_overwrites_stale_lock_when_pid_is_dead`（`FileNotFoundError: server.json`），S2 期间 1 次、之后连跑 12 轮未复现；<br>② `test_garbage_lock_is_treated_as_stale`（`assert _stop(proc) == 0` 得 1），**PR #24 / #25 两次独立全量复跑中均失败**，单独 3/3 通过；<br>③ `test_sigint_deletes_server_json_and_leaves_no_process`，PR #24 实现期全量跑偶发 2 次，单独 4/4、后续两轮全量通过。<br>**环境（②③④ 的实测）**：干净 detached worktree、`uv sync --frozen`、Python 3.12.15、Node.js 22.22.2 / Google Chrome 157（浏览器脚本无关，仅记录完整环境）；覆盖 PR head `54074bb`（#24）与 `c5121a4`（#25）。<br>**复现率**：② 全量 2/2 失败、单独 0/3；③ 全量 2/6 失败、单独 0/4；① 全量 0/12。 | **未定位根因**。怀疑与 SIGKILL 掉的子进程/端口残留、全量负载下的进程回收竞态有关，无证据。**不进 quarantine**（未达到「连续 3 次单独复现失败」的政策门槛——相反，单独 3～4 次全过；失败只在全量负载下出现）；先登记环境与复现率，S15 前定位 | **S15（重启恢复）前** | S15 主体就是重启/锁路径，flaky 会让它分不清「改坏了」还是「本来就不稳」。② 在 PR #24/#25 的独立复跑中让 `check.sh test` 红，而 CI 同一 head 绿——若不在 S15 前定位，后续无法用门禁区分回归与环境噪声 |
 | U2 | ticket 每次渲染 `/` 都签发、60s 才清一次、**无内存上限** | 正常使用无碍，但没有上限就是没有上限。已裁决不修 | **M3 上线前** | 长期运行内存单调增长；配合 U3 放大 |
 | U3 | 一次重连会打两次 HTTP（`/api/where` + `/`）→ 留下 1 个未用 ticket | 不影响正确性，票据生成量比预期高一倍 | **M3 上线前**（或明确豁免） | 票据生成量翻倍，与 U2 同一条内存方向 |
 | U4 | 页面从 `localhost:` 而非 `127.0.0.1:` 打开时未测试 | 端口比较仍成立，但该 variant 未验证 | **M1 验收（S14）前** | M1 验收若从 `localhost:` 打开，结论建立在未验证的变体上 |
