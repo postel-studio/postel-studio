@@ -27,6 +27,7 @@ from typing import Final
 from postel_studio.domain.models import (
     TASK_TERMINAL,
     Bot,
+    Candidate,
     Repo,
     Task,
     WorktreeLease,
@@ -37,8 +38,9 @@ from postel_studio.storage.paths import _chmod, ensure_state_root, state_db_file
 # 06-data-model §7：user_version 是 schema 版本。
 # v1 = S3 的初始 schema（只有 repos）；v2 = S3.5 加的 `origin_hash`（D2）；
 # v3 = S6 加的 `bots` 表（D7：只加表、不动 repos）；v4 = S10 加 `tasks` + `worktree_leases`
-# （06 §2.3 / §2.5，S7 裁决的"到期一起建"）。
-SCHEMA_VERSION: Final = 4
+# （06 §2.3 / §2.5，S7 裁决的"到期一起建"）；v5 = S11 加 `candidates`
+# （06 §2.4：`tasks.candidate_id` 列已在 v4 建好，只需补表）。
+SCHEMA_VERSION: Final = 5
 
 # ---------------------------------------------------------------------------
 # 迁移（每个版本一个函数，索引即版本号；新增版本=往后 append，不改历史）
@@ -112,6 +114,27 @@ _MIGRATIONS: Final[tuple[str, ...]] = (
         released_at REAL
     );
     CREATE UNIQUE INDEX leases_active_per_bot ON worktree_leases (bot_id) WHERE released_at IS NULL;
+    """,
+    # v5（S11 D7）：候选表。`task_id` UNIQUE = 一任务至多一条候选（06 §4）；
+    # `branch` UNIQUE 是"候选身份"的数据级保护（ULID 前缀撞车时宁可拒绝，不静默覆盖）。
+    # `repo_id` **不冗余存**：列表按 tasks→bots join 出来（06 §2.4 的字段表没有这一列）。
+    # diff 全文/stat 文本不进库（06 §8）：这里的三个数字只是冗余的排序/显示快照。
+    """
+    CREATE TABLE candidates (
+        candidate_id  TEXT PRIMARY KEY,
+        task_id       TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+        branch        TEXT NOT NULL UNIQUE,
+        base_sha      TEXT NOT NULL,
+        head_sha      TEXT NOT NULL,
+        files_changed INTEGER NOT NULL,
+        insertions    INTEGER NOT NULL,
+        deletions     INTEGER NOT NULL,
+        review_state  TEXT NOT NULL,
+        remote        TEXT,
+        target        TEXT,
+        created_at    REAL NOT NULL
+    );
+    CREATE INDEX candidates_review_created ON candidates (review_state, created_at DESC);
     """,
 )
 
@@ -649,4 +672,142 @@ def _row_to_lease(row: sqlite3.Row) -> WorktreeLease:
         path=str(row["path"]),
         created_at=float(raw_created),
         released_at=float(raw_released) if isinstance(raw_released, int | float) else None,
+    )
+
+
+# 候选的读路径列清单（同 `_COLUMNS` 的理由：只写一份）。join 查询用 `c.` 前缀，
+# 由 `_candidate_join_columns()` 从这份清单生成，避免两处漂移。
+_CANDIDATE_COLUMNS: Final = (
+    "candidate_id, task_id, branch, base_sha, head_sha, files_changed,"
+    " insertions, deletions, review_state, remote, target, created_at"
+)
+
+
+def _candidate_join_columns() -> str:
+    return ", ".join(f"c.{column}" for column in _CANDIDATE_COLUMNS.split(", "))
+
+
+class CandidateStore:
+    """`candidates` 表的读写门面（S11，带锁）。
+
+    与 `TaskStore` 一样：读只拿 `_lock`，写**必须** `with self._lock, self._conn`
+    （T44：只拿锁会让隐式写事务永不提交，堵死其它连接）。
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._conn = open_state_db(path)
+        self._lock = threading.Lock()
+
+    @property
+    def path(self) -> Path:
+        return Path(self._conn.execute("PRAGMA database_list").fetchone()[2])
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    def __enter__(self) -> CandidateStore:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def insert(self, candidate: Candidate) -> None:
+        """插入一行；重复 `candidate_id` / `task_id` / `branch` 抛 `IntegrityError`。"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO candidates ("
+                f"{_CANDIDATE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    candidate.candidate_id,
+                    candidate.task_id,
+                    candidate.branch,
+                    candidate.base_sha,
+                    candidate.head_sha,
+                    candidate.files_changed,
+                    candidate.insertions,
+                    candidate.deletions,
+                    candidate.review_state,
+                    candidate.remote,
+                    candidate.target,
+                    candidate.created_at,
+                ),
+            )
+
+    def get(self, candidate_id: str) -> Candidate | None:
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_CANDIDATE_COLUMNS} FROM candidates WHERE candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+        return None if row is None else _row_to_candidate(row)
+
+    def for_task(self, task_id: str) -> Candidate | None:
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_CANDIDATE_COLUMNS} FROM candidates WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return None if row is None else _row_to_candidate(row)
+
+    def list_for_repo(
+        self,
+        repo_id: str,
+        *,
+        review_state: str | None = None,
+        task_id: str | None = None,
+        limit: int = 100,
+    ) -> list[Candidate]:
+        """这个仓库的候选，按 `created_at DESC`（S12 收件箱按这个顺序）。
+
+        `repo_id` 经 `tasks → bots` join 得到——候选表不冗余存 repo_id（06 §2.4）。
+        `task_id` 是 S11 单条详情卡的窄读；`review_state` 是 06 §3.2 的筛选项。
+        """
+        sql = (
+            f"SELECT {_candidate_join_columns()} FROM candidates c"
+            " JOIN tasks t ON t.task_id = c.task_id"
+            " JOIN bots b ON b.bot_id = t.bot_id"
+            " WHERE b.repo_id = ?"
+        )
+        params: list[object] = [repo_id]
+        if review_state is not None:
+            sql += " AND c.review_state = ?"
+            params.append(review_state)
+        if task_id is not None:
+            sql += " AND c.task_id = ?"
+            params.append(task_id)
+        sql += " ORDER BY c.created_at DESC, c.candidate_id LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [_row_to_candidate(row) for row in rows]
+
+    def discard(self, candidate_id: str) -> bool:
+        """补偿删除**本 worker 刚插入**的候选（S11 D6：transition 输掉 cancel 竞态时）。
+
+        不做通用删除 API：候选一旦被人看见就不该被内核删掉（06 §2.4：拒绝也留痕）。
+        """
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM candidates WHERE candidate_id = ?", (candidate_id,)
+            )
+        return cursor.rowcount > 0
+
+
+def _row_to_candidate(row: sqlite3.Row) -> Candidate:
+    """`sqlite3.Row` → `Candidate`。类型收敛集中在这里（同 `_row_to_task`）。"""
+    raw_created = row["created_at"]
+    assert isinstance(raw_created, int | float) and not isinstance(raw_created, bool)
+    return Candidate(
+        candidate_id=str(row["candidate_id"]),
+        task_id=str(row["task_id"]),
+        branch=str(row["branch"]),
+        base_sha=str(row["base_sha"]),
+        head_sha=str(row["head_sha"]),
+        files_changed=int(row["files_changed"]),
+        insertions=int(row["insertions"]),
+        deletions=int(row["deletions"]),
+        review_state=str(row["review_state"]),
+        remote=str(row["remote"]) if row["remote"] is not None else None,
+        target=str(row["target"]) if row["target"] is not None else None,
+        created_at=float(raw_created),
     )

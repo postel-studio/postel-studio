@@ -1,6 +1,6 @@
 # 03 · assets — `src/postel_studio/web/assets.py`
 
-> 层 L4 · 1670 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
+> 层 L4 · 2104 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
 > ⚠️ **本模块是 Code Map 里覆盖最薄的一块**：JS 的 DOM 行为没有自动化测试。见 §测试。
 
 ## 职责
@@ -415,3 +415,12 @@ bash scripts/check.sh && node tools/acceptance/s3_bind.mjs
 bash scripts/check.sh
 node tools/acceptance/s4_branches.mjs
 ```
+
+
+### 候选详情卡（S11）
+
+`#candidate`（`idle/loading/done/error`）位于 `#task` 之后：分支、`+X −Y`、`仅本地`，
+点「查看差异」**复用 `#diff` 面板与 `renderDiffPatch`**，没有第二个 diff 渲染件。
+`candidate.proposed` 事件只带 `{candidateId, taskId}`，细节走 `candidate.list`；
+选仓库/重连时 `loadLatestCandidate()` 取最近一条，所以刷新后详情还在（页面状态本身不落盘）。
+断连、换 Bot、换仓库都重置卡片（同 S10 的 `resetTask` 纪律）。

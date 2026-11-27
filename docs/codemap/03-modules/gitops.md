@@ -1,6 +1,6 @@
 # 03 · gitops — `src/postel_studio/gitops/`
 
-> 层 L0（**起子进程、碰磁盘**）· 500 + 226 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md) / [T34](../06-pitfalls.md) / [T36](../06-pitfalls.md) / [T40](../06-pitfalls.md)
+> 层 L0（**起子进程、碰磁盘**）· 500 + 269 行 · 上游：[模块索引](README.md) · 相关：[05-security §3.3](../../design/05-security.md) · [06-pitfalls T25](../06-pitfalls.md) / [T33](../06-pitfalls.md) / [T34](../06-pitfalls.md) / [T36](../06-pitfalls.md) / [T40](../06-pitfalls.md)
 
 ## 职责
 
@@ -9,7 +9,7 @@
 | 文件 | 面 | 做什么 |
 |---|---|---|
 | `repo.py` | **只读** | 这是不是仓库 / 根在哪 / origin / 默认分支 / 本地分支（S4）/ 两个 commit 之间的差异（S5） |
-| `worktrees.py` | **写**（S7） | 只有三件事：`worktree add` / `remove` / `prune` |
+| `worktrees.py` | **写**（S7 三条 + S11 三条） | `worktree add` / `remove` / `prune`（S7）+ `commit_all` / `create_branch` / `head_commit`（S11） |
 
 - **`repo.py` 不做写操作**（不 commit / 不 checkout / 不 fetch / 不 worktree）：S3 的禁止事项，也是
   05 §2「判定在执行之前」的前提。**S7 起写操作存在**，但只存在于 `worktrees.py`，而且只有上表那三条。
@@ -329,3 +329,19 @@ S3 的探测在 `tests/test_bind.py`，S4 的分支列表在 `tests/test_branche
 | `test_only_local_branches_are_listed_after_push` | D7 第 6 行 / D2 |
 | `test_parsing_does_not_depend_on_human_readable_output` | D7 第 7 行 / T33：`color.ui always` + 非 ASCII 名（`功能/中文`） |
 | `test_list_branches_returns_none_for_non_repo_and_missing_path` | D7 第 10 行 / D4：三态里的 `None` |
+
+
+## S11 扩展的写面（仍然只有这一个文件）
+
+S7 D5 的允许清单**照旧**，S11 D5 只往里加三条，不删任何禁止项：
+
+| 符号 | 行 | 做什么 |
+|---|---|---|
+| `_COMMIT_IDENTITY` | 212 | `-c user.email=kernel@localhost -c user.name=postel`——提交身份来自内核，不读用户 git config（T34） |
+| `head_commit(worktree)` | 215 | 只读 `rev-parse HEAD`，但复用 30s 外壳与环境；任务开始/结束各调一次（S11 D2） |
+| `commit_all(worktree, message)` | 224 | `git add -A` + `git commit -m <内核生成的消息>`，只作用于**Bot 工作区** |
+| `create_branch(root, branch, start_sha)` | 237 | 在**主仓库 refs** 建候选分支；分支已存在时 git 拒绝，不覆盖 |
+
+禁止项一字未改：无 `--force`、无 `reset --hard` / `clean` / `stash`、不删分支、不在主工作区
+checkout、内核不直接写工作区文件（Agent 写、内核只 stage/commit）。复用工作区**不重置**，
+所以 S11 以"任务开始时的 HEAD"为 diff base，见 [S11 spec §2 D2](../../design/issues/S11-candidate-emerge.md)。

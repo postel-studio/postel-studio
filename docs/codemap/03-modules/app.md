@@ -1,6 +1,6 @@
 # 03 · app — `src/postel_studio/api/app.py`
 
-> 层 L3 · 112 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
+> 层 L3 · 139 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
 
 ## 职责
 
@@ -139,3 +139,11 @@ gateway.install(
 | `tests/test_bind.py::test_websocket_bind_then_list_returns_the_repo` | 注入链真的通了（端到端） |
 | `tests/test_bind.py::test_no_http_route_for_repositories` | 没长出 `/api/repos` |
 | `tests/test_bot_charter.py::test_ws_bot_frames_match_service` | S6 的注入链真的通了（真内核 + 真 WS 帧） |
+
+
+### S11 候选装配
+
+`CandidateStore` + `CandidateService(store, candidates)` 构造后：
+① 作为 `CandidateMaker` 注入 `Orchestrator`（成功路径看磁盘、固化候选）；
+② `candidates.list` 注入 `gateway.Providers.candidate_list`（单条详情）。
+与 S10 同一纪律：业务能力都在 L3，`app` 只装配，不写业务逻辑。

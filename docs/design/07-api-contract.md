@@ -114,7 +114,7 @@
 
 | 方法 | 参数 | 返回 |
 |---|---|---|
-| `candidate.list` | `repoId?, reviewState?` | `candidate[]` |
+| `candidate.list` | `repoId, taskId?, reviewState?` | `candidate[]`（S11：repoId 必需，见 §4.12） |
 | `candidate.approve` | `candidateId` | `candidate` |
 | `candidate.reject` | `candidateId, reason?` | `candidate` |
 | `candidate.push` | `candidateId` | `candidate` |
@@ -634,6 +634,44 @@ queued ──worker──▶ running ──stopReason──▶ succeeded | faile
    页面必须在点了检测之后才说「可用」。
 3. **`bot.agentKind` 仍不可写**：S9 没有选通道的 UI，`bot.create` 继续拒绝非 null 的
    `agentKind`（U18，到期 S10）。
+
+---
+
+### 4.12 `candidate.list`（S11：任务成功后的一条候选详情）
+
+`candidate.list` 是 S11 唯一新增的帧方法；S12 的收件箱列表也用它（按 `repoId` 取多条，
+后端按 `created_at DESC` 排）。`taskId` 是详情卡的单行读，`reviewState` 是 06 §3.2 的筛选。
+
+```json
+{"type":"req","id":"c20","method":"candidate.list",
+ "params":{"repoId":"adec6540a725","taskId":"01J..."}}
+{"type":"res","id":"c20","ok":true,"result":{"seq":20,"data":[{
+  "candidateId":"cand_01J...","taskId":"01J...","botName":"builder",
+  "branch":"bot/builder/mym4tc1e","baseSha":"02c9...","headSha":"96fb...",
+  "filesChanged":1,"insertions":1,"deletions":0,"reviewState":"local_only",
+  "remote":null,"target":null,"createdAt":1795760000.0}]}}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `candidateId` | string | `cand_` + ULID |
+| `taskId` / `botName` | string | 派生自任务/分支，候选表不冗余存 bot/repo |
+| `branch` | string | `bot/<bot>/<ULID 随机尾部 8 位>`（S11 D1，见 issue §8 的撞车实测） |
+| `baseSha` / `headSha` | string | 40 位 commit id；base 是**任务开始时的工作区 HEAD**，不是派活的 baseRef（D2） |
+| `filesChanged` / `insertions` / `deletions` | int | 来自 `git diff --numstat`，与 S5 的 `repo.diff.stat` 同口径；**不是**缓存的 diff 文本 |
+| `reviewState` | string | S11 恒 `local_only`（06 §3.2 的其余状态由 S13 写入） |
+| `remote` / `target` | string \| null | `local_only` 时为 `null` |
+| `createdAt` | number | epoch 秒 |
+
+错误码：`repoId` 缺失/非字符串 → `INVALID_PARAMS`；仓库未绑定 → `REPO_NOT_BOUND`；
+`taskId` / `reviewState` 形状不对 → `INVALID_PARAMS`。
+
+**diff 从哪来**：载荷里没有 patch。页面拿 `baseSha` / `headSha` 再发 `repo.diff`（§4.6），
+因此 diff 与 S5 的渲染件逐字一致，也遵守 06 §8「diff 不落库、不缓存」。
+
+**事件**：任务成功后内核发 `candidate.proposed`（`{candidateId, taskId}`），细节由客户端
+再发一次 `candidate.list` 取（03 §3 的载荷约定）。
+
 
 ---
 

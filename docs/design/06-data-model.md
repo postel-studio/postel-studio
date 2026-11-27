@@ -258,3 +258,17 @@ local_only ──push──> pushed ──pr──> pr_open ──approve──>
 | **charter 正文** | 文件是事实源（`<状态根>/bots/<repo_id>/<name>/charter.md`）；落库会与用户手改不一致（S6 D5） |
 | 用户源码副本 | 只在 worktree 里，不在 DB |
 | 分支列表 | **视图实体**：每次按需从 git 读（`repo.branches`），不落库。分支的真相只可能在 git 里，存一份就是第二事实源（S4 D4/D5） |
+
+## 9. S11 落地注记（候选）
+
+- v5 只加了 `candidates` 表：`tasks.candidate_id` 是 v4 就占好的列，
+  S11 用 `TaskStore.transition(..., candidate_id=...)` 与终态一起原子写入；
+  候选行先插、迁移后做，竞态输家删掉自己刚插的那行（S11 D6）。
+- `branch` 的形态是 `bot/<bot_name>/<ULID 随机尾部 8 位>`（不是前缀——
+  同毫秒前缀必然撞车，见 S11 spec §8 / 06-pitfalls T46）；`bot_name` 从
+  bot 实体取、经过 `bot_name_ok` 白名单，分支名派生是纯函数。
+- `base_sha` 是**任务开始时工作区 HEAD**（不是 `base_ref`）。S7 的"复用不重置"意味着
+  第二个任务从上一候选的 commit 起步；用开始时的 HEAD 做 base 才能保证每个候选的
+  `base...head` 只含本任务的改动。06 §2.4 的"base 是 head 的祖先"由构建顺序保证。
+- `files_changed` / `insertions` / `deletions` 来自 `gitops.diff_stat` 的 `--numstat`，
+  与 `repo.diff` 的 stat 同口径；**载荷与数据库都不存 patch**（06 §8）。

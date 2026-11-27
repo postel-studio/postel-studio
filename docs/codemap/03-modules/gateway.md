@@ -1,6 +1,6 @@
 # 03 · gateway — `src/postel_studio/api/gateway.py`
 
-> 层 L3 · 309 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md) · [orchestrator](orchestrator.md)
+> 层 L3 · 312 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol](../../design/02b-protocol.md) · 分派对象：[repository](repository.md) · [orchestrator](orchestrator.md)
 
 ## 职责
 
@@ -19,7 +19,7 @@ WebSocket 网关：**认证 → 接受 → 分派 → 回帧**。
 | `Providers` | 94 | frozen dataclass，注入依赖（S3~S9 逐刀加的字段 + S10 的 `task_dispatch` / `task_status` / `task_cancel`，共 17 个业务入口） | `app.create_app` |
 | `EventHubLike` | 125 | **S10**：编排器 `EventHub` 的形状（Protocol）；网关不反向 import 编排器，T14 的同一纪律 | `install(..., hub=…)` |
 | `active_connection_count()` | 140 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
-| `dispatch(method, params, providers)` | 146 | 方法表（**19 个分支**：S10 加了 `task.dispatch` / `task.status` / `task.cancel`） | `handler` |
+| `dispatch(method, params, providers)` | 147 | 方法表（**20 个分支**：S10 加了 `task.dispatch` / `task.status` / `task.cancel`） | `handler` |
 | `_topics_of(params)` | 187 | **S10**：解析 `subscribe` 的 `topics`（白名单 = `frames.KNOWN_TOPICS`，非空；不合法回 `None`） | `handler` 的 subscribe 分支 |
 | `install(app, path, tickets, providers, hub=None)` | 204 | 把 WS 路由挂到 app；**S10 加了 `hub` 参数**（缺省 `None` 时 `subscribe` 回 `UNKNOWN_METHOD`，S2~S9 行为不变） | `app.create_app` |
 | `handler` 内的 `pump()` | 238 | **S10**：每连接的事件泵 task——从队列取 evt、经 `send_lock` 发出 | `handler` |
@@ -125,7 +125,7 @@ finally:
 
 `system.health` 与 `system.echo` **共用同一个计数器**，不另造。
 
-### `dispatch()` 现在有 19 个分支，但每一行都是**转手**（S10 之后仍如此）
+### `dispatch()` 现在有 20 个分支，但每一行都是**转手**（S10 之后仍如此）
 
 ```python
 # api/gateway.py:146-184（真实代码的形状，别把业务写进来）
@@ -155,7 +155,7 @@ raise frames.FrameError(frames.UNKNOWN_METHOD, ...)
 （真实代码里每组是**独立的 `if`**、各做一次 `providers.X(params)` 转手；这里压成组只为读得动。）
 
 `if` 链已经远超当初「6~8 个就换 dict」的阈值，但 S10 的裁决仍然是「本刀只加三行、
-不顺手重构」（预算纪律）：19 行**每行只做一次字段访问**，重构的收益是省十几行，
+不顺手重构」（预算纪律）：20 行**每行只做一次字段访问**，重构的收益是省十几行，
 风险是动到全部既有方法的回归面。留给真正需要方法元数据（权限表、参数 schema）的切片。
 
 ### `subscribe` 是连接级方法，不进 `dispatch()`（S10 D11）
@@ -232,3 +232,10 @@ raise frames.FrameError(frames.UNKNOWN_METHOD, ...)
 | `tests/test_bot_charter.py::test_ws_bot_frames_match_service` | S6 D11 #13：`bot.list` / `memory.charter.get` 帧往返，与直调服务层一致、`seq` 递增 |
 | `tests/test_dispatch.py::test_evt_reaches_subscriber_only` | S10 D11：`task.updated` 只投给订了的连接、未订阅者收不到 |
 | `tests/test_dispatch.py::test_subscribe_replaces_and_validates_topics` | subscribe 重复 = 替换；白名单外 / 空集合 → `INVALID_PARAMS` |
+
+
+### `candidate.list`（S11）
+
+第 20 个方法分支，转手 `providers.candidate_list(params)`；`Providers` 增一个字段，
+`app.create_app()` 是唯一构造点。订阅白名单 `KNOWN_TOPICS` 增加第二个 topic
+`candidate.proposed`（载荷 `{candidateId, taskId}`，07 §3 早就登记了它）。

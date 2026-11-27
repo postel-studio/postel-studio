@@ -238,6 +238,25 @@ Insights（v2）——11 个子页，含真实空态：
 - 取消在 `running` 态是**异步**的：点了之后状态行提示「正在取消…」，真正的
   `cancelled` 由 `task.updated` 事件送到（ACP 实测 ~0.3s，UI 不假装它已完成）。
 
+
+### 4.7 候选详情卡（产品区 · S11）
+
+主区在 `#task` 之后新增 `#candidate`：任务成功后显示**一条**候选（分支、`+X −Y`、
+`仅本地`），点「查看差异」把 `baseSha`/`headSha` 送给 S5 的 `#diff` 面板——
+**不画第二个 diff 渲染件**。Q1（收件箱入口）仍归 S12：这一刀没有列表页、没有 tab。
+
+状态机（`#candidate[data-state]`）：`idle` / `loading` / `done` / `error`，
+显隐只由 CSS 决定，JS 只改属性与文本。
+
+DOM 契约（id 即契约，`s11_candidate.mjs` 按它断言）：
+`#candidate` · `#candidate-title` · `#candidate-state` · `#candidate-detail` ·
+`#candidate-branch` · `#candidate-stat` · `#candidate-error` · `#candidate-open`
+
+订阅 `task.updated` **和** `candidate.proposed`；后者只带 `{candidateId, taskId}`，
+细节走 `candidate.list({repoId, taskId})`。选仓库/重连时取该仓库最近一条候选，
+所以刷新后详情仍在（页面状态不落盘，仓库要重选，同 S8 的既定行为）。
+断连 / 换 Bot / 换仓库都回 `idle` 并清空。
+
 ## 5. 交互约束
 
 - 主题切换：浅/暗两套 token，**必须**同时校验两套下的对比度。

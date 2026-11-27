@@ -23,7 +23,7 @@
   │ L1  api/frames.py     纯数据变换              │  无 IO、无 async、无框架
   ├─────────────────────────────────────────────┤
   │ L0  gitops/repo.py    git 只读探测（S3）      │  
-  │     gitops/worktrees.py git 写面（S7）        │  唯一改 .git/worktrees 的地方
+  │     gitops/worktrees.py git 写面（S7 三条 + S11 三条）│  唯一改 .git/worktrees 的地方
   │     agent/acp_client.py ACP 客户端（S9）      │  起 Agent 子进程（第二条子进程线）
   │     agent/registry.py   通道登记（S9）        │  
   │     storage/db.py     state.db（S3）          │  唯一碰 SQLite 的地方
@@ -64,6 +64,7 @@ graph TD
     WT["api/worktrees.py<br/>工作区编排（S7）"]
     AGT["api/agents.py<br/>Agent 通道编排（S9）"]
     ORC["orchestrator.py<br/>派活编排 + EventHub（S10）"]
+    CAN["candidates.py<br/>候选固化 + 列表（S11）"]
     AS["web/assets.py<br/>页面"]
     DB["storage/db.py<br/>state.db"]
     PA["storage/paths.py<br/>状态根/文件 IO"]
@@ -108,6 +109,11 @@ graph TD
     ORC --> AR
     ORC --> DM
     ORC --> FR
+    APP -->|"构造 CandidateService<br/>注入 CandidateMaker"| CAN
+    CAN --> DB
+    CAN --> GW2
+    CAN --> DM
+    CAN --> FR
     DB --> PA
     DB --> DM
     PA -.->|"函数内 import<br/>(版本号)"| CLI
@@ -208,6 +214,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | `api/repository.py` | `app` / `gateway` / `server` / `web` / `fastapi` / `starlette` / `uvicorn` |
 | `api/bots.py`（S6，L3） | `web`（被 app 装配、被 gateway 注入调用；碰页面就是反向） |
 | `api/agents.py`（S9，L3） | `web` + 同层其它 handler（`app` / `gateway` / `server` / `repository` / `bots` / `worktrees`） |
+| `candidates.py`（S11，L3） | `web` + 同层**全部** handler（含 `orchestrator`）——`CandidateMaker` Protocol 注入（D13） |
 | `orchestrator.py`（S10，L3） | `web` + 同层**全部** handler（`app` / `gateway` / `server` / `repository` / `bots` / `worktrees` / `agents`）——`WorktreeService` 靠 `WorktreeAcquirer` Protocol 注入（D13） |
 | `web/assets.py`（L4） | `api`（被 app import，反向即环） |
 
@@ -233,7 +240,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | ~~`git/`~~ → **已出现**：`gitops/`（S3） | L0（碰磁盘/子进程） | `api/repository.py` |
 | ~~`store/`~~ → **已出现**：`storage/db.py`（S3，**有意不叫 `store/`**：`RepoStore` 是类名，包名会让"store 模块"和"store 对象"混淆） | L0 | `api/app.py`、`api/repository.py` |
 | ~~后续 bot 表~~ → **已出现**（S6）：`bots` | `storage/db.py` 的 `_MIGRATIONS` v3 | `api/bots.py` |
-| ~~后续 task/candidate 表~~ → **已出现（S10）**：`tasks` + `worktree_leases`（`_MIGRATIONS` v4）；candidate 表仍是 S11 的事 | | `orchestrator.py` |
+| ~~后续 task/candidate 表~~ → **已出现**：`tasks` + `worktree_leases`（S10 v4）、`candidates`（S11 v5） | 加到 `storage/db.py` 的 `_MIGRATIONS` | `orchestrator.py` / `candidates.py` |
 | ~~`agent/`（ACP 客户端、子进程）~~ → **已出现（S9）**：`agent/acp_client.py`（协议）+ `agent/registry.py`（通道表） | L0 | `api/agents.py` |
 | `permission/`（纯函数判定） | L1（**无 IO**） | 执行前 |
 | ~~`memory/`（charter 与上下文注入）~~ → **S6 拆成两处**：charter 文件 IO 在 `storage/paths.py`（L0）、编排在 `api/bots.py`（L3） | 不新增包 | `storage/paths.py`、`api/bots.py` |

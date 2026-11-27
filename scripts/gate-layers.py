@@ -160,6 +160,22 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "starlette",
         "uvicorn",
     ),
+    # S11：候选固化与列表读。与 orchestrator 同款 L3 纪律（S11 D13）：只向下
+    # （gitops/ + storage/ + domain/ + frames），不 import 任何同层 handler/页面/框架。
+    "candidates.py": (
+        "postel_studio.api.app",
+        "postel_studio.api.gateway",
+        "postel_studio.api.server",
+        "postel_studio.api.repository",
+        "postel_studio.api.bots",
+        "postel_studio.api.worktrees",
+        "postel_studio.api.agents",
+        "postel_studio.orchestrator",
+        "postel_studio.web",
+        "fastapi",
+        "starlette",
+        "uvicorn",
+    ),
     # ---- L4：页面（被 app import，自己不许反向 import api）----
     "web/assets.py": ("postel_studio.api",),
     # ---- 包入口与包标记：登记为「不设 forbiddin 列表」，但必须被登记 ----

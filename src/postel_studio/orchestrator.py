@@ -25,6 +25,7 @@ from postel_studio.api import frames
 from postel_studio.domain.models import (
     TASK_ACTIVE,
     Bot,
+    Candidate,
     Permission,
     Task,
     WorktreeLease,
@@ -70,6 +71,18 @@ class SessionFactory(Protocol):
     """`acp_client.Session` 的形状（测试用假会话替换）。"""
 
     def __call__(self, command: tuple[str, ...], cwd: str) -> acp_client.Session: ...
+
+
+class CandidateMaker(Protocol):
+    """`candidates.CandidateService` 的形状（S11 D13：不 import 同层模块）。"""
+
+    def snapshot_base(self, worktree_path: str) -> str: ...
+
+    def emerge(
+        self, *, task: Task, repo_id: str, worktree_path: str, base_sha: str
+    ) -> Candidate | None: ...
+
+    def discard(self, candidate_id: str) -> None: ...
 
 
 class EventHub:
@@ -145,6 +158,7 @@ class Orchestrator:
         tasks: TaskStore,
         leases: LeaseStore,
         worktrees: WorktreeAcquirer,
+        candidates: CandidateMaker,
         hub: EventHub,
         *,
         session_factory: SessionFactory | None = None,
@@ -153,6 +167,7 @@ class Orchestrator:
         self._tasks = tasks
         self._leases = leases
         self._worktrees = worktrees
+        self._candidates = candidates
         self._hub = hub
         self._factory: SessionFactory = session_factory or self._default_session
         self._sessions: dict[str, acp_client.Session] = {}  # task_id → 活会话（cancel 用）
@@ -278,6 +293,7 @@ class Orchestrator:
             if running is None:  # cancel 赢了竞态
                 return
             self._publish(running)
+            base_sha = self._candidates.snapshot_base(path)  # S11 D2：会话之前，复用也不串任务
             channel = self._channel_for(task.bot_id)
             session = self._factory(channel.command, path)
             with self._sessions_lock:
@@ -287,7 +303,10 @@ class Orchestrator:
             if requested:  # cancel 在会话建好前到达（D10 的窗口收口）
                 session.cancel()
             outcome = session.prompt(task.prompt)
-            final = self._map_stop(outcome.stop_reason, task.task_id)
+            if outcome.stop_reason == "end_turn":
+                final = self._succeed_with_candidate(task, repo_id, path, base_sha)
+            else:
+                final = self._map_stop(outcome.stop_reason, task.task_id)
         except frames.FrameError as exc:  # acquire 的稳定码原样透传（REPO_NOT_BOUND 等）
             final = self._finish(task.task_id, "failed", exc.code)
         except acp_client.AcpUnavailableError as exc:
@@ -326,6 +345,32 @@ class Orchestrator:
         if not channels:
             raise self._fail(INTERNAL, "没有任何已登记通道")
         return channels[0]
+
+    def _succeed_with_candidate(self, task: Task, repo_id: str, path: str, base_sha: str) -> Task:
+        """`end_turn` 之后看磁盘（S11）：有改动才建候选，否则照旧 `succeeded`。
+
+        候选行先插、任务迁移后做（D6）：`transition` 的 `candidate_id` 与终态在同一条
+        UPDATE 里；输掉 cancel 竞态就只删本 worker 刚插入的那一行，绝不覆盖别人的终态。
+        `candidate.proposed` 在迁移**之后**发布——订阅者收到事件时 `task.status` 一定能看到它。
+        """
+        candidate = self._candidates.emerge(
+            task=task, repo_id=repo_id, worktree_path=path, base_sha=base_sha
+        )
+        if candidate is None:
+            return self._finish(task.task_id, "succeeded", None)
+        updated = self._tasks.transition(
+            task.task_id, "succeeded", candidate_id=candidate.candidate_id
+        )
+        if updated is None:
+            self._candidates.discard(candidate.candidate_id)
+            current = self._tasks.get(task.task_id)
+            assert current is not None  # 行刚被本线程读过，删行不在任何路径上
+            return current
+        self._hub.publish(
+            "candidate.proposed",
+            {"candidateId": candidate.candidate_id, "taskId": task.task_id},
+        )
+        return updated
 
     def _map_stop(self, stop_reason: str, task_id: str) -> Task:
         """D9：stopReason → 状态，fail-closed。end_turn 也不代表有改动（S11 才看磁盘）。"""
@@ -371,6 +416,8 @@ class Orchestrator:
             data["endedAt"] = task.ended_at
         if task.error_code is not None:
             data["errorCode"] = task.error_code
+        if task.candidate_id is not None:
+            data["candidateId"] = task.candidate_id
         return data
 
     def _require_bot(self, params: dict[str, object]) -> Bot:
