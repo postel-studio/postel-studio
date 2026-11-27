@@ -434,3 +434,12 @@ node tools/acceptance/s4_branches.mjs
 `candidate.list({repoId, reviewState})`，`inboxRequestToken` 丢弃竞态回包。
 相对时间是纯函数 `relativeTime(epochSeconds, nowMs)`（刚刚/分钟/小时/天）。
 点行把 `taskId` 交给 S11 的 `loadCandidate()`，**不画第二个详情或 diff 渲染件**。
+
+
+### 审核按钮（S13）
+
+`#candidate-actions` 含 `#candidate-approve` / `#candidate-reject` / `#candidate-reason`；
+终态由 CSS 隐藏，服务端状态机才是真正守门人。按钮按 `botPermissions[selectedBotId]`
+给禁用提示（D4：UX hint，不是安全边界；S16 才做服务端强制）。**没有「合并」按钮**。
+`#candidate[data-state]` 现在直接取 `reviewState`（local_only/…/rejected），
+不再是 S11/S12 的 `done`。订阅 `candidate.updated` 并刷新详情与收件箱。

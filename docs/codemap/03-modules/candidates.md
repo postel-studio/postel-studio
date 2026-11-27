@@ -50,3 +50,11 @@ S12 的列表/筛选/倒序全部复用 S11 已有的 `CandidateService.list` �
 `CandidateStore.list_for_repo`（`reviewState` 过滤 + `created_at DESC` + `limit=100`）。
 本刀没有给候选服务加方法、没有改载荷——S11 issue 里预告的「app.py 支持 reviewState」
 其实在 S11 就已兑现，S12 只消费它。
+
+
+### S13 审核动作
+
+`CandidateService.approve/reject({candidateId, reason?})` 校验 id、状态机、理由 trim/上限，
+调 store 原子迁移，成功后经 `EventPublisher` Protocol 发 `candidate.updated`
+（`{candidateId, reviewState}`）；`_payload` 增加 `rejectReason`。
+`push` / `open_pr` 属 S16，本层没有那两个方法。

@@ -156,3 +156,10 @@ S3 的算法是"有 origin 用 URL 哈希、没有才用路径"。后果实测�
 （`bot/builder/01m8e3ey` 撞车，见 S11 spec §8）；尾部 8 位来自 80 位随机段。
 `Candidate` 实体（12 字段，06 §2.4）与 `REVIEW_STATES`（06 §3.2，S11 只生产 `local_only`）
 都在这个无 IO 层，能被一行断言钉死。
+
+
+### S13 审核状态机
+
+`REVIEW_TRANSITIONS` + `review_transition_ok()` 是 06 §3.2 的唯一事实源（纯函数，fail closed）。
+`approved` / `rejected` 为终态；`rejected → approved` 与任何 `→ merged` 都不允许。
+`REASON_MAX_BYTES = 2000`。`Candidate` 加 `reject_reason` 字段（缺省 None）。

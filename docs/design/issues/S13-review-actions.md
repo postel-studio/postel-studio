@@ -41,7 +41,11 @@ but not enforced until then). S13's UI gating is a **hint**, not a security boun
   visible reason (`需要 L1 以上，当前 L0`). Server-side enforcement stays S16; if a
   crafted frame bypasses the page, S13 still enforces the **state machine** (D1) but not
   permission — recorded in the PR's Not done section, not hidden.
-- **D5 — no merge button**: static test asserts neither the page source nor any button
+- **D5 — `#candidate[data-state]` 契约变更**：S11/S12 时详情页状态是 `done`；S13 起直接取
+  `reviewState`（`local_only` / `pushed` / `pr_open` / `approved` / `rejected`），让 CSS 与 JS
+  共享一个事实源（终态隐藏操作区）。**s11/s12 验收脚本的等待条件已同步修改**，否则会因
+  `=== "done"` 永远等不到而超时（实测：s11 CHECK 6、s12 CHECK 15 各红一次后修好）。
+- **D5a — no merge button**: static test asserts neither the page source nor any button
   label contains `合并` as an action. The word may appear in explanatory prose only if
   prefixed with `不提供`; the test checks button/label text, not arbitrary comments.
 - **D6 — `candidate.updated` event** with the registered payload `{candidateId,

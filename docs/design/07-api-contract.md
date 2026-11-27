@@ -673,6 +673,30 @@ queued ──worker──▶ running ──stopReason──▶ succeeded | faile
 再发一次 `candidate.list` 取（03 §3 的载荷约定）。
 
 
+
+---
+
+### 4.13 `candidate.approve` / `candidate.reject`（S13：人的决定）
+
+```json
+{"type":"req","id":"r1","method":"candidate.approve","params":{"candidateId":"cand_01J..."}}
+{"type":"res","id":"r1","ok":true,"result":{"seq":22,"data":{/* candidate，reviewState=approved */}}}
+
+{"type":"req","id":"r2","method":"candidate.reject",
+ "params":{"candidateId":"cand_01J...","reason":"改动没过测试"}}
+{"type":"res","id":"r2","ok":true,"result":{"seq":23,"data":{/* candidate，reviewState=rejected，rejectReason 已填 */}}}
+```
+
+| 规则 | 说明 |
+|---|---|
+| 状态机 | `REVIEW_TRANSITIONS`（06 §3.2）：`local_only → approved` 合法；`rejected → approved`、`approved → *`、`→ merged` 均非法 |
+| 理由 | `reason` 可选，trim 后 UTF-8 字节上限 2000（S13 D2）；落 `candidates.reject_reason` 列，随状态原子更新 |
+| 竞态 | 两个请求同时改一行：`UPDATE … WHERE review_state = <from>` 只有一个命中，输家 `INVALID_PARAMS`（不覆盖赢家理由） |
+| 事件 | 成功后 `candidate.updated`，载荷 `{candidateId, reviewState}`（07 §3 早已登记） |
+| 错误码 | `candidateId` 缺失/不存在/状态非法/理由过长 → `INVALID_PARAMS`（既有码，无新增） |
+| 权限 | 服务端在 S16 才强制；S13 的 UI 禁用只是提示（03 §4.7），不能当安全边界 |
+| 不做 | `push` / `open_pr` 属 S16；**永不提供合并** |
+
 ---
 
 ## 5. 兼容与演进

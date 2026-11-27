@@ -239,3 +239,9 @@ raise frames.FrameError(frames.UNKNOWN_METHOD, ...)
 第 20 个方法分支，转手 `providers.candidate_list(params)`；`Providers` 增一个字段，
 `app.create_app()` 是唯一构造点。订阅白名单 `KNOWN_TOPICS` 增加第二个 topic
 `candidate.proposed`（载荷 `{candidateId, taskId}`，07 §3 早就登记了它）。
+
+
+### S13：两个审核方法
+
+方法表 19 → 21（`candidate.approve` / `candidate.reject`），`Providers` 增两个字段，
+`app.create_app()` 是唯一注入点。`KNOWN_TOPICS` 增 `candidate.updated`（07 §3 早已登记）。

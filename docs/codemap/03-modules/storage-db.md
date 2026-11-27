@@ -241,3 +241,15 @@ CREATE INDEX candidates_review_created ON candidates (review_state, created_at D
 - `CandidateStore.insert` / `get` / `for_task` / `list_for_repo` / `discard`：写路径必须
   `with self._lock, self._conn`（T44）；`discard` 只补偿删本 worker 刚插入的行，
   不做通用删除 API（06 §2.4：候选一旦被人看见就不该被内核删）。
+
+
+### v6（S13）：拒绝理由 + 原子迁移
+
+```sql
+ALTER TABLE candidates ADD COLUMN reject_reason TEXT;
+```
+
+`CandidateStore.transition(candidate_id, target, *, reject_reason=None)`：
+`UPDATE … SET review_state = ?, reject_reason = ? WHERE candidate_id = ? AND review_state = ?`，
+与 `TaskStore.transition` 同一纪律（T44：锁 + 连接一起拿）；竞态输家回 `None`，
+不覆盖赢家写入的理由。

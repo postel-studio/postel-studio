@@ -272,3 +272,15 @@ local_only ──push──> pushed ──pr──> pr_open ──approve──>
   `base...head` 只含本任务的改动。06 §2.4 的"base 是 head 的祖先"由构建顺序保证。
 - `files_changed` / `insertions` / `deletions` 来自 `gitops.diff_stat` 的 `--numstat`，
   与 `repo.diff` 的 stat 同口径；**载荷与数据库都不存 patch**（06 §8）。
+
+
+## 10. S13 落地注记（审核动作）
+
+- v6 给 `candidates` 加 `reject_reason TEXT`；`Candidate` 实体加 `reject_reason`
+  （缺省 None，兼容 S11 构造点）。理由 trim 后按 UTF-8 字节上限 2000 存储。
+- `REVIEW_TRANSITIONS` 是审核迁移的唯一事实源（纯函数，fail closed）：
+  `approved` / `rejected` 为终态；S13 明示 `local_only → approved` 在 MVP 合法
+  （不要求先 push/PR），`rejected → approved` 与 `→ merged` 永不合法。
+- 迁移与理由写入同一个 `UPDATE … WHERE review_state = <from>`（T44 的锁+连接纪律）；
+  竞态输家回 `None`，不覆盖赢家理由。
+- `candidate.updated`（07 §3 早已登记）在 S13 首次发出，载荷 `{candidateId, reviewState}`。
