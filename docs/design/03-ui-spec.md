@@ -218,7 +218,8 @@ Insights（v2）——11 个子页，含真实空态：
 | `ready` | 选了 Bot 且无活跃任务 | 派活表单（textarea + 按钮）可见 |
 | `running` | 派活成功或收到 `running` 事件 | 「正在执行…」+ taskId + **取消按钮**；**表单收起**——页面先不给第二次派活的入口（BUSY 由内核兜底，但 UI 不该诱导必败操作） |
 | `done` | `succeeded` / `cancelled` | 状态行 + 结束时间；取消按钮消失，表单回到可见 |
-| `error` | `failed` / `interrupted` | 按**码**映射的一行错误；按钮变「重试」入口（表单可见） |
+| `error` | `failed` | 按**码**映射的一行错误；按钮变「重试」入口（表单可见） |
+| `interrupted` | `interrupted`（内核重启过） | 「被打断（内核重启过，确认后可重跑）」+ taskId；**`#task-rerun` 重跑按钮可见**、取消按钮不可见、派活表单可见（可改写 prompt）；绝不自动重跑（S15 D1/D2） |
 
 **错误文案**（S10 往全局 `ERROR_TEXT` 加了两条，其余复用全局表）：
 
@@ -230,7 +231,7 @@ Insights（v2）——11 个子页，含真实空态：
 **DOM 契约**（id 即契约，`s10_dispatch.mjs` 按它断言）：
 
 `#task` · `#task-title` · `#task-state` · `#task-form` · `#task-prompt` · `#task-dispatch` ·
-`#task-cancel` · `#task-error` · `#task-details` · `#task-id` · `#task-status-line`
+`#task-cancel` · `#task-error` · `#task-details` · `#task-id` · `#task-status-line` · `#task-rerun`（S15）
 
 **其他交互约束**：
 
