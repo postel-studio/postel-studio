@@ -24,7 +24,7 @@
 | L3 | [candidates](candidates.md) | `src/postel_studio/candidates.py` | 148 | 候选固化（commit/分支/落库）与 `candidate.list`（S11，**不 import 同层 handler**） |
 | L3 | [orchestrator](orchestrator.md) | `src/postel_studio/orchestrator.py` | 450 | `task.dispatch` / `status` / `cancel` 的编排：worker 线程一任务一线程、`EventHub` 事件桥（S10，**不 import 同层 handler**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 126 | 帧编解码 + topic 白名单，纯函数 |
-| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 2104 | 页面 HTML + 内联 JS（S3 仓库区 + S4 分支 + S5 差异 + S6 Bots/charter + S7 工作区 + S8 新建表单 + S9 Agent 卡片 + S10 派活卡片 + S11 候选详情卡） |
+| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 2274 | 页面 HTML + 内联 JS（S3 仓库区 + S4 分支 + S5 差异 + S6 Bots/charter + S7 工作区 + S8 新建表单 + S9 Agent 卡片 + S10 派活卡片 + S11 候选详情卡） |
 
 **必须有但我还没单列的**（内容已在别处）：
 

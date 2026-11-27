@@ -983,7 +983,7 @@ S11 的"无事可做"有三道守卫（commit 前、commit 后、`diff_stat == 0
 | U4 | 页面从 `localhost:` 而非 `127.0.0.1:` 打开时未测试 | 端口比较仍成立，但该 variant 未验证 | **M1 验收（S14）前** | M1 验收若从 `localhost:` 打开，结论建立在未验证的变体上 |
 | U5 | 层依赖检查未进门禁（见 [02-layers §4](02-layers.md#4-可执行检查)） | ✅ **已修（S4.5）**：`scripts/gate-layers.py` 进门禁（`check.sh layers` + CI），且**新模块不登记层就失败**，不再靠 review。文档里那段片段已退役 | ✅ **已修（S4.5）** | 规则靠 review，新模块可静默向上 import——已被 `scripts/gate-layers.py` 收走 |
 | U6 | 版本号有 `pyproject.toml` 与 `__init__.py` 两个副本 | S20 自动化 | **S20（发版）前** | 两个版本号副本，发版时必然出现「包上是 A、运行时是 B」 |
-| U7 | `encode_event()` 从未被调用 | 形状已定，无调用方测试 | **S12（收件箱推送）前** | 推送路径的第一处真实使用会暴露形状问题，越晚发现改动越大 |
+| U7 | `encode_event()` 从未被调用（S2 登记） | ✅ **已收口（S10 起，S12 复核确认）**：`api/gateway.py:241-245` 的每连接事件泵真实调用 `frames.encode_event()`；`task.updated` / `candidate.proposed` 两个 topic 都有真实订阅者，S12 收件箱沿用同一泵，未新增 topic。原「到期 S12」的复核已完成 | ✅ **已收口（S12 复核）** | — |
 | U8 | codemap 门禁只判「动没动地图」，不判「动得对不对」 | **部分结掉（S4.5）**：机械可判的部分（相对链接 / 锚点 / `#L` 行号 / 模块行数表 / 页面 id 一致性）已由 `scripts/gate-docs.py` 进门禁；**文字内容质量仍靠 review**，这一半如实承认没办法 | ✅ **部分结掉（S4.5）** | 机械可判的部分已进门禁；**文字内容质量仍靠 review**，如实承认 |
 | U9 | **仓库加了 origin 之后 `repo_id` 会变**（S3 的已知让步）：界面/后续切片挂在 id 上会"丢失"这个仓库 | ✅ **已修（S3.5）。**怎么修的：`repo_id` 改成 `sha256(绑定时的绝对路径)`、**只在 INSERT 时算一次**，`upsert` 按 path 命中时不再写它（D1）；origin 的哈希降级成新列 `origin_hash`，只识别"同一远端"、不参与主键（D2）；schema v1→v2 只加列、**不重写任何历史 id**（D3）。详见 [08 §6](../design/08-repo-id-stability.md) 与本文 §T32。 | ✅ **已修（S3.5）** | — |
 | U10 | `state.db` 的连接**没地方关**（`create_app()` 构造 `RepoStore`，进程退出时由 OS 回收） | 不丢数据（WAL 已 fsync），但"有开必有关"的纪律是破的。将来 `server.serve()` 的 `finally` 应该关它 | **S15 前** | 生命周期是 S15 的主题；「有开必有关」的纪律破着，进程内测试还可能锁库 |
