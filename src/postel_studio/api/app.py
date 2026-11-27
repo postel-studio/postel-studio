@@ -78,7 +78,7 @@ def create_app(
     hub = EventHub()
     # S11：候选固化。它持有 RepoStore（解析允许根）与自己的 CandidateStore；
     # 与编排器一样由这里装配注入，不 import 同层 handler（D13）。
-    candidates = CandidateService(store, CandidateStore())
+    candidates = CandidateService(store, CandidateStore(), hub)
     orchestrator = Orchestrator(bot_store, tasks, leases, worktrees, candidates, hub)
 
     def index() -> HTMLResponse:
@@ -133,6 +133,8 @@ def create_app(
             task_status=orchestrator.status,  # S10
             task_cancel=orchestrator.cancel,  # S10
             candidate_list=candidates.list,  # S11
+            candidate_approve=candidates.approve,  # S13
+            candidate_reject=candidates.reject,  # S13
         ),
         hub=hub,  # S10 D11：subscribe / evt 泵的数据源
     )
