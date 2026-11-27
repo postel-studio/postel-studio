@@ -119,6 +119,7 @@ class Providers:
     agent_capabilities: Callable[[dict[str, object]], dict[str, object]]
     task_dispatch: Callable[[dict[str, object]], dict[str, object]]
     task_status: Callable[[dict[str, object]], dict[str, object]]
+    task_latest: Callable[[dict[str, object]], dict[str, object] | None]
     task_cancel: Callable[[dict[str, object]], dict[str, object]]
     candidate_list: Callable[[dict[str, object]], list[dict[str, object]]]
     candidate_approve: Callable[[dict[str, object]], dict[str, object]]
@@ -182,6 +183,8 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.task_dispatch(params)
     if method == "task.status":  # S10 / 07 §2.2：按 id 取任务载荷
         return providers.task_status(params)
+    if method == "task.latest":  # S15：某 Bot 最近一条任务（页面重连恢复中断态）
+        return providers.task_latest(params)
     if method == "task.cancel":  # S10 / 07 §2.2：queued 直接迁移；running 发会话取消
         return providers.task_cancel(params)
     if method == "candidate.list":  # S11 / 07 §2.5：仓库候选（taskId 单条详情）

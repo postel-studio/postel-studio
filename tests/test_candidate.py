@@ -275,6 +275,7 @@ def test_candidate_diff_matches_git_shortstat(env: Env) -> None:
         agent_capabilities=lambda p: p,
         task_dispatch=lambda p: p,
         task_status=lambda p: p,
+        task_latest=lambda p: None,  # S15
         task_cancel=lambda p: p,
         candidate_list=env.service.list,
         candidate_approve=env.service.approve,

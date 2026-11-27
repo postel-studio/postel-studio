@@ -8,7 +8,7 @@
  * 用法：node tools/acceptance/s13_review.mjs
  */
 
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -20,6 +20,19 @@ const execFileP = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
 const CLI = join(REPO_ROOT, ".venv", "bin", "postel-studio");
+
+// S15：真 opencode 的免费额度会耗尽；注入 deepseek 凭据快照让派活类脚本真跑。
+// agent_env.py 只读真实凭据库做快照到临时目录，缺凭据时输出 {}（不假装成功）。
+function agentEnv(stateHome) {
+  try {
+    const out = execFileSync(join(REPO_ROOT, ".venv", "bin", "python"),
+      [join(HERE, "agent_env.py"), stateHome], { cwd: REPO_ROOT, timeout: 30000, encoding: "utf8" });
+    return JSON.parse(out.trim() || "{}");
+  } catch {
+    return {};
+  }
+}
+
 const BOOT_SECONDS = 40;
 const WAIT_MS = 180000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -88,7 +101,7 @@ async function makeRepo(base) {
 function startKernel(stateHome) {
   const proc = spawn(CLI, ["serve", "--port", "0"], {
     cwd: REPO_ROOT,
-    env: { ...process.env, POSTEL_HOME: stateHome, HOME: stateHome },
+    env: { ...process.env, ...agentEnv(stateHome), POSTEL_HOME: stateHome, HOME: stateHome },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";

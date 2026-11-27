@@ -26,7 +26,7 @@
 | `_configured_log_config()` | 158 | 合体版 | `_run` |
 | `_install_signal_handlers()` | 164 | SIGTERM/SIGINT → 优雅停止 | `_run` |
 | `gateway_path(root)` | 187 | 由状态根派生 `/gateway/<sha16>` | `_run` |
-| `_run(root, sock)` | 199 | 真正的启动与收场 | `serve` |
+| `_run(root, sock)` | 199 | 真正的启动与收场；**S15/U10**：`finally` 里 `app.state.close_stores()` 关闭所有 store | `serve` |
 
 ## 关键决策与理由
 

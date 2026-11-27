@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Final
 
@@ -78,8 +79,22 @@ def create_app(
     hub = EventHub()
     # S11：候选固化。它持有 RepoStore（解析允许根）与自己的 CandidateStore；
     # 与编排器一样由这里装配注入，不 import 同层 handler（D13）。
-    candidates = CandidateService(store, CandidateStore(), hub)
+    candidate_store = CandidateStore()
+    candidates = CandidateService(store, candidate_store, hub)
     orchestrator = Orchestrator(bot_store, tasks, leases, worktrees, candidates, hub)
+
+    def close_stores() -> None:
+        """U10（S15 收口）：进程退出时关闭所有 store 连接 + 等 worker 收场。
+
+        顺序有讲究：先等 worker 退尽（否则它们的 finally 还写库），再关连接；
+        每个 close 幂等，单个失败不阻断其余连接回收。
+        """
+        orchestrator.wait_idle(timeout=10.0)
+        for item in (tasks, leases, candidate_store, bot_store, store):
+            with contextlib.suppress(Exception):
+                item.close()
+
+    app.state.close_stores = close_stores  # server.py 的 finally 调用（lifespan=off）
 
     def index() -> HTMLResponse:
         page = render_index(
@@ -131,6 +146,7 @@ def create_app(
             agent_capabilities=agents.capabilities,  # S9
             task_dispatch=orchestrator.dispatch,  # S10
             task_status=orchestrator.status,  # S10
+            task_latest=orchestrator.latest,  # S15：重连恢复中断态
             task_cancel=orchestrator.cancel,  # S10
             candidate_list=candidates.list,  # S11
             candidate_approve=candidates.approve,  # S13

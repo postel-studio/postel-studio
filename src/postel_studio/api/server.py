@@ -226,8 +226,9 @@ def _run(root: Path, sock: socket.socket) -> int:
     print(f"  状态根   {root}", flush=True)
     print("Ctrl+C 停止", flush=True)
 
+    app = create_app(ws_path, host=host, port=port)
     config = uvicorn.Config(
-        create_app(ws_path, host=host, port=port),
+        app,
         # uvicorn 的缺省 logging 配置里**没有 root logger 项**：不挂流处理器，我们自己模块
         # 的 logger 会一路静默（INFO/WARNING 都不会出现在 stderr）。所以把内核的 logger
         # 显式接到 uvicorn 的 `default` 流处理器上，级别随 `log_level` 一起定。
@@ -248,6 +249,10 @@ def _run(root: Path, sock: socket.socket) -> int:
     except KeyboardInterrupt:  # pragma: no cover - 个别平台的退出路径
         pass
     finally:
+        # U10（S15 收口）：等 worker 收场、关掉所有 store 连接，再清监听 socket 与凭据文件。
+        close = getattr(app.state, "close_stores", None)
+        if callable(close):
+            close()
         sock.close()
         with contextlib.suppress(OSError):
             remove_server_info()  # 它描述的是「谁在听」，自己停了就不再成立

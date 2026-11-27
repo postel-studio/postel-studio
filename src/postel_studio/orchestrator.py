@@ -239,6 +239,16 @@ class Orchestrator:
         task = self._require_task(params)
         return self._payload(task)
 
+    def latest(self, params: dict[str, object]) -> dict[str, object] | None:
+        """`task.latest`（S15）：某 Bot 最近一条任务，供页面重连后恢复中断态。
+
+        `botId` 必需；Bot 不存在 → `INVALID_PARAMS`（与 status 同口径）。没有任务 → `None`。
+        只读，不订阅事件，也不触发任何 worker。
+        """
+        bot = self._require_bot(params)
+        task = self._tasks.latest_for_bot(bot.bot_id)
+        return None if task is None else self._payload(task)
+
     def cancel(self, params: dict[str, object]) -> dict[str, object]:
         """`task.cancel`（07 §2.2）。queued 直接迁移；running 发会话取消，迁移交给 worker
         （实测：prompt 应答在 ~0.3s 内带 `stopReason: "cancelled"` 回来）。终态 → `INVALID_PARAMS`。
