@@ -1,11 +1,11 @@
 # 03 · domain — `src/postel_studio/domain/`
 
-> 层 L0（纯函数，**无 IO**）· 396 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1](../../design/06-data-model.md) · [08-repo-id-stability](../../design/08-repo-id-stability.md)
+> 层 L0（纯函数，**无 IO**）· 453 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1](../../design/06-data-model.md) · [08-repo-id-stability](../../design/08-repo-id-stability.md)
 
 ## 职责
 
 领域模型与**纯派生规则**：`Repo` / `Bot` / `Task` / `WorktreeLease` 实体、origin URL 归一化、
-`repo_id` / `bot_id` 与名字白名单的算法（S6 加了 Bot，S8 加了权限阶梯，S10 加了任务状态机与 ULID）。
+`repo_id` / `bot_id` 与名字白名单的算法（S6 加了 Bot，S8 加了权限阶梯，S10 加了任务状态机与 ULID，S11 加了候选实体与分支名派生）。
 这一层**不碰磁盘、不起子进程、不 import 框架**——它的每个函数都能在一行断言里被验证。
 
 S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算法是被验收断言过的契约
@@ -17,7 +17,7 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 5 | 包标记 + 本层"无 IO"的声明 |
-| `models.py` | 396 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8）/ `ulid` / `prompt_ok` / `Task` / `WorktreeLease` / 任务状态机（S10） |
+| `models.py` | 453 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8）/ `ulid` / `prompt_ok` / `Task` / `WorktreeLease` / 任务状态机（S10） |
 
 ## 符号表（`domain/models.py`）
 
@@ -148,3 +148,11 @@ S3 的算法是"有 origin 用 URL 哈希、没有才用路径"。后果实测�
 | `tests/test_bot_charter.py::test_bot_name_whitelist` | S6 D11 #11：`../x` / `Builder` / `a_b` / 33 字符被拒 |
 | `tests/test_dispatch.py::test_illegal_transitions_are_refused` | S10 D6：`queued→succeeded` 等非法对被 `TaskStore.transition` 拒绝（事实源在本模块的表） |
 | `tests/test_dispatch.py::test_l0_bot_refused_before_any_execution` | S10 D4：权限判定先于建行/起线程（`permission_covers` 的消费方） |
+
+### Candidate 与分支名派生（S11 D1）
+
+`candidate_branch()` 是纯函数：`bot/{bot_name}/{task_id[-8:].lower()}`，非法字符换 `-`。
+**用随机尾部而不是前缀**是实测返工：ULID 前 40 位全是时间戳，同毫秒两个任务前缀必然相同
+（`bot/builder/01m8e3ey` 撞车，见 S11 spec §8）；尾部 8 位来自 80 位随机段。
+`Candidate` 实体（12 字段，06 §2.4）与 `REVIEW_STATES`（06 §3.2，S11 只生产 `local_only`）
+都在这个无 IO 层，能被一行断言钉死。

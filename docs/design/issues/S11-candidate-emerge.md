@@ -23,11 +23,15 @@ driven by the task it belongs to. No UI code in this slice depends on where S12 
 ## 2. Decisions
 
 - **D1 - the candidate branch is derived, never authored.** `branch =
-  bot/{bot_name}/{task_id[:8].lower()}` via a pure `candidate_branch()` in `domain/models.py`.
+  bot/{bot_name}/{task_id[-8:].lower()}` via a pure `candidate_branch()` in `domain/models.py`.
+  **Amended after measurement:** the first draft used the 8-char *prefix*, but the first 40
+  bits of a ULID are all timestamp — two dispatches in the same millisecond produced the
+  same branch (`bot/builder/01m8e3ey`, second task failed with "候选分支已存在"). The tail
+  8 chars come from the 80-bit random segment (2^-40 collision within a millisecond).
   Bot names already pass `bot_name_ok` (`^[a-z][a-z0-9-]{0,31}$`); the function still replaces
   any character outside `[a-z0-9-]` with `-` (defence in depth for bad stored data). Agent
-  prompt text never reaches a ref name. ULID is Crockford base32, so lowercasing keeps it
-  refname-safe. `workspace` (S7) cannot collide with an 8-char ULID prefix.
+  prompt text never reaches a ref name. `workspace` (S7) cannot collide with an 8-char ULID
+  tail (Crockford chars never spell `workspace` in 8 chars).
 - **D2 - base_sha is the worktree HEAD captured at task start, not the task's `baseRef`.**
   S7 D3/D5 forbids resetting a reused workspace branch, so a second task on the same Bot
   starts from the previous candidate's commit. Snapshotting HEAD immediately before the
@@ -133,8 +137,12 @@ internal). Measured numbers go in the PR body; over-budget means splitting, not 
 - **S11 #2**: capture HEAD *after* the agent instead of before →
   `test_second_task_on_reused_worktree_diff_is_isolated` must go red. Guards D2 (the whole
   reason base_sha is not `baseRef`).
-- **S11 #3**: remove the no-change guard (always commit and create) →
-  `test_no_change_task_stays_succeeded_without_candidate` must go red. Guards D3.
+- **S11 #3 (composite)**: remove **all three** no-change guards together — the
+  pre-commit `not dirty and head == base_sha`, the post-commit `head == base_sha`,
+  and the zero-`diff_stat` check → `test_no_change_task_stays_succeeded_without_candidate`
+  must go red. Removing one or two keeps it green (the rest cover it) — the same
+  redundant-defence lesson as T45/S10 #2, measured three times during implementation.
+  Guards D3.
 - **S11 #4**: remove the compensating delete after a lost transition race → the cancelled-
   during-emergence test must find an orphan candidate. Guards D6.
 
@@ -175,6 +183,15 @@ clean worktree no-change: dirty=0 head_same=yes
 `git diff --numstat -z` is exactly the command `gitops.diff_stat` already uses; the
 `--shortstat` line confirms the `+X −Y` numbers agree with git. `merge-base --is-ancestor`
 confirms D2's invariant. No `reset`, no `clean`, no `--force` was needed anywhere.
+
+Failed first attempt (the reason D1 now uses the ULID tail), from the real test log:
+
+```text
+INFO orchestrator 任务 01M8E3EYAZ10VYDVQM63EFXPPA 以 INTERNAL 结束：候选分支已存在：bot/builder/01m8e3ey
+```
+
+Two tasks dispatched in the same millisecond share the ULID **prefix** (40 bits of
+timestamp) — the branch-name collision is structural, not probabilistic.
 
 ## 9. Non-goals
 

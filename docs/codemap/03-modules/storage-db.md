@@ -1,11 +1,11 @@
 # 03 · storage-db — `src/postel_studio/storage/db.py`
 
-> 层 L0（**碰磁盘**）· 652 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
+> 层 L0（**碰磁盘**）· 813 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
 
 ## 职责
 
-内核的本地状态库 `state.db`：连接、**schema 版本与迁移**、四张表的读写——
-`repos`（S3）、`bots`（S6）、`tasks` 与 `worktree_leases`（S10）。
+内核的本地状态库 `state.db`：连接、**schema 版本与迁移**、五张表的读写——
+`repos`（S3）、`bots`（S6）、`tasks` 与 `worktree_leases`（S10）、`candidates`（S11）。
 
 - **只写在状态根**（`~/.postel/state.db`，`POSTEL_HOME` 覆盖）。**绝不**写进用户仓库（S3 禁止事项）。
 - S10 的 `tasks.candidate_id` 列**先建、恒 NULL**（S11 才有值）——建表时就把列占住，S11 不用再迁移。
@@ -17,8 +17,8 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `SCHEMA_VERSION` | 41 | `4`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`） | `migrate`、测试 |
-| `_MIGRATIONS` | 49 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
+| `SCHEMA_VERSION` | 51 | `5`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`、v5 = S11 `candidates`） | `migrate`、测试 |
+| `_MIGRATIONS` | 59 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
 | `_COLUMNS` | 121 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
 | `state_db_path()` | 124 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
 | `_connect(path)` | 129 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
@@ -221,3 +221,23 @@ id 变成 URL 哈希了，但库里仍是路径哈希，**界面与本刀算出�
 | `tests/test_dispatch.py::test_taskstore_transition_loses_race_returns_none` | T44 的镜像：transition 原子、竞态输家拿 `None` |
 | `tests/test_dispatch.py::test_restart_marks_running_and_queued_interrupted` | D7：重启把遗留活跃任务标 `interrupted` |
 | `tests/test_dispatch.py::test_second_dispatch_while_active_is_busy` | D5：BUSY（索引兜底，反向注入 S10 #2） |
+
+
+### v5（S11）：候选表与 CandidateStore
+
+```sql
+CREATE TABLE candidates (
+    candidate_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+    branch TEXT NOT NULL UNIQUE, base_sha TEXT NOT NULL, head_sha TEXT NOT NULL,
+    files_changed INTEGER NOT NULL, insertions INTEGER NOT NULL, deletions INTEGER NOT NULL,
+    review_state TEXT NOT NULL, remote TEXT, target TEXT, created_at REAL NOT NULL
+);
+CREATE INDEX candidates_review_created ON candidates (review_state, created_at DESC);
+```
+
+- `tasks.candidate_id` **v4 就建好了**，v5 只补表；`task_id` UNIQUE = 一任务至多一条候选。
+- `repo_id` 不冗余存：列表按 `tasks → bots` join 得到（06 §2.4 没有这一列）。
+- diff 文本与 stat **不落库**（06 §8）：三个数字只是显示/排序快照。
+- `CandidateStore.insert` / `get` / `for_task` / `list_for_repo` / `discard`：写路径必须
+  `with self._lock, self._conn`（T44）；`discard` 只补偿删本 worker 刚插入的行，
+  不做通用删除 API（06 §2.4：候选一旦被人看见就不该被内核删）。
