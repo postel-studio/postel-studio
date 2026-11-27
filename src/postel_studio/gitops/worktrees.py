@@ -1,18 +1,22 @@
-"""worktree 的**写**操作（S7）：内核第一次往用户的仓库里写东西。
+"""worktree 的**写**操作（S7 三条 + S11 三条）：内核第一次往用户的仓库里写东西。
 
-本模块只做三件事（S7 D5 的允许清单，改这个文件时当红线）：
+本模块只做六件事（S7 D5 的允许清单 + S11 D5 的显式扩展，改这个文件时当红线）：
 
 1. `git worktree add` —— 写 `.git/worktrees/<name>/`，带 `-b` 时再写
    `refs/heads/bot/<bot>/workspace`，以及 reflog；
 2. `git worktree remove` —— 删掉那条注册记录与那个（**干净的**）目录；
-3. `git worktree prune` —— 只删"目录已经没了"的那些 worktree 元数据。
+3. `git worktree prune` —— 只删"目录已经没了"的那些 worktree 元数据；
+4. `git add -A` + `git commit` —— 在 **linked worktree** 里固化 Bot 的改动（S11）；
+5. `git branch <candidate> <sha>` —— 在**主仓库 refs** 里建候选分支（S11）；
+6. 读取 `HEAD`（只读，但复用本模块的 30s 外壳与同一环境）。
 
 五条纪律：
 
 1. **不加 `--force`**：宁可失败也不删用户没提交的东西（实测：脏 worktree 的 `remove` 退出 128，
    加 `--force` 就删）。脏由调用方翻成 `WORKTREE_CONFLICT`（S7 D6）。
-2. **永远是 `-C <已绑定的 repo.path>`**：允许根是签名的一部分（S3 D4），这里不接受第二个路径来源；
-   目标路径由调用方用 `storage.paths.worktree_dir()` 算（已在 worktrees 根之下断言过）。
+2. **主仓库操作永远 `-C <已绑定的 repo.path>`**（S3 D4 的允许根）；S11 的
+   `commit_all` / `head_commit` 例外，它们的 `-C` 是**租约里记下的 Bot 工作区路径**
+   （由 `worktree_dir()` 在 worktrees 根之下断言过，S10 D13）。两条路径都不接受用户现编。
 3. **不解析本地化的 git 文案**：判定一律来自文件系统 + `--porcelain` 的**字段前缀**。
    实测 `worktree list` 的 `prunable` 行是 `prunable gitdir 文件指向一个不存在的位置`——
    中文！按文案匹配的代码在别的语言环境里会静默失效（T39 的同一族陷阱）。
@@ -204,6 +208,42 @@ def is_dirty(worktree: Path) -> bool:
     return bool(output.strip())
 
 
+# S11 D4：内核自己的提交身份，绝不读用户的 git config（T34：配置不能改断言结果）。
+_COMMIT_IDENTITY: Final = ("-c", "user.email=kernel@localhost", "-c", "user.name=postel")
+
+
+def head_commit(worktree: Path) -> str:
+    """工作区 HEAD 的 40 位 commit id（S11 D2 的 base/head 快照）。
+
+    只读，但走本模块的 30s 外壳与同一份环境——`repo.resolve_commit(root, "HEAD")`
+    用的是 5s 读超时与另一个执行器；这里要与写操作共享超时/错误语义。
+    """
+    return _run(["rev-parse", "HEAD"], root=worktree).strip()
+
+
+def commit_all(worktree: Path, message: str) -> str:
+    """把 Bot 工作区里的改动固化成一个 commit，返回新 HEAD（S11 D4/D5）。
+
+    只接受内核生成的 `message`（`candidate <task_id>`，无用户文本）；`git add -A` 在
+    **linked worktree 内**执行，绝不写用户的主工作区。没有 `--force`/`reset`/`clean`。
+    空改动时 git 会拒绝提交（退出 1）——调用方先用 `is_dirty` / HEAD 快照判断，这里
+    把失败如实抛成 `GitRefusedError`，不吞成"成功但没有 commit"。
+    """
+    _run(["add", "-A"], root=worktree)
+    _run([*_COMMIT_IDENTITY, "commit", "-m", message], root=worktree)
+    return head_commit(worktree)
+
+
+def create_branch(root: Path, branch: str, start_sha: str) -> None:
+    """在**主仓库**建一个指向 `start_sha` 的候选分支（S11 D5）。
+
+    `root` 必须是已绑定的仓库根（`repo.path`），`branch` 由 `candidate_branch()` 派生，
+    `start_sha` 是 `head_commit()` 的产出——三者都不是用户直接输入的原样文本。
+    分支已存在时 git 会拒绝（`GitRefusedError`），不静默覆盖。
+    """
+    _run(["branch", branch, start_sha], root=root)
+
+
 GIT_WRITE_ERRORS: Final[tuple[type[Exception], ...]] = (
     GitUnavailableError,
     GitTimeoutError,
@@ -219,6 +259,9 @@ __all__ = [
     "WorktreeEntry",
     "add_worktree",
     "branch_exists",
+    "commit_all",
+    "create_branch",
+    "head_commit",
     "is_dirty",
     "list_worktrees",
     "prune_worktrees",
