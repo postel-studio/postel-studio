@@ -20,8 +20,15 @@ from postel_studio.api.agents import AgentsService
 from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
 from postel_studio.api.worktrees import WorktreeService
+from postel_studio.candidates import CandidateService
 from postel_studio.orchestrator import EventHub, Orchestrator
-from postel_studio.storage.db import BotStore, LeaseStore, RepoStore, TaskStore
+from postel_studio.storage.db import (
+    BotStore,
+    CandidateStore,
+    LeaseStore,
+    RepoStore,
+    TaskStore,
+)
 from postel_studio.storage.paths import state_root
 from postel_studio.web.assets import render_index
 
@@ -69,7 +76,10 @@ def create_app(
     tasks = TaskStore()
     leases = LeaseStore()
     hub = EventHub()
-    orchestrator = Orchestrator(bot_store, tasks, leases, worktrees, hub)
+    # S11：候选固化。它持有 RepoStore（解析允许根）与自己的 CandidateStore；
+    # 与编排器一样由这里装配注入，不 import 同层 handler（D13）。
+    candidates = CandidateService(store, CandidateStore())
+    orchestrator = Orchestrator(bot_store, tasks, leases, worktrees, candidates, hub)
 
     def index() -> HTMLResponse:
         page = render_index(
@@ -122,6 +132,7 @@ def create_app(
             task_dispatch=orchestrator.dispatch,  # S10
             task_status=orchestrator.status,  # S10
             task_cancel=orchestrator.cancel,  # S10
+            candidate_list=candidates.list,  # S11
         ),
         hub=hub,  # S10 D11：subscribe / evt 泵的数据源
     )

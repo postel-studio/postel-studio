@@ -395,6 +395,18 @@ INDEX_HTML: Final = """<!doctype html>
   #task[data-state="ready"] #task-cancel,
   #task[data-state="done"] #task-cancel,
   #task[data-state="error"] #task-cancel { display: none; }
+  /* 候选详情卡（S11）：只跟选中的仓库/最近一次任务，单条详情，不是列表页（S12 才是）。
+     状态由 data-state 决定；打开 diff 复用 #diff 面板，不在这里画第二份。 */
+  #candidate-detail { margin-top: 8px; }
+  #candidate-branch, #candidate-stat { margin: 4px 0 0; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
+  #candidate-error { margin: 8px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
+  #candidate-open { margin-top: 8px; padding: 7px 14px; font-size: 14px; color: inherit;
+    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
+  #candidate[data-state="idle"] #candidate-detail,
+  #candidate[data-state="idle"] #candidate-error,
+  #candidate[data-state="loading"] #candidate-detail { display: none; }
 </style>
 </head>
 <body>
@@ -508,6 +520,18 @@ INDEX_HTML: Final = """<!doctype html>
       <p id="task-id"></p>
       <p id="task-status-line"></p>
     </div>
+  </section>
+  <!-- 候选详情卡（S11）：任务成功后由 candidate.proposed 填进来；选仓库时取最近一条，
+       所以刷新后仍看得到。点「查看差异」复用 S5 的 #diff 面板（同一个渲染件）。 -->
+  <section id="candidate" data-state="idle" aria-live="polite">
+    <h2 id="candidate-title">候选变更</h2>
+    <p id="candidate-state">还没有候选</p>
+    <div id="candidate-detail">
+      <p id="candidate-branch"></p>
+      <p id="candidate-stat"></p>
+      <button id="candidate-open" type="button">查看差异</button>
+    </div>
+    <p id="candidate-error" role="alert" hidden></p>
   </section>
   <!-- 左栏 Bots 区（S6 D8）：在 #repos 之前（03-ui-spec §2：左栏上 Bot / 下仓库）。
        初始 idle：没选仓库之前不装成「这个仓库没有 Bot」。 -->
@@ -706,6 +730,15 @@ INDEX_HTML: Final = """<!doctype html>
   var taskDetails = document.getElementById("task-details");
   var taskIdLine = document.getElementById("task-id");
   var taskStatusLine = document.getElementById("task-status-line");
+  // 候选详情卡（S11）。用户数据（分支/stat）一律 textContent。
+  var candidateEl = document.getElementById("candidate");
+  var candidateState = document.getElementById("candidate-state");
+  var candidateBranch = document.getElementById("candidate-branch");
+  var candidateStat = document.getElementById("candidate-stat");
+  var candidateError = document.getElementById("candidate-error");
+  var candidateOpen = document.getElementById("candidate-open");
+  var CANDIDATE_HINT = "还没有候选";
+  var currentCandidate = null;    // 当前展示的候选载荷（candidate.list 的条目）
   var TASK_HINT = "选择一个 Bot 后派活";
   var TASK_ERROR_FALLBACK = "派活失败";
   var currentTaskId = null;       // 卡片正在跟踪的任务（evt 只认这个 id）
@@ -767,6 +800,7 @@ INDEX_HTML: Final = """<!doctype html>
     // S10：派活卡片同一纪律。任务属于上一次连接——内核重启后它的 worker 已经不在了，
     // 留着「运行中」的灯就是撒谎； taskId 也一并清（evt 只认连接内产生的任务）。
     resetTask("idle", state === "disconnected" ? "已断开：任务状态未知" : TASK_HINT);
+    resetCandidate("idle", CANDIDATE_HINT);   // S11：候选也属于上一次连接
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -830,12 +864,14 @@ INDEX_HTML: Final = """<!doctype html>
       resetCharter("idle", CHARTER_HINT);
       resetWorkspace("idle", WORKSPACE_HINT);   // S7 D9：工作区同理
       resetTask("idle", TASK_HINT);   // S10：派活卡片跟着 Bot 走，Bot 作废它就作废
+      resetCandidate("idle", CANDIDATE_HINT);  // S11：候选跟着仓库走
       return;
     }
     applyRepoSelection();
     loadBranches();   // 重连且仍有选中仓库 → 与 loadRepos 同一条路径自动重取（D6）
     loadBots();       // S6 D8：重连仍选中仓库 → 重取 bot.list（charter 面板不清空）
     loadWorkspace();  // S7 D9：重连仍选中仓库 → 重取 worktree.list（D4：git 是事实源）
+    loadLatestCandidate();  // S11：重连后候选也重取（连接不保存订阅状态）
   }
 
   function loadRepos() {
@@ -1648,6 +1684,7 @@ INDEX_HTML: Final = """<!doctype html>
     loadCharter(botId, botName);
     // S10：选中的 Bot 变了，卡片跟踪的任务也随之作废——上一个 Bot 的任务不归这个灯管。
     resetTask("ready", TASK_HINT);
+    resetCandidate("idle", CANDIDATE_HINT);  // S11：换 Bot 就不跟上一个 Bot 的候选
   }
 
   // ---- 派活卡片（S10） ------------------------------------------------------
@@ -1735,9 +1772,69 @@ INDEX_HTML: Final = """<!doctype html>
       data.errorCode ? String(data.errorCode) : null);
   }
 
+  // ---- 候选详情卡（S11）----------------------------------------------------
+  function resetCandidate(state, text) {
+    currentCandidate = null;
+    candidateEl.dataset.state = state;
+    candidateState.textContent = text;
+    candidateError.textContent = "";
+    candidateError.hidden = true;
+    candidateBranch.textContent = "";
+    candidateStat.textContent = "";
+  }
+
+  function showCandidateError(text) {
+    candidateError.textContent = text;
+    candidateError.hidden = false;
+    candidateEl.dataset.state = "error";
+  }
+
+  function trackCandidate(candidate) {
+    currentCandidate = candidate;
+    candidateEl.dataset.state = "done";
+    candidateState.textContent = "候选 · 仅本地";
+    candidateBranch.textContent = "分支 " + String(candidate.branch || "");
+    candidateStat.textContent = "变更 +" + String(candidate.insertions || 0)
+      + " −" + String(candidate.deletions || 0) + " · " + String(candidate.filesChanged || 0)
+      + " 个文件";
+    candidateError.textContent = "";
+    candidateError.hidden = true;
+  }
+
+  // 事件只带 {candidateId, taskId}（07 §3）：细节走 candidate.list 取，不塞进事件载荷。
+  function loadCandidate(taskId) {
+    if (!selectedRepoId || !taskId) { return; }
+    request("candidate.list", { repoId: selectedRepoId, taskId: taskId }, function (err, data) {
+      if (err) { showCandidateError("读取候选失败（" + err + "）"); return; }
+      if (Array.isArray(data) && data.length > 0) { trackCandidate(data[0]); }
+    });
+  }
+
+  // 刷新后没有在途事件：选仓库时取该仓库最近一条候选（列表按 createdAt DESC）。
+  function loadLatestCandidate() {
+    if (!selectedRepoId) { return; }
+    request("candidate.list", { repoId: selectedRepoId }, function (err, data) {
+      if (err) { return; }  // 列表页的空态/错误由 S12 管，这里静默留 idle
+      if (Array.isArray(data) && data.length > 0) { trackCandidate(data[0]); }
+    });
+  }
+
+  function openCandidateDiff() {
+    if (!currentCandidate) { return; }
+    // 复用 S5 的渲染件：SHAs 是 git 产出的 40 位 hex，通过 ref_name_ok 的入站校验。
+    requestDiff(String(currentCandidate.baseSha), String(currentCandidate.headSha));
+  }
+
+  function onCandidateProposed(data) {
+    if (!data || String(data.taskId) !== currentTaskId) { return; }
+    candidateEl.dataset.state = "loading";
+    candidateState.textContent = "正在读取候选…";
+    loadCandidate(String(data.taskId));
+  }
+
   function subscribeTopics() {
     // 02b §2.3：重连后必须重新订阅（内核不保存订阅状态，订阅随连接死）。
-    send("subscribe", { topics: ["task.updated"] });  // 忘记订阅的代价是灯不动，不致命
+    send("subscribe", { topics: ["task.updated", "candidate.proposed"] });
   }
 
   function selectRepo(repoId, name) {
@@ -1758,6 +1855,9 @@ INDEX_HTML: Final = """<!doctype html>
     loadBranches();
     // S7 D9：切仓库 → 工作区卡片按新仓库重读（清空旧的路径与分支，不留上一个仓库的结果）。
     loadWorkspace();
+    // S11：刷新/换仓库后取这个仓库最近一条候选，详情不会因为刷新就消失。
+    resetCandidate("idle", CANDIDATE_HINT);
+    loadLatestCandidate();
   }
 
   function submitBind() {
@@ -1821,6 +1921,10 @@ INDEX_HTML: Final = """<!doctype html>
     // 订阅推送（S10 D11）：evt 不带 id，不进 pending 配对，按 topic 分发。
     if (frame && frame.type === "evt" && frame.topic === "task.updated") {
       onTaskUpdated(frame.data);
+      return;
+    }
+    if (frame && frame.type === "evt" && frame.topic === "candidate.proposed") {
+      onCandidateProposed(frame.data);
       return;
     }
     // 心跳回包：证明内核在做帧往返，而不只是 TCP 还开着
@@ -1925,6 +2029,8 @@ INDEX_HTML: Final = """<!doctype html>
   // S10：派活走 <form>（回车 = 点「派活」）；取消是显式按钮（打断会话不该被回车触发）。
   taskForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitTask(); });
   taskCancel.addEventListener("click", cancelTask);
+  // S11：查看差异是显式按钮（不是回车提交）；渲染件复用 S5 的 #diff 面板。
+  candidateOpen.addEventListener("click", openCandidateDiff);
   // S7：分配走 <form>（回车与点按钮同一条路径）；回收是显式按钮（删目录不该被回车触发）。
   workspaceForm.addEventListener("submit", function (ev) {
     ev.preventDefault();
