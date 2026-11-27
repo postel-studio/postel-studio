@@ -241,6 +241,18 @@
 | ⚠️ UI 行为 | `node tools/acceptance/s9_agent.mjs`：真 Chrome，正例 19 条 + 负例 13 条 CHECK（含"文案不是 git 那句"） |
 | 未做 | 不建会话、不发 prompt（S10）；`bot.agentKind` 仍不可写（U18，到期 S10）；检测结果不落库（D12） |
 
+### M2 收口 · 派活 → 候选 → 批准一条命令验收（S14）
+
+| | |
+|---|---|
+| 验收入口 | `uv run python scripts/accept_m2.py`：真内核子进程 + 真 WS + 真 opencode（deepseek 付费模型），十步 `✓ <step> (<sec>s)`；成功 `M2 OK (10/10 steps)`，失败 `M2 FAILED at <step>` + 非零退出 |
+| 十步 | 建临时仓库 → `repo.bind` → `bot.create` → `worktree.acquire` → `agent.capabilities` → `task.dispatch` → `task.status` 等终态 → `candidate.list` 见候选 → `repo.diff(base=baseSha,head=headSha)` 非空 → `candidate.approve` 后复读 `reviewState == approved` |
+| 凭据（D3） | 真实 opencode.db 以 `sqlite3.Connection.backup`（源 `mode=ro`）**快照**进临时目录；`XDG_DATA_HOME` 指向快照、`OPENCODE_CONFIG_CONTENT` 选 `deepseek/deepseek-flash`；只读 `integration_id`/`active`，**从不读 key 值**；真实库不被写 |
+| SKIP（D4） | 没装 opencode / 快照里没有 active deepseek → `SKIP M2: …` + exit 0，绝不输出 `M2 OK`；其它异常一律真失败 |
+| 清理（D6） | `worktree.release` + 内核 SIGTERM→SIGKILL + 删临时目录；验证无残留进程与目录，失败计入 `M2 FAILED at 清理` |
+| 由谁守住 | `tests/test_accept_m2.py`：子进程真跑（绿 / 单步失败 / SKIP / 不碰真实 HOME / 清理）；`scripts/accept_m2.py` 每步自带断言（框架不会替它验证语义） |
+| 边界 | `src/` 零改动；不新增帧方法、错误码、依赖；U21 已在 S13 收口，U4 保持到 S20 |
+
 ---
 
 ## 2. 常见任务 → 文件
@@ -333,7 +345,7 @@
 | S11 | 收件箱出现候选 | diff → candidate | |
 | S12 | 收件箱列表 | 前端大幅扩张 | `assets.py` 会超 400 行 → **考虑拆文件** |
 | S13 | 批准/拒绝 | 审核状态机 | |
-| S14 | M2 验收 | | |
+| ~~S14~~ | **已完成**：派活→候选→批准一条命令真跑（真 Agent / 真内核 / 真 git） | `scripts/accept_m2.py`、`tests/test_accept_m2.py`；无 `src/` 改动 | 新增 M2 收口；沿用 U21 快照方案（S13 已收口） |
 | S15 | 重启不丢 | 持久化恢复 | |
 | S16 | 越权被拦 | `permission/`（纯函数） | **新增 L1 模块，05 §2 的核心** |
 | S17 | 上下文可见 | 记忆注入 | |

@@ -76,6 +76,7 @@
 | `storage/db.py` 的 `bots` 表（v3）/ `BotStore` | 06 §2.2、07 §4.7 的 8 字段、真库 v2→v3 迁移测试 | 老库升级丢 repos 行 / 载荷与列对不上 / 预置播种重复建行 |
 | `assets.py` 的 `#bots[data-state]` / `#charter[data-state]` 状态机与行结构 | S6 D8（DOM 契约）、`node tools/acceptance/s6_bots.mjs`、`test_bot_charter.py` 的页面契约用例 | 断连留旧 charter / 切仓库不清空 / 选中的 Bot 与 repo 脱钩 / charter 进 `innerHTML`（XSS） |
 | `scripts/accept_m1.py` 的步骤与输出格式 | D10 的契约（`PASS S<n>` / `M1 OK`）、`tests/test_accept_m1.py`、README/CONTRIBUTING 的验收命令 | M1 收口静默失效；改格式会让 `test_accept_m1.py` 红 |
+| `scripts/accept_m2.py` 的步骤与输出格式 | S14 的契约（`✓ <step> (<sec>s)` / `M2 OK (10/10 steps)` / `M2 FAILED at <step>` / `SKIP M2:`）、`tests/test_accept_m2.py`、README/CONTRIBUTING 的验收命令 | M2 收口静默失效；改格式会让 `test_accept_m2.py` 红 |
 | `assets.py` 的 `#repos[data-state]` 机制 | 06 T8/T27、D1 的验收 | 断连时显示空列表 = 撒谎 |
 | `assets.py` 的 `ERROR_TEXT` | 07 §1.3 的码、`error_text_json()`；S4 补了 `REPO_NOT_BOUND`、分支面板另用 `BRANCH_ERROR_FALLBACK` | 错误显示成「绑定失败」或码本身；分支面板答「绑定失败」 |
 | `assets.py` 左栏的 DOM 结构 / 数据来源 | **`node tools/acceptance/s3_bind.mjs`**（真实浏览器） | pytest 看不出来（T9） |
