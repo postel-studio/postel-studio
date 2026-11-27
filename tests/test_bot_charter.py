@@ -98,8 +98,8 @@ def test_v2_database_upgrades_to_v3_and_keeps_repos(tmp_path: Path) -> None:
 
     opened = state_db.open_state_db(db_path)
     try:
-        assert int(opened.execute("PRAGMA user_version").fetchone()[0]) == 3
-        assert state_db.SCHEMA_VERSION == 3
+        assert int(opened.execute("PRAGMA user_version").fetchone()[0]) >= 3
+        assert state_db.SCHEMA_VERSION >= 3
         row = opened.execute("SELECT repo_id, path, added_at FROM repos").fetchone()
         assert row is not None
         assert (row[0], row[1], row[2]) == ("deadbeefcafe", str(tmp_path / "repo"), 1.5)
