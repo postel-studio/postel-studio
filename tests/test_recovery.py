@@ -40,7 +40,11 @@ from postel_studio.storage.db import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLI_BIN = Path(sys.executable).with_name("postel-studio")
-ASSETS = REPO_ROOT / "src" / "postel_studio" / "web" / "assets.py"
+# 反向注入框架前置 PYTHONPATH 到 src 副本：必须从**实际加载的模块**读源码，
+# 硬编码 REPO_ROOT 会让注入改不到断言目标（反向注入永远绿）。
+from postel_studio.web import assets as _assets_module  # noqa: E402
+
+ASSETS = Path(_assets_module.__file__)
 BOOT_TIMEOUT = 30.0
 STOP_TIMEOUT = 15.0
 

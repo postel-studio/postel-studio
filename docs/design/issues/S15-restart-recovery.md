@@ -41,7 +41,7 @@
 | # | Acceptance criterion | Enforced by |
 |---|---|---|
 | 1 | running → interrupted on restart, UI shows it | `tests/test_recovery.py::test_restart_marks_running_and_queued_interrupted` (in-process 重启记账) + `tests/test_recovery.py::test_real_kernel_restart_interrupts_half_done_task` (真内核 SIGKILL→重启) + `tests/test_recovery.py::test_task_interrupted_dom_contract` (DOM 契约) + `tools/acceptance/s15_recovery.mjs` (真浏览器) |
-| 2 | interrupted never becomes succeeded | `test_recovery.py::test_interrupted_cannot_become_succeeded` (状态机 + store 双重断言) + 反向注入 |
+| 2 | interrupted never becomes succeeded | `test_recovery.py::test_interrupted_cannot_become_succeeded` (状态机 + store 双重断言) + **注册的反向注入**（`tests/test_reverse_checks.py` 的 `COMPOSITE_INJECTIONS`「S15 #2（组合）」：拆终态守卫 + 补 `interrupted→succeeded` 边 → 该测试必须红）；同文件的 `INJECTIONS`「S15 #1」把 `rerunTask()` 塞进 `onTaskUpdated`，断言 `test_no_auto_rerun` 变红（09 §2.1 的注册机制，不是仅有直接断言） |
 | 3 | finished tasks & candidates untouched | `test_recovery.py::test_finished_task_and_candidate_survive_restart` |
 | 4 | one-click rerun, new taskId | `test_recovery.py::test_rerun_creates_new_task_id` + `s15_recovery.mjs` (点 `#task-rerun` → 新 taskId ≠ 旧) + `test_no_auto_rerun` (静态守卫) |
 | 5 | schema versioned, empty + old db migrate once | `test_recovery.py::test_empty_db_is_current_version` + `test_old_db_migration_is_reentrant` + 既有 `test_bind.py` v1 迁移 |

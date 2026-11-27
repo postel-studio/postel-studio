@@ -22,7 +22,7 @@
 | L3 | [worktrees](worktrees.md) | `src/postel_studio/api/worktrees.py` | 300 | `worktree.acquire` / `list` / `release` 的业务编排（复用/回收状态机，**不落库**） |
 | L3 | [agents](agents.md) | `src/postel_studio/api/agents.py` | 108 | `agent.list` / `agent.capabilities` 的业务编排（只读登记表 vs 真握手） |
 | L3 | [candidates](candidates.md) | `src/postel_studio/candidates.py` | 205 | 候选固化（commit/分支/落库）与 `candidate.list`（S11，**不 import 同层 handler**） |
-| L3 | [orchestrator](orchestrator.md) | `src/postel_studio/orchestrator.py` | 460 | `task.dispatch` / `status` / `cancel` 的编排：worker 线程一任务一线程、`EventHub` 事件桥（S10，**不 import 同层 handler**） |
+| L3 | [orchestrator](orchestrator.md) | `src/postel_studio/orchestrator.py` | 460 | `task.dispatch` / `status` / `latest` / `cancel` 的编排：worker 线程一任务一线程、`EventHub` 事件桥（S10，**不 import 同层 handler**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 126 | 帧编解码 + topic 白名单，纯函数 |
 | L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 2404 | 页面 HTML + 内联 JS（S3 仓库区 + S4 分支 + S5 差异 + S6 Bots/charter + S7 工作区 + S8 新建表单 + S9 Agent 卡片 + S10 派活卡片 + S11 候选详情卡） |
 
