@@ -13,7 +13,9 @@ S3 的算法是"有 origin 用 URL 哈希、没有才用路径"，后果是用�
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -270,3 +272,125 @@ def ref_name_ok(value: object) -> bool:
     except UnicodeEncodeError:  # lone surrogate：只有编码才会炸
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Task（S10，06 §2.3 / §3.1）：实体 + 状态机 + ULID。**纯函数，无 IO**（与 Repo/Bot 同一纪律）。
+# ---------------------------------------------------------------------------
+
+# prompt 上限（06 §2.3）。超限是**入参**问题：`INVALID_PARAMS`，不是截断——截断会让 Agent
+# 拿到一句它没见过的半截指令，比拒绝危险得多。
+PROMPT_MAX_BYTES: Final = 32 * 1024
+
+# 06 §3.1 的允许迁移表（唯一事实源）。**键是 from，值是 to 的集合**；
+# `queued → succeeded` 与 `interrupted → succeeded` 不在表里，所以结构上不可能发生。
+TASK_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
+    "queued": frozenset({"running", "cancelled", "interrupted"}),
+    "running": frozenset({"succeeded", "failed", "cancelled", "interrupted"}),
+}
+
+# 终态集合：到达后 `transition` 一律拒绝（连"再迁移一次"都不行）。
+TASK_TERMINAL: Final[frozenset[str]] = frozenset(
+    {"succeeded", "failed", "cancelled", "interrupted"}
+)
+
+# 活跃态（BUSY 的判据，D5）：queued 也算"在跑"——worker 尚未接手时再来一刀会争抢工作区。
+TASK_ACTIVE: Final[frozenset[str]] = frozenset({"queued", "running"})
+
+# 触发源（06 §2.3）。S10 只产生 `manual`；另两个值先登记，防止调用方拼错时静默入库。
+TASK_TRIGGERS: Final[frozenset[str]] = frozenset({"manual", "dialogue", "local_event"})
+
+_ULID_ENCODING: Final = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32，无 I/L/O/U
+
+
+def ulid(now_ms: int | None = None, randomness: bytes | None = None) -> str:
+    """26 字符 ULID（D14）：48 位毫秒时间 + 80 位随机，Crockford base32。
+
+    06 §2.3 要求 `task_id` 是 ULID（可排序、无碰撞）。标准库没有它，而 S3 的
+    "不新增依赖"仍然有效，所以这里手写生成。`now_ms` / `randomness` 是**测试**注入口
+    （确定性断言用）；生产路径两者都传 `None`。
+
+    可排序性来自首段是**大端**时间戳：同一毫秒内的碰撞概率 2^-80，跨毫秒单调——
+    不做同毫秒单调递增（那需要进程内计数器，跨进程重启会回退，反而破坏排序假设）。
+    """
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    if randomness is None:
+        randomness = os.urandom(10)
+    if not 0 <= now_ms < (1 << 48):
+        raise ValueError(f"时间戳超出 48 位：{now_ms}")
+    if len(randomness) != 10:
+        raise ValueError("随机段必须是 10 字节")
+    value = (now_ms << 80) | int.from_bytes(randomness, "big")
+    chars = []
+    for shift in range(130 - 5, -1, -5):  # 130 位有效（48+80+2 补齐），从高位到低位
+        chars.append(_ULID_ENCODING[(value >> shift) & 0x1F])
+    return "".join(chars)
+
+
+def prompt_ok(value: object) -> bool:
+    """派活指令的形状（D5 入参侧）：非空字符串，UTF-8 编码 ≤ 32 KiB（06 §2.3）。
+
+    **按字节**判而不是按字符：JSON 传输是 UTF-8 文本，落库与转发都以字节计。
+    lone surrogate 在这里就挡掉（`encode` 会抛）——它进不了 ACP 的 JSON-RPC 帧。
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        return len(value.encode("utf-8")) <= PROMPT_MAX_BYTES
+    except UnicodeEncodeError:
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class Task:
+    """一次派活（06 §2.3）。字段名 `snake_case`（落盘统一），帧层在边界转 `camelCase`。
+
+    `candidate_id` 本刀恒为 `None`（S11）；`trigger_key` 恒为 `None`（幂等去重是
+    `dialogue` / `local_event` 触发源的事）。列先建好——为 S11 改一次 schema 不如一次建对。
+    """
+
+    task_id: str
+    bot_id: str
+    trigger: str
+    trigger_key: str | None
+    prompt: str
+    base_ref: str | None
+    state: str
+    candidate_id: str | None
+    error_code: str | None
+    created_at: float
+    started_at: float | None
+    ended_at: float | None
+
+
+def task_transition_ok(current: object, target: object) -> bool:
+    """一次迁移是否合法（06 §3.1 的表 + 终态封死）——纯判定，**不抛、不拼文案**。
+
+    三个方向都拒绝：不认识的状态（含大小写漂移）、终态再迁移、表里没有的边。
+    06 §3.1 的两条**禁止**（`queued → succeeded` / `interrupted → succeeded`）不写在这里，
+    写在这里就等于复述——它们由 `TASK_TRANSITIONS` 的**缺失**表达。
+    """
+    if not isinstance(current, str) or not isinstance(target, str):
+        return False
+    if current in TASK_TERMINAL:
+        return False
+    allowed = TASK_TRANSITIONS.get(current)
+    return allowed is not None and target in allowed
+
+
+@dataclass(frozen=True, slots=True)
+class WorktreeLease:
+    """一条工作区租约（06 §2.5，S7 裁决到期 S10，与 Task 一起建）。
+
+    `path` 是 `worktree_dir()` 的产出（已 resolve、在 worktrees 根之内断言过）——本实体
+    不再校验形状，那是 `storage.paths` 的职责。`released_at IS NULL` 即活跃租约；
+    数据库层用部分唯一索引保证每 Bot 至多一条。
+    """
+
+    lease_id: str
+    bot_id: str
+    task_id: str
+    path: str
+    created_at: float
+    released_at: float | None
