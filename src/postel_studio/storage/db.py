@@ -39,8 +39,9 @@ from postel_studio.storage.paths import _chmod, ensure_state_root, state_db_file
 # v1 = S3 的初始 schema（只有 repos）；v2 = S3.5 加的 `origin_hash`（D2）；
 # v3 = S6 加的 `bots` 表（D7：只加表、不动 repos）；v4 = S10 加 `tasks` + `worktree_leases`
 # （06 §2.3 / §2.5，S7 裁决的"到期一起建"）；v5 = S11 加 `candidates`
-# （06 §2.4：`tasks.candidate_id` 列已在 v4 建好，只需补表）。
-SCHEMA_VERSION: Final = 5
+# （06 §2.4：`tasks.candidate_id` 列已在 v4 建好，只需补表）；
+# v6 = S13 给 `candidates` 加 `reject_reason` 列（拒绝理由落库，D2）。
+SCHEMA_VERSION: Final = 6
 
 # ---------------------------------------------------------------------------
 # 迁移（每个版本一个函数，索引即版本号；新增版本=往后 append，不改历史）
@@ -135,6 +136,10 @@ _MIGRATIONS: Final[tuple[str, ...]] = (
         created_at    REAL NOT NULL
     );
     CREATE INDEX candidates_review_created ON candidates (review_state, created_at DESC);
+    """,
+    # v6（S13 D2）：拒绝理由落库。只加一列，不动任何历史数据。
+    """
+    ALTER TABLE candidates ADD COLUMN reject_reason TEXT;
     """,
 )
 
@@ -679,7 +684,7 @@ def _row_to_lease(row: sqlite3.Row) -> WorktreeLease:
 # 由 `_candidate_join_columns()` 从这份清单生成，避免两处漂移。
 _CANDIDATE_COLUMNS: Final = (
     "candidate_id, task_id, branch, base_sha, head_sha, files_changed,"
-    " insertions, deletions, review_state, remote, target, created_at"
+    " insertions, deletions, review_state, remote, target, created_at, reject_reason"
 )
 
 
@@ -717,7 +722,7 @@ class CandidateStore:
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO candidates ("
-                f"{_CANDIDATE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"{_CANDIDATE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     candidate.candidate_id,
                     candidate.task_id,
@@ -731,6 +736,7 @@ class CandidateStore:
                     candidate.remote,
                     candidate.target,
                     candidate.created_at,
+                    candidate.reject_reason,
                 ),
             )
 
@@ -781,6 +787,36 @@ class CandidateStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [_row_to_candidate(row) for row in rows]
 
+    def transition(
+        self, candidate_id: str, target: str, *, reject_reason: str | None = None
+    ) -> Candidate | None:
+        """S13 D3：原子迁移 `review_state`，输掉竞态回 `None`。
+
+        `UPDATE … WHERE review_state = <from>`：from 由内存里的当前行给出，但**真正的
+        门是 WHERE**——两个 approve 同时到时只有一个 UPDATE 命中（T44：锁 + 连接必须
+        一起拿，否则隐式事务不提交）。理由只在 reject 时写，随状态一起提交。
+        """
+        from postel_studio.domain.models import review_transition_ok
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT review_state FROM candidates WHERE candidate_id = ?", (candidate_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        current = str(row["review_state"])
+        if not review_transition_ok(current, target):
+            return None
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "UPDATE candidates SET review_state = ?, reject_reason = ?"
+                " WHERE candidate_id = ? AND review_state = ?",
+                (target, reject_reason, candidate_id, current),
+            )
+        if cursor.rowcount == 0:
+            return None  # 竞态输家：别人先改了状态
+        return self.get(candidate_id)
+
     def discard(self, candidate_id: str) -> bool:
         """补偿删除**本 worker 刚插入**的候选（S11 D6：transition 输掉 cancel 竞态时）。
 
@@ -810,4 +846,5 @@ def _row_to_candidate(row: sqlite3.Row) -> Candidate:
         remote=str(row["remote"]) if row["remote"] is not None else None,
         target=str(row["target"]) if row["target"] is not None else None,
         created_at=float(raw_created),
+        reject_reason=(str(row["reject_reason"]) if row["reject_reason"] is not None else None),
     )
