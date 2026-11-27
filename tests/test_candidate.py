@@ -277,6 +277,8 @@ def test_candidate_diff_matches_git_shortstat(env: Env) -> None:
         task_status=lambda p: p,
         task_cancel=lambda p: p,
         candidate_list=env.service.list,
+        candidate_approve=env.service.approve,
+        candidate_reject=env.service.reject,
     )
     rows = gateway.dispatch("candidate.list", {"repoId": env.repo_id}, providers)
     assert isinstance(rows, list) and len(rows) == 1

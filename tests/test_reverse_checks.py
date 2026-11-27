@@ -498,6 +498,36 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_review_state_filter_returns_only_matching_rows", file="test_inbox_list"),
         "S12 #3：筛选不再发给 candidate.list（D3：服务端是筛选的唯一事实源）",
     ),
+    # ---- S13：审核的三条红线 ----
+    (
+        "postel_studio/domain/models.py",
+        """    allowed = REVIEW_TRANSITIONS.get(current)
+    return allowed is not None and target in allowed""",
+        """    return True  # 注入：状态机永远放行""",
+        _target_test("test_review_transition_matrix", file="test_review"),
+        "S13 #1：审核状态机永远放行（rejected→approved 也通过）",
+    ),
+    (
+        "postel_studio/storage/db.py",
+        """            cursor = self._conn.execute(
+                "UPDATE candidates SET review_state = ?, reject_reason = ?"
+                " WHERE candidate_id = ? AND review_state = ?",
+                (target, reject_reason, candidate_id, current),
+            )""",
+        """            cursor = self._conn.execute(
+                "UPDATE candidates SET review_state = ? WHERE candidate_id = ?",
+                (target, candidate_id),
+            )  # 注入：无 WHERE 状态门、理由不写""",
+        _target_test("test_transition_loser_does_not_overwrite_reason", file="test_review"),
+        "S13 #2：迁移丢了状态 WHERE 与理由（竞态输家覆盖赢家）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        '        <button id="candidate-reject" type="button">拒绝并说明</button>',
+        '        <button id="candidate-merge" type="button">合并</button>',
+        _target_test("test_no_merge_button_anywhere", file="test_review"),
+        "S13 #3：页面出现「合并」按钮（L4 永不开放给 Bot）",
+    ),
 )
 
 
