@@ -16,9 +16,11 @@ import json
 import os
 import select
 import subprocess
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 PROTOCOL_VERSION: Final = 1
@@ -174,21 +176,27 @@ def _exchange(
 
 
 def _read_matching(
-    proc: subprocess.Popen[bytes], request_id: object, timeout_s: float
+    proc: subprocess.Popen[bytes], request_id: object, timeout_s: float | None
 ) -> dict[str, object]:
     """按行读，**跳过非 JSON 行**（D6），直到 `id` 对上或者到点。
 
     Agent 会往 stdout 打 banner 和日志；把第一行非 JSON 当协议错，会把一个健康的 Agent
     报成坏的。fail-closed 只适用于「数据缺失」（超时 / EOF / 没有 protocolVersion）。
+
+    `timeout_s=None`（S10 D8）表示**无限等**：prompt 是分钟级，死线只会制造误报；
+    这条模式下的出口只有应答、EOF 与取消（取消改变的是应答内容，不是这条循环）。
     """
     assert proc.stdout is not None
-    deadline = time.monotonic() + timeout_s
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
     buffer = b""
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise AcpTimeoutError(f"Agent 在 {timeout_s:g} 秒内没有应答")
-        ready, _, _ = select.select([proc.stdout], [], [], remaining)
+        if deadline is None:
+            ready, _, _ = select.select([proc.stdout], [], [], None)
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AcpTimeoutError(f"Agent 在 {timeout_s:g} 秒内没有应答")
+            ready, _, _ = select.select([proc.stdout], [], [], remaining)
         if not ready:
             continue  # 下一轮 remaining 已 <= 0，从上面统一抛出
         chunk = os.read(proc.stdout.fileno(), _READ_CHUNK)
@@ -233,3 +241,187 @@ def _parse(message: dict[str, object]) -> Handshake:
         agent_version=agent_version,
         flags=flatten_capabilities(result.get("agentCapabilities")),
     )
+
+
+# ---------------------------------------------------------------------------
+# 会话级客户端（S10，02b §4 第 2-4 步）。实测依据见 S10 规格 §8。
+# ---------------------------------------------------------------------------
+
+
+class AcpSessionError(Exception):
+    """会话期的协议失败（`session/new` 没给 sessionId、应答缺 stopReason 等）。翻成 `INTERNAL`。"""
+
+
+@dataclass(frozen=True)
+class SessionOutcome:
+    """一次 prompt 的产出（D9 的原料）。`updates` 只作计数观测，内容**不外传**（S10 D12）。"""
+
+    stop_reason: str
+    updates: int
+
+
+class Session:
+    """一个任务一个进程（S10 D8）：spawn → initialize → session/new → prompt → reap。
+
+    与 `initialize()` 的差别是**进程的生命周期横跨多次请求**：握手与建会话在构造时完成，
+    `prompt()` 可以阻塞任意久（分钟级是常态），`cancel()` 允许从**另一个线程**调用——
+    所以 stdin 的写有一把锁，读循环在调用方线程里转。所有路径都要走 `close()`；
+    `reap` 是 S9 的同一份（先关 stdin，terminate，kill），这里只是包了 `__exit__`。
+    """
+
+    def __init__(
+        self,
+        command: Sequence[str],
+        cwd: str,
+        *,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        parent_env: Mapping[str, str] | None = None,
+        client_version: str = "0",
+    ) -> None:
+        if isinstance(command, str):  # 与 initialize 同一条守卫：数组，不是字符串
+            raise AcpUnavailableError("命令必须是数组，不能是字符串（05 §3.3）")
+        if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+            # 02b §4：session/new 要**绝对** cwd。相对路径会让 Agent 自己 guess 进程 cwd，
+            # 那"cwd 是被分配的工作区"（S10 验收 2）就无从断言。
+            raise AcpSessionError("cwd 必须是绝对路径")
+        try:
+            self._proc = subprocess.Popen(
+                list(command),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=0,
+                shell=False,
+                cwd=cwd,
+                env=child_env(os.environ if parent_env is None else parent_env),
+            )
+        except OSError as exc:
+            raise AcpUnavailableError(str(exc)) from exc
+        self._cwd = cwd
+        self._stdin_lock = threading.Lock()
+        self._next_id = 1
+        self._session_id: str | None = None
+        self.updates_seen = 0
+        try:
+            handshake = self._request(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "clientCapabilities": {},
+                    "clientInfo": {"name": "postel-studio", "version": client_version},
+                },
+                timeout_s,
+            )
+            _parse(handshake)  # 校验结果形状（不存——能力检测是 agent.capabilities 的事）
+            result = self._request("session/new", {"cwd": cwd, "mcpServers": []}, timeout_s)
+            payload = result.get("result")
+            if not isinstance(payload, dict) or not isinstance(payload.get("sessionId"), str):
+                raise AcpProtocolError(f"session/new 没有回 sessionId：{result.get('error')!r}")
+            self._session_id = payload["sessionId"]
+        except BaseException:
+            reap(self._proc)  # 构造失败也要回收（S9 D7 的纪律，一个例外都不留）
+            raise
+
+    # -- 会话动作 ------------------------------------------------------------
+    @property
+    def session_id(self) -> str:
+        """会话 id（构造成功后必有）。"""
+        assert self._session_id is not None  # 由 __init__ 保证
+        return self._session_id
+
+    @property
+    def cwd(self) -> str:
+        """传给 `session/new` 的绝对路径（S10 验收 2 的断言点）。"""
+        return self._cwd
+
+    def prompt(self, text: str, *, timeout_s: float | None = None) -> SessionOutcome:
+        """投喂一句话并**等到这一轮结束**（D8：无默认死线）。
+
+        期间混在 stdout 里的 `session/update` 通知按行丢弃（D12：S10 不转发流式输出），
+        只计数。返回 `stopReason` 原文——`end_turn` / `cancelled` / 未知值都由调用方
+        按 D9 映射，客户端不替产品做决定。
+        """
+        if self._session_id is None:  # pragma: no cover - 构造失败就不可能有实例
+            raise AcpSessionError("会话尚未建立")
+        result = self._request(
+            "session/prompt",
+            {"sessionId": self._session_id, "prompt": [{"type": "text", "text": text}]},
+            timeout_s,
+        )
+        payload = result.get("result")
+        if not isinstance(payload, dict):
+            raise AcpProtocolError(f"prompt 没有结果对象：{result.get('error')!r}")
+        stop_reason = payload.get("stopReason")
+        if not isinstance(stop_reason, str) or not stop_reason:
+            # fail-closed：没有 stopReason 的"成功"不可信（D9）。
+            raise AcpProtocolError("prompt 应答缺 stopReason")
+        return SessionOutcome(stop_reason=stop_reason, updates=self.updates_seen)
+
+    def cancel(self) -> None:
+        """发 `session/cancel` **通知**（无 id，实测：挂起的 prompt 随即回
+        `stopReason: "cancelled"`）。可从任意线程调用；正在读的那条线程不受影响。"""
+        if self._session_id is None:  # pragma: no cover
+            raise AcpSessionError("会话尚未建立")
+        self._send(
+            {
+                "jsonrpc": "2.0",
+                "method": "session/cancel",
+                "params": {"sessionId": self._session_id},
+            }
+        )
+
+    def close(self) -> None:
+        """无条件回收（S9 D7 的同一个 `reap`）。幂等：进程已死就直接返回。"""
+        reap(self._proc)
+
+    def __enter__(self) -> Session:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    # -- 管道 ----------------------------------------------------------------
+    def _send(self, message: dict[str, object]) -> None:
+        """写一行 JSON-RPC。带锁：`cancel()` 从别的线程调用时与 `_request` 的写互斥。"""
+        if self._proc.stdin is None:  # pragma: no cover - PIPE 保证非 None
+            raise AcpUnavailableError("子进程没有可用的管道")
+        with self._stdin_lock:
+            try:
+                self._proc.stdin.write(json.dumps(message).encode("utf-8") + b"\n")
+                self._proc.stdin.flush()
+            except OSError as exc:  # 进程已死 / 管道已断
+                raise AcpUnavailableError(f"写不进 Agent 的 stdin：{exc}") from exc
+
+    def _request(
+        self, method: str, params: dict[str, object], timeout_s: float | None
+    ) -> dict[str, object]:
+        """发一个**带 id 的请求**并读回 id 对应的那一行（通知被跳过并计数）。"""
+        self._next_id += 1
+        request_id = self._next_id
+        self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        assert self._proc.stdout is not None  # PIPE 保证非 None
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        buffer = b""
+        while True:
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AcpTimeoutError(f"Agent 在 {timeout_s:g} 秒内没有应答")
+            ready, _, _ = select.select([self._proc.stdout], [], [], remaining)
+            if not ready:
+                continue
+            chunk = os.read(self._proc.stdout.fileno(), _READ_CHUNK)
+            if not chunk:
+                raise AcpUnavailableError("Agent 在应答前关闭了 stdout")
+            buffer += chunk
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                message = _try_json(line)
+                if not isinstance(message, dict):
+                    continue
+                if message.get("method") == "session/update":  # D12：计数后丢弃
+                    self.updates_seen += 1
+                    continue
+                if message.get("id") == request_id:
+                    return message
