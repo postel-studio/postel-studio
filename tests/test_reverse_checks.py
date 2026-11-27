@@ -470,6 +470,34 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         ),
         "S11 #4：cancel 赢了竞态还留下指向已取消任务的候选行（D6）",
     ),
+    # ---- S12：收件箱的三条红线（页面是 assets.py 里的静态字符串）----
+    (
+        "postel_studio/web/assets.py",
+        (
+            '        inboxEl.dataset.state = "empty";\n'
+            '        inboxState.textContent = "暂无待审变更";'
+        ),
+        '        inboxEl.dataset.state = "ready";  # 注入：空白',
+        _target_test(
+            "test_empty_repo_returns_no_rows_and_page_has_empty_state_text",
+            file="test_inbox_list",
+        ),
+        "S12 #1：0 条候选时不再显示空态文案（空白被误认为页面坏了）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        '      inboxLink.className = "repo-inbox-link";',
+        '      inboxLink.className = "repo-inbox-link hidden-tab";  # 注入：入口伪装成 tab',
+        _target_test("test_no_new_top_level_tab_and_entry_uses_repo_row", file="test_inbox_list"),
+        "S12 #2：收件箱入口不再是仓库条目下的链接（Q1 D1）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        '    if (filter !== "all") { params.reviewState = filter; }',
+        "    // 注入：忽略筛选，服务端永远返回全部",
+        _target_test("test_review_state_filter_returns_only_matching_rows", file="test_inbox_list"),
+        "S12 #3：筛选不再发给 candidate.list（D3：服务端是筛选的唯一事实源）",
+    ),
 )
 
 
