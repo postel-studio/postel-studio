@@ -379,6 +379,63 @@ def task_transition_ok(current: object, target: object) -> bool:
     return allowed is not None and target in allowed
 
 
+# ---------------------------------------------------------------------------
+# Candidate（S11，06 §2.4 / §3.2）：实体 + 分支名派生。**纯函数，无 IO**。
+# ---------------------------------------------------------------------------
+
+CANDIDATE_ID_PREFIX: Final = "cand_"
+# 06 §3.2 的审核状态。S11 只生产 local_only，其余先登记（S13 才有写路径）。
+REVIEW_STATES: Final[frozenset[str]] = frozenset(
+    {"local_only", "pushed", "pr_open", "approved", "rejected"}
+)
+_TASK_SHORT_LENGTH: Final = 8
+# 06 §2.4 的命名空间；gitops/worktrees.BRANCH_PREFIX 是同一常量的另一个副本
+# （分层表禁止 gitops → domain 的 import，不能在这里共享一个事实源）。
+_BRANCH_PREFIX: Final = "bot"
+_BRANCH_SAFE: Final = re.compile(r"[^a-z0-9-]")
+
+
+def candidate_branch(bot_name: object, task_id: object) -> str:
+    """`bot/<bot_name>/<task_id 短>`（06 §2.4 / S11 D1）——**纯**，不碰 git。
+
+    Bot 名已有 `bot_name_ok` 白名单（写入路径强制），这里仍把任何非法字符换成 `-`：
+    坏数据可能来自旧库或被手工改过的库，分支名不能因此变成 `bot/../x` 或带空格。
+
+    task_id 取**随机尾部 8 位**，不是前缀：ULID 的前 40 位全是时间戳，同一毫秒派出的
+    两个活前缀必然相同（实测撞车：`bot/builder/01m8e3ey` 被第二个任务判为"分支已存在"）。
+    尾部 8 位是 80 位随机段的一部分，同毫秒碰撞概率 2^-40；Crockford 字符本来就
+    refname-safe。这是规格 D1 的实测返工。
+    """
+    name = bot_name if isinstance(bot_name, str) else ""
+    tid = task_id if isinstance(task_id, str) else ""
+    safe_name = _BRANCH_SAFE.sub("-", name.lower()) or "unknown"
+    safe_task = _BRANCH_SAFE.sub("-", tid.lower())[-_TASK_SHORT_LENGTH:] or "unknown"
+    return f"{_BRANCH_PREFIX}/{safe_name}/{safe_task}"
+
+
+@dataclass(frozen=True, slots=True)
+class Candidate:
+    """一条可审查的候选（06 §2.4）。落盘 `snake_case`，帧层在边界转 `camelCase`。
+
+    `base_sha` 是**任务开始时的工作区 HEAD**（S11 D2，不是 task.base_ref），
+    `head_sha` 是把改动固化后的 HEAD；两者都是 40 位 hex。`remote` / `target` 在
+    `local_only` 时为 `None`（S13 的 push / PR 才有值）。
+    """
+
+    candidate_id: str
+    task_id: str
+    branch: str
+    base_sha: str
+    head_sha: str
+    files_changed: int
+    insertions: int
+    deletions: int
+    review_state: str
+    remote: str | None
+    target: str | None
+    created_at: float
+
+
 @dataclass(frozen=True, slots=True)
 class WorktreeLease:
     """一条工作区租约（06 §2.5，S7 裁决到期 S10，与 Task 一起建）。

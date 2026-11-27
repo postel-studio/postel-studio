@@ -1,6 +1,6 @@
 # orchestrator.py — 派活编排（S10，L3 纪律）
 
-`src/postel_studio/orchestrator.py`（403 行）· 依赖：`agent/`、`storage/db`、`domain`、`api/frames` —— **不 import 任何同层 handler**（S10 D13）。`WorktreeService` 由 `app.py` 装配时注入（`WorktreeAcquirer` Protocol），环靠构造消掉而不是靠豁免。
+`src/postel_studio/orchestrator.py`（450 行）· 依赖：`agent/`、`storage/db`、`domain`、`api/frames` —— **不 import 任何同层 handler**（S10 D13）。`WorktreeService` 由 `app.py` 装配时注入（`WorktreeAcquirer` Protocol），环靠构造消掉而不是靠豁免。
 
 ## 为什么有这个模块
 
@@ -33,3 +33,12 @@
 `subscribe` 是连接级方法，**不进本模块**也不进 `dispatch()`——它需要连接自己的队列与事件
 循环，所以住在 `api/gateway.py` 里特判；topic 白名单的唯一事实源是 `api/frames.py` 的
 `KNOWN_TOPICS`（L1），网关校验入参、本模块发布，两边读同一份。
+
+
+### S11 候选接缝
+
+构造参数新增 `candidates: CandidateMaker`（Protocol，不 import `candidates.py`）。
+worker 在会话**之前**用 `snapshot_base(path)` 记下工作区 HEAD（D2），
+`end_turn` 成功后走 `_succeed_with_candidate()`：无改动照旧 `succeeded`；有改动则候选行
+先插、终态迁移带 `candidate_id` 后做，输掉 cancel 竞态就 `discard()` 刚插入的行（D6）；
+迁移赢了才发 `candidate.proposed`。`task.status` 载荷多一个可选 `candidateId`。
