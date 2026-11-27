@@ -68,6 +68,7 @@ M1 的全链路验收（真内核 + 真 git + 真 WS 帧 + isolated `POSTEL_HOME
 
 ```bash
 uv run python scripts/accept_m1.py    # 必须 exit 0 且打印 M1 OK（6/6 步 + 家具）
+uv run python scripts/accept_m2.py    # M2 全链路：exit 0 + M2 OK (10/10 steps)（需 opencode + deepseek 凭据；否则 SKIP M2）
 ```
 
 ## 代码地图（改代码前先看，改完代码必须更新）
