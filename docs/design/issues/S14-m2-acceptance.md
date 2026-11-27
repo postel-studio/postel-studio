@@ -63,9 +63,9 @@
 | # | Acceptance criterion | Enforced by |
 |---|---|---|
 | 1 | Ten steps run end to end | `scripts/accept_m2.py` itself (each step asserts its own result frame) + `tests/test_accept_m2.py::test_accept_m2_script_runs_to_green` (subprocess, exit 0, ten `✓`) |
-| 2 | Per-step timing + failure names the step / non-zero exit | `test_accept_m2_step_failure_names_step_and_exits_nonzero` (bad `repoId` injected via env, assert `M2 FAILED at <step>` + rc 1) |
+| 2 | Per-step timing + failure names the step / non-zero exit | `test_accept_m2_script_runs_to_green` asserts all ten `✓ <step> (<N>s)` lines match the seconds form; `test_accept_m2_step_failure_names_step_and_exits_nonzero` injects `POSTEL_ACP_COMMAND='["no-such-agent-binary-xyz"]'` (a syntactically valid env override pointing at a missing binary → frame `ADAPTER_UNAVAILABLE` at step 5), asserting `M2 FAILED at 检测 Agent` + rc 1 |
 | 3 | Temp `POSTEL_HOME` + temp repo, no real data touched | script's snapshot design (D3) + `test_accept_m2_never_touches_real_home` (assert no write to real `~/.postel`; snapshot db lives under the temp work dir) |
-| 4 | Cleanup: worktree released, temp dir gone, no residual process | `test_accept_m2_script_runs_to_green` parses `清理：…临时目录已删除` and asserts the printed work dir does not exist |
+| 4 | Cleanup: worktree released, temp dir gone, no residual process | `test_accept_m2_script_runs_to_green` asserts `清理：worktree 已回收` + `清理：残留 serve 进程检查完成（0 个）` + `清理：…临时目录已删除` and that the printed work dir no longer exists; `test_accept_m2_cleanup_contract_in_script` statically pins the `worktree.release` / `surviving_servers` / `stop_kernel` / `rmtree` calls so removing any of them turns the test red |
 | 5 | opencode absent → explicit SKIP, no fake green | `test_accept_m2_skips_when_agent_unavailable` (opencode hidden via PATH, assert `SKIP M2:` + exit 0, no `M2 OK`) |
 | 真实集成 | candidate generated and diff non-zero | script step 7/9 assertions (`filesChanged >= 1`) |
 | 真实集成 | approved → `review_state == approved` | script step 10 re-reads `candidate.list` and asserts `reviewState == "approved"` |

@@ -17,7 +17,10 @@
   临时目录（D3）：源 `mode=ro` + `sqlite3.Connection.backup`，脚本从不读 key 值。
 - 真 Agent 用 `deepseek/deepseek-flash`（免费模型额度已耗尽，见 U21/S13）。
 - 没装 opencode / 没有 deepseek 凭据 → `SKIP M2: …` + exit 0，**绝不输出 `M2 OK`**。
-- `finally` 里回收 worktree、停内核、删临时目录并验证无残留（D6）。
+- D6：live WS 的 `finally` 里 `worktree.release`（best effort）；主 `finally` 里停内核、
+  按 `POSTEL_HOME` 精确匹配验证无残留 `postel-studio serve` 子进程、删临时目录；
+  任一清理失败计入 `M2 FAILED at 清理`，绝不静默。
+- 每步 `✓ <step> (<N>s) <detail>` 里的 `<N>` 是真实耗时（`time.monotonic()` 差值）。
 
 输出格式是契约（`tests/test_accept_m2.py` 解析）：`✓ ` / `M2 OK (` / `M2 FAILED at `
 / `SKIP M2:` / `清理：` / `工作目录：`。
@@ -199,6 +202,28 @@ def stop_kernel(proc: subprocess.Popen[str]) -> None:
         proc.wait(timeout=EXIT_TIMEOUT)
 
 
+def surviving_servers(home: Path) -> list[int]:
+    """找出仍活着的、属于本次 `POSTEL_HOME` 的内核进程 pid（不误伤别人的 serve）。
+
+    按 `/proc/<pid>/environ` 里的 `POSTEL_HOME=<home>` 精确匹配——同机可能有别的
+    `postel-studio serve` 在跑，只按命令行匹配会误报。读不到 /proc（非 Linux）则
+    回退为空（本脚本的 Linux 环境才是验收口径，见 spec §3）。
+    """
+    alive: list[int] = []
+    marker = f"POSTEL_HOME={home}".encode()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            environ = (entry / "environ").read_bytes()
+            cmdline = (entry / "cmdline").read_bytes()
+        except OSError:  # 进程刚退出：不算残留
+            continue
+        if marker in environ.split(b"\0") and b"postel-studio" in cmdline and b"serve" in cmdline:
+            alive.append(int(entry.name))
+    return alive
+
+
 def fetch_page(base: str) -> tuple[str, str]:
     """取 `/` 的 ticket / wsPath（从 meta 抠，不引 HTML 解析库）。"""
     response = httpx.get(f"{base}/", timeout=10.0)
@@ -223,9 +248,16 @@ def result_data(frame: dict[str, Any]) -> Any:
 
 
 async def ten_steps(base: str, ws_path: str, ticket: str, repo: Path) -> None:
-    """一条真 WS 连接上按顺序跑十步；首步失败即抛 `StepFailureError`。"""
+    """一条真 WS 连接上按顺序跑十步；首步失败即抛 `StepFailureError`。
+
+    D6：无论十步成败，都在 WS 还活着时 best-effort 发 `worktree.release` 并打印
+    `清理：worktree 已回收 …`（测试据此断言回收真的发生）。
+    """
     ws_url = f"ws://{base.removeprefix('http://')}{ws_path}?ticket={ticket}"
     seq = 0
+    repo_id = ""
+    bot_id = ""
+    starts: dict[int, float] = {}
 
     async with websockets.connect(ws_url) as ws:
 
@@ -240,7 +272,8 @@ async def ten_steps(base: str, ws_path: str, ticket: str, repo: Path) -> None:
 
         @asynccontextmanager
         async def guard(index: int) -> AsyncIterator[None]:
-            """任一步抛出的异常都带上步骤名（D2：失败指明具体步）。"""
+            """异常带上步骤名（D2：失败指明步）；同时记开始时间用于真实耗时。"""
+            starts[index] = time.monotonic()
             try:
                 yield
             except StepFailureError:
@@ -249,111 +282,126 @@ async def ten_steps(base: str, ws_path: str, ticket: str, repo: Path) -> None:
                 raise StepFailureError(STEP_NAMES[index], exc) from exc
 
         def step(index: int, detail: str) -> None:
-            print(f"✓ {STEP_NAMES[index]} ({detail})", flush=True)
+            elapsed = time.monotonic() - starts[index]
+            print(f"✓ {STEP_NAMES[index]} ({elapsed:.2f}s) {detail}", flush=True)
 
-        # 1 建临时仓库（脚手架已完成；这里确认它仍是干净的真 git 仓库）
-        async with guard(0):
-            status = subprocess.run(
-                ["git", "-C", str(repo), "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            assert status.stdout.strip() == "", f"临时仓库不干净：{status.stdout}"
-            step(0, repo.name)
+        try:
+            # 1 建临时仓库（脚手架已完成；这里确认它仍是干净的真 git 仓库）
+            async with guard(0):
+                status = subprocess.run(
+                    ["git", "-C", str(repo), "status", "--porcelain"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                assert status.stdout.strip() == "", f"临时仓库不干净：{status.stdout}"
+                step(0, repo.name)
 
-        # 2 绑定仓库
-        async with guard(1):
-            data = await call("repo.bind", {"path": str(repo)})
-            assert isinstance(data, dict) and isinstance(data.get("repoId"), str), data
-            repo_id: str = data["repoId"]
-            step(1, repo_id)
+            # 2 绑定仓库
+            async with guard(1):
+                data = await call("repo.bind", {"path": str(repo)})
+                assert isinstance(data, dict) and isinstance(data.get("repoId"), str), data
+                repo_id = data["repoId"]
+                step(1, repo_id)
 
-        # 3 建 Bot（默认 L1，能派活）
-        async with guard(2):
-            bot = await call("bot.create", {"repoId": repo_id, "name": "builder"})
-            assert isinstance(bot, dict) and isinstance(bot.get("botId"), str), bot
-            bot_id: str = bot["botId"]
-            step(2, bot_id)
+            # 3 建 Bot（默认 L1，能派活）
+            async with guard(2):
+                bot = await call("bot.create", {"repoId": repo_id, "name": "builder"})
+                assert isinstance(bot, dict) and isinstance(bot.get("botId"), str), bot
+                bot_id = bot["botId"]
+                step(2, bot_id)
 
-        # 4 分配工作区
-        async with guard(3):
-            wt = await call("worktree.acquire", {"repoId": repo_id, "botId": bot_id})
-            assert isinstance(wt, dict) and isinstance(wt.get("path"), str) and wt["path"], wt
-            step(3, wt["path"])
+            # 4 分配工作区
+            async with guard(3):
+                wt = await call("worktree.acquire", {"repoId": repo_id, "botId": bot_id})
+                assert isinstance(wt, dict) and isinstance(wt.get("path"), str) and wt["path"], wt
+                step(3, wt["path"])
 
-        # 5 检测 Agent（真握手）：先 agent.list 拿真实 kind，再 capabilities
-        async with guard(4):
-            agents = await call("agent.list")
-            assert isinstance(agents, list) and agents, agents
-            agent_kind = agents[0].get("agentKind")
-            assert isinstance(agent_kind, str) and agent_kind, agents
-            caps = await call("agent.capabilities", {"agentKind": agent_kind})
-            assert isinstance(caps, dict) and caps.get("agentVersion"), caps
-            step(4, f"Agent {caps['agentVersion']}")
+            # 5 检测 Agent（真握手）：先 agent.list 拿真实 kind，再 capabilities
+            async with guard(4):
+                agents = await call("agent.list")
+                assert isinstance(agents, list) and agents, agents
+                agent_kind = agents[0].get("agentKind")
+                assert isinstance(agent_kind, str) and agent_kind, agents
+                caps = await call("agent.capabilities", {"agentKind": agent_kind})
+                assert isinstance(caps, dict) and caps.get("agentVersion"), caps
+                step(4, f"Agent {caps['agentVersion']}")
 
-        # 6 派活（明确要求建文件，候选才有 diff）
-        async with guard(5):
-            dispatched = await call(
-                "task.dispatch",
-                {"botId": bot_id, "prompt": "请在这个工作区里创建 hello.txt，内容写 M2 acceptance"},
-            )
-            assert isinstance(dispatched, dict) and isinstance(dispatched.get("taskId"), str), (
-                dispatched
-            )
-            task_id: str = dispatched["taskId"]
-            step(5, task_id)
+            # 6 派活（明确要求建文件，候选才有 diff）
+            async with guard(5):
+                dispatched = await call(
+                    "task.dispatch",
+                    {
+                        "botId": bot_id,
+                        "prompt": "请在这个工作区里创建 hello.txt，内容写 M2 acceptance",
+                    },
+                )
+                assert isinstance(dispatched, dict) and isinstance(dispatched.get("taskId"), str), (
+                    dispatched
+                )
+                task_id: str = dispatched["taskId"]
+                step(5, task_id)
 
-        # 7 等终态
-        async with guard(6):
-            deadline = time.monotonic() + TASK_TIMEOUT
-            state = ""
-            task: dict[str, Any] = {}
-            while time.monotonic() < deadline:
-                task = await call("task.status", {"taskId": task_id})
-                assert isinstance(task, dict), task
-                state = str(task.get("state", ""))
-                if state not in ("queued", "running"):
-                    break
-                await asyncio.sleep(0.2)
-            assert state == "succeeded", f"任务终态 {state}（error={task.get('errorCode')}）"
-            step(6, state)
+            # 7 等终态
+            async with guard(6):
+                deadline = time.monotonic() + TASK_TIMEOUT
+                state = ""
+                task: dict[str, Any] = {}
+                while time.monotonic() < deadline:
+                    task = await call("task.status", {"taskId": task_id})
+                    assert isinstance(task, dict), task
+                    state = str(task.get("state", ""))
+                    if state not in ("queued", "running"):
+                        break
+                    await asyncio.sleep(0.2)
+                assert state == "succeeded", f"任务终态 {state}（error={task.get('errorCode')}）"
+                step(6, state)
 
-        # 8 候选出现
-        async with guard(7):
-            candidates = await call("candidate.list", {"repoId": repo_id, "taskId": task_id})
-            assert isinstance(candidates, list) and len(candidates) == 1, candidates
-            candidate = candidates[0]
-            assert isinstance(candidate, dict), candidate
-            candidate_id = candidate.get("candidateId")
-            base_sha, head_sha = candidate.get("baseSha"), candidate.get("headSha")
-            assert isinstance(candidate_id, str) and candidate_id, candidate
-            assert isinstance(base_sha, str) and isinstance(head_sha, str), candidate
-            assert candidate.get("reviewState") == "local_only", candidate
-            step(7, candidate_id)
+            # 8 候选出现
+            async with guard(7):
+                candidates = await call("candidate.list", {"repoId": repo_id, "taskId": task_id})
+                assert isinstance(candidates, list) and len(candidates) == 1, candidates
+                candidate = candidates[0]
+                assert isinstance(candidate, dict), candidate
+                candidate_id = candidate.get("candidateId")
+                base_sha, head_sha = candidate.get("baseSha"), candidate.get("headSha")
+                assert isinstance(candidate_id, str) and candidate_id, candidate
+                assert isinstance(base_sha, str) and isinstance(head_sha, str), candidate
+                assert candidate.get("reviewState") == "local_only", candidate
+                step(7, candidate_id)
 
-        # 9 查 diff（真 repo.diff，断言非零）
-        async with guard(8):
-            diff = await call("repo.diff", {"repoId": repo_id, "base": base_sha, "head": head_sha})
-            assert isinstance(diff, dict), diff
-            stat = diff.get("stat")
-            assert isinstance(stat, dict) and stat.get("filesChanged", 0) >= 1, diff
-            assert isinstance(diff.get("patch"), str) and diff["patch"], "候选分支的 patch 为空"
-            step(
-                8,
-                f"{stat['filesChanged']} 文件 / +{stat['insertions']} -{stat['deletions']}",
-            )
+            # 9 查 diff（真 repo.diff，断言非零）
+            async with guard(8):
+                diff = await call(
+                    "repo.diff", {"repoId": repo_id, "base": base_sha, "head": head_sha}
+                )
+                assert isinstance(diff, dict), diff
+                stat = diff.get("stat")
+                assert isinstance(stat, dict) and stat.get("filesChanged", 0) >= 1, diff
+                assert isinstance(diff.get("patch"), str) and diff["patch"], "候选分支的 patch 为空"
+                step(
+                    8,
+                    f"{stat['filesChanged']} 文件 / +{stat['insertions']} -{stat['deletions']}",
+                )
 
-        # 10 批准并复读
-        async with guard(9):
-            approved = await call("candidate.approve", {"candidateId": candidate_id})
-            assert isinstance(approved, dict) and approved.get("reviewState") == "approved", (
-                approved
-            )
-            after = await call("candidate.list", {"repoId": repo_id, "taskId": task_id})
-            assert isinstance(after, list) and len(after) == 1, after
-            assert after[0].get("reviewState") == "approved", after
-            step(9, "approved")
+            # 10 批准并复读
+            async with guard(9):
+                approved = await call("candidate.approve", {"candidateId": candidate_id})
+                assert isinstance(approved, dict) and approved.get("reviewState") == "approved", (
+                    approved
+                )
+                after = await call("candidate.list", {"repoId": repo_id, "taskId": task_id})
+                assert isinstance(after, list) and len(after) == 1, after
+                assert after[0].get("reviewState") == "approved", after
+                step(9, "approved")
+        finally:
+            # D6：live WS 上 best-effort 回收 worktree；失败只报告，绝不冒充成功。
+            if repo_id and bot_id:
+                try:
+                    await call("worktree.release", {"repoId": repo_id, "botId": bot_id})
+                    print(f"清理：worktree 已回收 ({bot_id})", flush=True)
+                except Exception as exc:
+                    print(f"清理：worktree 回收失败 ({bot_id}): {exc}", flush=True)
 
 
 def main() -> int:
@@ -364,7 +412,8 @@ def main() -> int:
     home = work / "home"
     home.mkdir()
     proc: subprocess.Popen[str] | None = None
-    clean_detail = ""
+    result = 1  # 默认失败；只有十步全绿且清理验证通过才翻成 0
+    skipped = False
     print(f"工作目录：{work}", flush=True)
     try:
         repo = make_repo(work)
@@ -372,31 +421,44 @@ def main() -> int:
         proc, base = start_kernel(home, xdg_data, work / "kernel.log")
         ticket, ws_path = fetch_page(base)
         asyncio.run(ten_steps(base, ws_path, ticket, repo))
+        result = 0
     except SkipM2Error as exc:
         print(f"SKIP M2: {exc}", flush=True)
-        return 0
+        result = 0
+        skipped = True
     except StepFailureError as exc:
         print(f"M2 FAILED at {exc.step}: {exc.reason}", flush=True)
-        return 1
     except Exception as exc:
         print(f"M2 FAILED at 启动: {exc}", flush=True)
-        return 1
     finally:
-        # D6：先停内核，再删目录；失败也要记账（不静默）。
+        # D6：停内核 → 验证无残留进程 → 删临时目录。任一失败都翻 result。
         if proc is not None:
             try:
                 stop_kernel(proc)
             except Exception as exc:
                 print(f"M2 FAILED at 清理: 内核没有在超时内退出：{exc}", flush=True)
+                result = 1
+        if proc is not None:  # 内核起不来就没有可查的 serve
+            try:
+                leftover = surviving_servers(home)
+            except OSError as exc:  # /proc 不可读：如实报告，不假装通过
+                print(f"M2 FAILED at 清理: 无法验证残留进程：{exc}", flush=True)
+                result = 1
+            else:
+                if leftover:
+                    print(f"M2 FAILED at 清理: 残留 serve 进程 {leftover}", flush=True)
+                    result = 1
+                print(f"清理：残留 serve 进程检查完成（{len(leftover)} 个）", flush=True)
         shutil.rmtree(work, ignore_errors=True)
         clean_detail = "已删除" if not work.exists() else "删除失败（残留）"
         print(f"清理：内核已停止，临时目录{clean_detail}：{work}", flush=True)
+        if clean_detail != "已删除":
+            print("M2 FAILED at 清理: 临时目录残留", flush=True)
+            result = 1
 
-    if clean_detail != "已删除":
-        print("M2 FAILED at 清理: 临时目录残留", flush=True)
-        return 1
-    print("M2 OK (10/10 steps)", flush=True)
-    return 0
+    if result == 0 and not skipped:
+        print("M2 OK (10/10 steps)", flush=True)
+    return result
 
 
 if __name__ == "__main__":

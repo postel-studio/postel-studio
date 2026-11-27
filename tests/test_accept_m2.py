@@ -64,6 +64,7 @@ def test_accept_m2_script_runs_to_green() -> None:
     result = _run()
     output = result.stdout + result.stderr
     assert result.returncode == 0, f"退出码 {result.returncode}\n{output[-4000:]}"
+    # D2：十步每一条都必须是 `✓ <step> (<N>s)` —— N 是真实耗时，不是 detail。
     for step in (
         "建临时仓库",
         "绑定仓库",
@@ -76,9 +77,14 @@ def test_accept_m2_script_runs_to_green() -> None:
         "查 diff",
         "批准",
     ):
-        assert f"✓ {step} (" in output, f"少了步骤 {step}\n{output[-3000:]}"
+        pattern = re.compile(rf"✓ {re.escape(step)} \(\d+\.\d+s\)")
+        assert pattern.search(output), f"步骤 {step} 缺真实耗时 (<N>s)\n{output[-3000:]}"
     assert "M2 OK (10/10 steps)" in output, output[-2000:]
 
+    # D6：worktree 回收 + 进程检查 + 临时目录删除三者都要在输出里。
+    assert "清理：worktree 已回收" in output, output[-2000:]
+    assert "清理：残留 serve 进程检查完成（0 个）" in output, output[-2000:]
+    assert "残留 serve 进程 [" not in output, output[-2000:]
     match = WORK_DIR_LINE.search(output)
     assert match is not None, output[-2000:]
     work = Path(match.group(1))
@@ -154,3 +160,18 @@ def test_accept_m2_output_contract_in_script() -> None:
     # 不得把 key 读进脚本：只看 integration_id / active，不读 value 列
     assert "integration_id='deepseek' AND active=1" in source
     assert "SELECT value" not in source and "SELECT *" not in source
+
+
+def test_accept_m2_cleanup_contract_in_script() -> None:
+    """D6 静态守卫：移除回收 / 进程检查 / 停内核 / 删目录任一项都要让本测试红。"""
+    source = SCRIPT.read_text(encoding="utf-8")
+    for token in (
+        'await call("worktree.release"',  # live WS 上回收
+        "清理：worktree 已回收",  # 回收确实发生的输出证据
+        "def surviving_servers(",  # 按 POSTEL_HOME 精确查残留进程
+        "POSTEL_HOME=",  # 进程检查用 home 匹配，不误伤别人
+        "stop_kernel(proc)",  # 内核停止
+        "shutil.rmtree(work",  # 临时目录删除
+        "result = 1",  # 清理失败翻转退出码（不是静默）
+    ):
+        assert token in source, f"D6 清理契约缺 {token}"
