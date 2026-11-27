@@ -782,6 +782,8 @@ def test_gateway_exposes_the_three_worktree_methods() -> None:
         worktree_acquire=acquire,
         worktree_list=listing,
         worktree_release=release,
+        agent_list=list,
+        agent_capabilities=lambda params: params,
     )
     assert gateway.dispatch("worktree.acquire", {"a": 1}, providers) == {"a": 1}
     assert gateway.dispatch("worktree.list", {"a": 1}, providers) == [{"a": 1}]

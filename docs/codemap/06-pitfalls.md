@@ -870,6 +870,50 @@ $ python -c "from pathlib import Path; Path('a/b/c/f.txt').write_text('x'); impo
 **防线**：`tests/test_bot_charter.py::test_ensure_memory_space_layout_and_permissions`
 （D11 #5）+ 反向注入 D12 #2（`write_text` 替 `atomic_write`）/#3（去掉逐层 chmod）。
 
+### T42 ❌ 「空对象」被当成「不支持」→ 全能 Agent 报出零能力，页面看起来还正常（S9 已处理）
+
+ACP 的 `initialize` 应答里，`agentCapabilities` 同时存在三种形状（实测 OpenCode 1.19.6）：
+
+```jsonc
+{"loadSession": true,                              // 布尔叶子
+ "mcpCapabilities": {"http": true, "sse": true},    // 命名空间 + 布尔
+ "sessionCapabilities": {"close": {}, "fork": {}}}  // 命名空间 + **空对象**
+```
+
+直觉写法是「读到 `true` 才算支持」，于是 `sessionCapabilities` 一条都不产出——而这个 Agent
+明明声明了四类会话能力（`close` / `fork` / `list` / `resume`）。页面不会报错：它只是显示一个
+更短的列表，看起来像「这个 Agent 就会这么多」。
+
+**为什么险**：没有任何断言会红。错误的方向是「少报」，而少报在 UI 上完全合法——用户不会
+知道自己少看了四项。
+
+**正解**：ACP 用**键存在**表达支持，值是该特性的选项容器。派生要按形状分支：
+
+| 值 | 含义 | 产出 |
+|---|---|---|
+| `true` | 支持 | 键名 |
+| `{}` / `{...}` | 支持（可能带选项） | `命名空间.子键名` |
+| `false` / 缺失 | 不支持 | 不产出 |
+
+**防线**：`agent/acp_client.py:70` `flatten_capabilities`；`test_flags_match_the_measured_response`
+拿真实应答的九个 flag 做对照；`test_flags_are_derived_not_hardcoded` 用八组形状参数化；
+反向注入 S9 #1（改成返回固定列表）必须让它变红。
+
+**通用**：解析外部协议时，「值」的含义问协议，别按语言的类型直觉。空容器在不同协议里可能
+是「没有」，也可能是「有，且无选项」——这一字之差决定功能有没有。
+
+### T43 ⚠️ 「答完了」不等于「退出了」——回收要用 pid 证据（S9 已处理）
+
+握手成功只证明「对方答了」。`opencode acp` 这类长驻进程答完**不会自己退出**，如果实现只在
+成功路径上返回、忘了 `terminate`，每点一次「检测 Agent」就漏一个进程，而所有断言都是绿的。
+
+**做法**：`initialize` 的 `finally` 里无条件 `stdin.close → terminate → wait(5) → kill → wait`
+（`agent/acp_client.py:144`）。测试让假服务端「答完故意不退」，并让它把自己的 pid 写到文件；
+断言用 `os.kill(pid, 0)` 抛 `ProcessLookupError`——这条同时证明 `wait` 过（否则 zombie 还占着 pid）。
+
+**通用**：判断「资源释放了」不能看返回值，要看资源本身。进程看 pid，文件看 `exists`，
+锁看能不能再取。反向注入 S9 #2 把 `terminate` 换成 `return`，目标测试必须红。
+
 ## 已知未决问题
 
 **S4.5 起的规则**：每项必须有「到期切片」——到那一刀开工前，要么修掉，要么明确豁免并写清后果。
@@ -897,6 +941,7 @@ $ python -c "from pathlib import Path; Path('a/b/c/f.txt').write_text('x'); impo
 | U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。**→ ✅ 结案（S5）**：按 D3.2 的裁决修 —— `run_git` 增加 `decode_errors`（缺省 `strict`），严格模式解码失败抛新异常 `GitOutputUndecodableError`（加进 `GIT_ERRORS`）；`api/repository.py` 把 `repo.branches` / `repo.bind` / `repo.diff` 三条路径一律翻成 `NOT_SUPPORTED` +「仓库含非 UTF-8 的名称，第一版不支持」，不再回 `INTERNAL`。实测触发：`git branch $'bad-\xff'` 之后 `for-each-ref` 原始输出是 `b'bad-\xff\nmain\n'`（严格解码在 position 4 抛 `UnicodeDecodeError`）；JSON 的 lone surrogate 经 `surrogateescape` 会变成真字节、`rev-parse --verify` 真的能解析成功——所以入站也挡（D3.1）。回归：`tests/test_diff.py` D10 第 19/20 行 + 反向注入 D12 #3。 | ✅ **已修（S5）** | — | ref 名回传 git 会变 `BAD_REF`，甚至指向别的 ref——比报错更糟 |
 | U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **S18（空态/错误态与大仓库体检）前** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）；届时裁决：流式读 + 字节上限，或明确豁免并写进 05 安全红线 |
 | U17 | **`bot.list` 惰性播种 + `charter_rev` 未维护**（S6 的两处临时形态）。① 惰性播种：`bot.list` 是读方法，却会在该 repo **一个 Bot 都没有**时落一行（S6 D2 的权宜：M1 没有创建入口，而 S6 之前绑定的老仓库只有惰性播种才能自动补上）；② `bots.charter_rev` 列 v3 就建了，但**只在创建时写一次**（D5：charter 正文的事实源是 `charter.md`，载荷里的 `charterRev` 现场按内容算；改 charter 的写路径是 S22 的 `charter.set`）。 | **① ✅ 已结案（S8 D7）**：`_seed` 与 `PRESET_BOT_NAME` 删除，`bot.list` 变成纯读，空仓库回 `[]`（`test_bot_list_returns_created_bots_and_repeats_identically` / `test_list_on_a_repo_with_no_bots_writes_nothing`）。**② 仍未修**（`charter_rev` 允许过期）。 | ① 已到期并完成；② 到期 **S22**（`memory.charter.set`） | ① 无——代价已消失。② 有人去读那一列会读到过期值：**今天没有任何读路径**，S22 必须改成由 `charter.set` 维护它，或者直接删掉这一列。 |
+| U18 | **`bot.agentKind` 仍不可写**：S8 的 `_refuse_agent_kind` 拒绝一切非 null 值，理由是「S9 之前没有任何通道被验证过」。S9 验证了 `acp-stdio`，但**没有**开这个字段——因为它没有「选通道」的 UI，接受页面产生不了的值等于接口先于用户路径（S9 D13）。 | **未修（有意的）**：registry 已经能回答「有哪些通道」；缺的是「人怎么选」或「默认用哪条」的产品决定 | 到期 **S10**（派活必须知道用哪条通道） | S10 要么默认用 `acp-stdio`、要么加选择器；在那之前 `bot.create` 对任何非 null `agentKind` 继续回 `NOT_SUPPORTED`，不会静默存下一个没验证过的名字 |
 
 ---
 

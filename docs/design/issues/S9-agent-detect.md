@@ -385,3 +385,57 @@ exception family to catch (`OSError`).
 `bash scripts/check.sh all` green, `build` green, every `tools/acceptance/*.mjs` re-run (not just
 the new one), the five acceptances above each backed by a pasted command tail, two reverse
 injections proving R1/R2, and the PR body carrying the budget from `04 §1.1`.
+
+## 12. Addendum (written while implementing; the decisions above are not rewritten)
+
+### 12.1 The client is 235 lines, not 180 — and that is the whole overrun
+
+§6 estimated `acp_client.py ≤ 180`. It shipped at **235** (+31%), and `src/` overall at
+**623 changed lines / 7 files** against an estimate of ~490 / 6. The ceiling is 1000 / 12, so the
+slice is inside the gate — but the estimate was wrong, and the reason is worth writing down.
+
+The extra ~55 lines are comments that record *why* (the empty-object capability rule, "noise is
+not a protocol error", the environment filter's intended collateral damage on `SSH_AUTH_SOCK`)
+plus the deterministic reaping sequence. A 235-line file with load-bearing comments beats a
+180-line file whose next editor re-introduces T42 — but it is still an overrun, and the next slice
+touching this file should start from 235, not from 180.
+
+### 12.2 The S3 subprocess guard had to grow a third line
+
+`tests/test_bind.py::test_git_subprocess_shell_is_disabled` asserted that **only** the two
+`gitops/` files start subprocesses. S9 starts one in `agent/acp_client.py`; the test failed on the
+first full run, which is the guard doing its job.
+
+It was **not** loosened. The guard grew a third entry and now runs two assertion sets:
+
+| Set | Applies to | Assertions |
+|---|---|---|
+| `sources` | `gitops/repo.py`, `gitops/worktrees.py` | `shell=False` literal, `timeout=`, list literal, no f-string/BinOp |
+| `popen_sources` | `agent/acp_client.py` | `shell=False` literal, command is not a string constant, no f-string/BinOp |
+
+`timeout=` does not apply to `Popen` (no such parameter); the deadline lives in the read loop.
+Dropping that assertion without replacement would have been a real weakening, so the Popen set
+adds an explicit "command must not be a string constant" check — the failure mode `shell=True`
+would otherwise enable.
+
+### 12.3 `str` satisfies `Sequence[str]`, so mypy cannot enforce "array, not string"
+
+The first version of `test_a_string_command_is_refused` carried a `# type: ignore[arg-type]`.
+mypy reported it as **unused**: `str` *is* a `Sequence[str]`, so passing `"opencode acp"`
+type-checks.
+
+That is the interesting part. The type system says a string is an acceptable command; the OS says
+otherwise (one executable named `opencode acp`, or worse, shell interpretation). So the check has
+to be a runtime one — `initialize()` raises `AcpUnavailableError` on `isinstance(command, str)` —
+and the test documents *why* the annotation is absent rather than silently deleting it.
+
+### 12.4 What the real handshake produced on this machine
+
+| Reading | Value |
+|---|---|
+| Agent | `OpenCode 1.19.6` |
+| `protocolVersion` | `1` |
+| `flags` (derived, sorted) | 9 — `loadSession` … `session.resume` |
+| Handshake wall time (pytest) | 583 ms |
+| Handshake wall time (browser) | 705 ms |
+| Browser CHECKs | 32/32 (19 positive + 13 negative) |

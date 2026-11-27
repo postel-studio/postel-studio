@@ -90,7 +90,7 @@ class Providers:
     `repo_bind` / `repo_list` 是 S3 加的两个业务入口，`repo_branches` 是 S4 加的第三个，
     `repo_diff` 是 S5 加的第四个，`bot_list` / `memory_charter_get` 是 S6 加的第五、六个，
     S7 又加了 `worktree_acquire` / `worktree_list` / `worktree_release`，S8 加 `bot_create` /
-    `bot_set_permission`；
+    `bot_set_permission`，S9 加 `agent_list` / `agent_capabilities`；
     签名刻意用 `dict → dict`（列表载荷用 `list[dict]`）：闸门只认「帧的参数对象进、载荷对象出」，
     网关不知道仓库、数据库、git、charter 文件、工作区目录的存在。
     抛 `frames.FrameError` 时网关原样转发它的 `code` / `message`（D6 的稳定码）。
@@ -108,6 +108,8 @@ class Providers:
     worktree_acquire: Callable[[dict[str, object]], dict[str, object]]
     worktree_list: Callable[[dict[str, object]], list[dict[str, object]]]
     worktree_release: Callable[[dict[str, object]], dict[str, object]]
+    agent_list: Callable[[], list[dict[str, object]]]
+    agent_capabilities: Callable[[dict[str, object]], dict[str, object]]
 
 
 def active_connection_count() -> int:
@@ -144,6 +146,10 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.worktree_list(params)
     if method == "worktree.release":  # S7 / 07 §4.9：回收（不删分支、不加 --force）
         return providers.worktree_release(params)
+    if method == "agent.list":  # S9 / 07 §4.11：已登记的通道 + 文件在不在（不启进程）
+        return providers.agent_list()
+    if method == "agent.capabilities":  # S9 / 07 §4.11：真握手，能力来自应答
+        return providers.agent_capabilities(params)
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 

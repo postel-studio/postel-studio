@@ -159,6 +159,46 @@ Insights（v2）——11 个子页，含真实空态：
 - patch 是**不可信文本**（文件名可以是 `<script>`）：一律 `textContent`，全页零 `innerHTML`；
 - 不设固定宽度、不假设中文宽度（等宽字体 + 自动换行 + 自身滚动）。
 
+### 4.5 Agent 通道卡片（产品区 · S9）
+
+主区在 `#content`（内核信息）**之后、`#branches` 之前**新增一节 `#agent`。位置是有意的：
+它是**内核级**能力，不属于任何选中的仓库，所以不该排在仓库面板后面。
+
+一个动作：**点「检测 Agent」→ 看到本机有没有可用的 Agent、它是什么版本、它声明了什么能力。**
+
+**状态机**（`#agent[data-state]`，显隐只由 CSS 决定，JS 只改属性）：
+
+| 状态 | 何时 | 用户看到 |
+|---|---|---|
+| `idle` | 页面加载 / 断连 | 提示「点「检测 Agent」看本机有没有可用的 Agent」；断连时「已断开：Agent 状态未知」 |
+| `loading` | 已发 `agent.list` / `agent.capabilities` 等回包 | 「正在读取通道…」/「正在握手（最多 30 秒）…」，按钮禁用 |
+| `ready` | 握手成功 | 通道 id、`Agent：<名字> <版本>`、`protocolVersion`、耗时、能力清单（`<ul>`，已排序） |
+| `error` | 任何失败 | 按**码**映射的一行错误；按钮变「重试」且**保持可点** |
+
+**错误文案是面板自己的**（S9 D10）。全局 `ERROR_TEXT` 里 `ADAPTER_UNAVAILABLE` 说的是
+「内核找不到 git 命令」——那是 S3 的绑定场景，这里必须换成：
+
+| 码 | 文案 |
+|---|---|
+| `ADAPTER_UNAVAILABLE` | 本机没有可用的 Agent 命令（未安装或不在 PATH 上） |
+| `ADAPTER_TIMEOUT` | Agent 握手超时（30 秒），可以重试 |
+| `NOT_SUPPORTED` | 第一版不支持这个参数 |
+| 其它 | 全局表的值，或「检测失败」 |
+
+**DOM 契约**（id 即契约，`tests/test_acp_detect.py` 与 `s9_agent.mjs` 都按它断言）：
+
+`#agent` · `#agent-title` · `#agent-state` · `#agent-detect` · `#agent-error` ·
+`#agent-detail` · `#agent-kind` · `#agent-version` · `#agent-protocol` · `#agent-elapsed` ·
+`#agent-flags`
+
+**其他交互约束**：
+
+- 检测是**显式动作**：页面加载不自动握手（起进程的事不该偷偷发生），也没有 `Enter` 快捷方式；
+- 没有第二个「重试」按钮：`error` 态下同一个按钮就是重试入口（两个入口 = 两条会分叉的代码路径，
+  见 `06 T41`）；
+- 版本号、能力名都是 Agent 报的字符串：一律 `textContent`，全页零 `innerHTML`；
+- 断连回 `idle` 并清空能力清单，**不**留着上一次的结果装新鲜；重连后要重新点检测。
+
 ## 5. 交互约束
 
 - 主题切换：浅/暗两套 token，**必须**同时校验两套下的对比度。

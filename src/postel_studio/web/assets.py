@@ -345,6 +345,30 @@ INDEX_HTML: Final = """<!doctype html>
   /* 注意：error 状态**不隐藏** `#workspace-details`。回收被拒（脏工作区）之后，用户必须还能
      看见路径、并**再点一次**「回收」——把按钮藏起来等于让人去刷新页面（真实浏览器验收抓到
      的第一版缺陷）。没有工作区时 `#workspace-details` 靠 `hidden` 属性隐藏，与这里无关。 */
+  /* Agent 通道卡片（S9 D9）。四态只由 `#agent[data-state=…]` 与 `hidden` 决定（T8：不碰
+     style.display）；版本号与能力名都是 Agent 自己报的，只进 textContent。 */
+  #agent { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #agent h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600;
+    letter-spacing: .08em; color: #8b95a7; text-transform: uppercase; }
+  #agent-state { margin: 8px 0 8px; font-size: 13px; color: #8b95a7; }
+  #agent-detect { padding: 6px 12px; font: inherit; font-size: 13px; color: #e6e9ef;
+    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
+  #agent-detect:hover { border-color: #58627a; }
+  #agent-detect:disabled { opacity: .5; cursor: progress; }
+  #agent-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
+  #agent-detail { margin: 10px 0 0; }
+  #agent-kind, #agent-version, #agent-protocol, #agent-elapsed { margin: 4px 0 0;
+    font-size: 13px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    word-break: break-all; }
+  #agent-flags-title { margin: 10px 0 0; font-size: 13px; color: #8b95a7; }
+  #agent-flags { margin: 4px 0 0; padding-left: 20px; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  #agent-flags li { margin: 2px 0; }
+  #agent[data-state="idle"] #agent-detail,
+  #agent[data-state="loading"] #agent-detail,
+  #agent[data-state="error"] #agent-detail,
+  #agent[data-state="ready"] #agent-state { display: none; }
 </style>
 </head>
 <body>
@@ -364,6 +388,22 @@ INDEX_HTML: Final = """<!doctype html>
       <dt>stateRoot</dt><dd>%%STATE_ROOT%%</dd>
     </dl>
   </div>
+  <!-- Agent 通道卡片（S9 D9）：放在 #content 之后、仓库面板之前——它是**内核级**能力，
+       不属于任何选中的仓库。初始 idle；显隐由 #agent[data-state=…] 与 hidden 决定。 -->
+  <section id="agent" data-state="idle" aria-live="polite">
+    <h2 id="agent-title">Agent 通道</h2>
+    <p id="agent-state">点「检测 Agent」看本机有没有可用的 Agent</p>
+    <button id="agent-detect" type="button">检测 Agent</button>
+    <p id="agent-error" role="alert" hidden></p>
+    <div id="agent-detail" hidden>
+      <p id="agent-kind"></p>
+      <p id="agent-version"></p>
+      <p id="agent-protocol"></p>
+      <p id="agent-elapsed"></p>
+      <p id="agent-flags-title">能力清单（来自这次握手应答）</p>
+      <ul id="agent-flags"></ul>
+    </div>
+  </section>
   <!-- 主区分支面板（S4 D6）：位置在 #content 之后，不重排既有布局。
        初始 idle（还没选仓库）；显隐全部由上面的 #branches[data-state=…] 规则决定。 -->
   <section id="branches" data-state="idle" aria-live="polite">
@@ -587,6 +627,21 @@ INDEX_HTML: Final = """<!doctype html>
   var workspacePath = document.getElementById("workspace-path");
   var workspaceBranch = document.getElementById("workspace-branch");
   var workspaceRelease = document.getElementById("workspace-release");
+
+  // Agent 通道卡片（S9 D9）。检测是**显式动作**：页面加载不动它，不偷偷起进程。
+  var agentEl = document.getElementById("agent");
+  var agentState = document.getElementById("agent-state");
+  var agentDetect = document.getElementById("agent-detect");
+  var agentError = document.getElementById("agent-error");
+  var agentDetail = document.getElementById("agent-detail");
+  var agentKind = document.getElementById("agent-kind");
+  var agentVersion = document.getElementById("agent-version");
+  var agentProtocol = document.getElementById("agent-protocol");
+  var agentElapsed = document.getElementById("agent-elapsed");
+  var agentFlags = document.getElementById("agent-flags");
+  var agentBusy = false;
+  var AGENT_HINT = "点「检测 Agent」看本机有没有可用的 Agent";
+  var AGENT_ERROR_FALLBACK = "检测失败";
   var WORKSPACE_HINT = "选择一个仓库后分配工作区";
   // 卡片**自己的**兜底：表外的码不显示绑定场景的「绑定失败」（同分支/差异/Bot 面板）。
   var WORKSPACE_ERROR_FALLBACK = "工作区操作失败";
@@ -635,6 +690,10 @@ INDEX_HTML: Final = """<!doctype html>
     resetCharter("idle", state === "disconnected" ? "已断开：charter 未知" : "正在连接内核…");
     // S7 D9：工作区卡片同一纪律——断连回 idle + 「已断开：工作区未知」+ 清空路径/分支。
     resetWorkspace("idle", state === "disconnected" ? "已断开：工作区未知" : "正在连接内核…");
+    // S9：Agent 检测结果属于上一次连接，断连后不许留着装新鲜（重连要重新点检测）。
+    resetAgent("idle", state === "disconnected"
+      ? "已断开：Agent 状态未知"
+      : AGENT_HINT);
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -1415,6 +1474,98 @@ INDEX_HTML: Final = """<!doctype html>
     }
   }
 
+  // ---- Agent 通道（S9 D9 / D10）----
+
+  // D10：面板**自己的**码 → 文案。全局 ERROR_TEXT 里 `ADAPTER_UNAVAILABLE` 说的是
+  // 「内核找不到 git 命令」——那是 S3 的绑定场景，复用会让用户以为自己的 git 坏了。
+  function agentErrorText(code) {
+    if (code === "ADAPTER_UNAVAILABLE") {
+      return "本机没有可用的 Agent 命令（未安装或不在 PATH 上）";
+    }
+    if (code === "ADAPTER_TIMEOUT") { return "Agent 握手超时（30 秒），可以重试"; }
+    if (code === "NOT_SUPPORTED") { return "第一版不支持这个参数"; }
+    return ERROR_TEXT[code] || AGENT_ERROR_FALLBACK;
+  }
+
+  // 四态只由 data-state 与 hidden 决定（T8）。错误态**不**禁按钮：它就是重试入口（D9）。
+  function resetAgent(state, text) {
+    agentEl.dataset.state = state;
+    agentState.textContent = text;
+    if (state !== "error") { agentError.hidden = true; agentError.textContent = ""; }
+    if (state !== "ready") { agentDetail.hidden = true; agentFlags.textContent = ""; }
+    agentBusy = state === "loading";
+    agentDetect.disabled = agentBusy;
+    agentDetect.textContent = state === "error" ? "重试" : "检测 Agent";
+  }
+
+  function renderAgent(data) {
+    var flags = (data && data.flags) || [];
+    var name = data && data.agentName ? String(data.agentName) : "未知";
+    var version = data && data.agentVersion ? String(data.agentVersion) : "未知";
+    agentKind.textContent = "通道：" + String((data && data.agentKind) || "（未知）");
+    agentVersion.textContent = "Agent：" + name + " " + version;
+    agentProtocol.textContent = "protocolVersion：" +
+      String(data && data.protocolVersion !== undefined ? data.protocolVersion : "未知");
+    agentElapsed.textContent = "握手耗时：" + String((data && data.elapsedMs) || 0) + " ms";
+    agentFlags.textContent = "";
+    for (var i = 0; i < flags.length; i++) {
+      var li = document.createElement("li");
+      li.textContent = String(flags[i]);   // Agent 报的字符串，只进 textContent
+      agentFlags.appendChild(li);
+    }
+    if (flags.length === 0) {
+      var none = document.createElement("li");
+      none.textContent = "（这次握手没有声明任何能力）";
+      agentFlags.appendChild(none);
+    }
+    agentDetail.hidden = false;
+    agentEl.dataset.state = "ready";
+    agentState.textContent = "可用";
+    agentBusy = false;
+    agentDetect.disabled = false;
+    agentDetect.textContent = "重新检测";
+    agentError.hidden = true;
+  }
+
+  function showAgentError(code) {
+    resetAgent("error", "不可用");
+    agentError.textContent = agentErrorText(code);
+    agentError.hidden = false;
+  }
+
+  // 先问 `agent.list` 拿通道 id，再握手：页面**不知道**任何通道名（D1 的禁令同样适用于
+  // 前端）。顺带让「一个通道都没登记」和「通道在但握手失败」显示成不同的话。
+  function detectAgent() {
+    if (agentBusy) { return; }
+    resetAgent("loading", "正在读取通道…");
+    var id = request("agent.list", {}, function (err, list) {
+      if (err) { showAgentError(err); return; }
+      var channel = (list && list.length > 0) ? list[0] : null;
+      if (channel === null) {
+        resetAgent("error", "不可用");
+        agentError.textContent = "内核没有登记任何 Agent 通道";
+        agentError.hidden = false;
+        return;
+      }
+      resetAgent("loading", "正在握手（最多 30 秒）…");
+      var requested = request("agent.capabilities", { agentKind: String(channel.agentKind) },
+        function (handshakeError, data) {
+          if (handshakeError) { showAgentError(handshakeError); return; }
+          renderAgent(data && typeof data === "object" ? data : {});
+        });
+      if (requested === null) {
+        resetAgent("error", "连接尚未就绪");
+        agentError.textContent = "连接尚未就绪，先重连内核";
+        agentError.hidden = false;
+      }
+    });
+    if (id === null) {
+      resetAgent("error", "连接尚未就绪");
+      agentError.textContent = "连接尚未就绪，先重连内核";
+      agentError.hidden = false;
+    }
+  }
+
   function selectBot(botId, botName) {
     if (!botId) { return; }
     selectedBotId = botId;
@@ -1597,6 +1748,8 @@ INDEX_HTML: Final = """<!doctype html>
   button.addEventListener("click", reconnect);
   bindForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitBind(); });
   diffForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitDiff(); });
+  // S9：检测是显式按钮（起进程的事不该被回车或页面加载偷偷触发）。
+  agentDetect.addEventListener("click", detectAgent);
   // S7：分配走 <form>（回车与点按钮同一条路径）；回收是显式按钮（删目录不该被回车触发）。
   workspaceForm.addEventListener("submit", function (ev) {
     ev.preventDefault();
