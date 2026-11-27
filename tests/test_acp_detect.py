@@ -157,6 +157,19 @@ def test_missing_protocol_version_is_internal(monkeypatch: pytest.MonkeyPatch) -
     assert exc.value.code == "INTERNAL"
 
 
+def test_exit_before_answering_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D6 / `07 §4.11`：进程在应答前退出 → `ADAPTER_UNAVAILABLE`，**不是**超时。
+
+    走 `_exchange` 的 EOF 分支（`os.read` 回 `b""`）；这条分支此前只在覆盖率报告里出现过。
+    `timeout_s=5` 是刻意的：如果实现把它误判成超时，断言会拿到 `ADAPTER_TIMEOUT` 而红，
+    而不是靠「反正都会抛」蒙混过去。
+    """
+    _use_fake(monkeypatch, "exit-early")
+    with pytest.raises(frames.FrameError) as exc:
+        AgentsService(timeout_s=5).capabilities({"agentKind": registry.ACP_STDIO})
+    assert exc.value.code == "ADAPTER_UNAVAILABLE"
+
+
 def test_no_answer_within_deadline_is_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """**验收 4**：到点没答 → `ADAPTER_TIMEOUT`（产品默认 30s，测试用 0.3s）。"""
     _use_fake(monkeypatch, "silent")
@@ -217,6 +230,42 @@ def test_broken_override_is_unavailable_not_a_fallback(monkeypatch: pytest.Monke
         service.capabilities({"agentKind": registry.ACP_STDIO})
     assert exc.value.code == "ADAPTER_UNAVAILABLE"
     assert service.list()[0]["available"] is False
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["[]", "[1]", '["ok", ""]', '{"command": ["ok"]}'],
+    ids=["empty-array", "non-string-element", "empty-string-element", "not-an-array"],
+)
+def test_broken_override_shapes_are_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str,
+) -> None:
+    """D2 的四种坏形状都 fail-closed；此前只测了非法 JSON。
+
+    同时钉住 `agent.list` 的语义：`available=False`，而 `command` 仍是登记表默认值——
+    它只用于诊断，不会被执行（`capabilities()` 会先撞上同一个异常）。
+    """
+    monkeypatch.setenv(registry.COMMAND_ENV, raw)
+    channel = registry.resolve(registry.ACP_STDIO)
+    assert channel is not None
+    with pytest.raises(registry.BrokenOverrideError):
+        registry.command_for(channel)
+    entry = AgentsService().list()[0]
+    assert entry["available"] is False
+    assert entry["command"] == list(channel.command)
+
+
+def test_command_for_defaults_to_the_registry_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D2 第一行：未设置或只有空白，都回登记表默认（`command_for` 的默认分支）。"""
+    channel = registry.resolve(registry.ACP_STDIO)
+    assert channel is not None
+    monkeypatch.delenv(registry.COMMAND_ENV, raising=False)
+    assert registry.command_for(channel) == channel.command
+    monkeypatch.setenv(registry.COMMAND_ENV, "   ")
+    assert registry.command_for(channel) == channel.command
 
 
 def test_agent_list_reports_availability_without_spawning(

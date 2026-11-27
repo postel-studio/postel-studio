@@ -100,7 +100,7 @@ class AgentsService:
         return channel
 
     def _command_and_availability(self, channel: registry.Channel) -> tuple[tuple[str, ...], bool]:
-        """坏覆盖 = 不可用，**不回退默认**（D2）。这里只回答事实，不抛错。"""
+        """坏覆盖 = 不可用（D2），绝不拿默认去执行；`command` 回默认值，仅作诊断。"""
         try:
             command = registry.command_for(channel)
         except registry.BrokenOverrideError:

@@ -239,15 +239,26 @@ either default to `acp-stdio` or add the selector. Recorded as **U18**, due S10.
 | # | Acceptance (what the human sees) | Command |
 |---|---|---|
 | 1 | With `opencode` installed: "可用", the real version, and the capability list | `uv run pytest tests/test_acp_detect.py -k real_handshake -v` |
-| 2 | Not installed: "不可用" + install hint, no crash | `PATH=/nonexistent uv run pytest tests/test_acp_detect.py -k unavailable -v` |
+| 2 | Not installed: "不可用" + install hint, no crash | `uv run pytest tests/test_acp_detect.py -k unavailable -v` |
 | 3 | Capabilities come from the response, not from source | reverse injection **R1** (§7) |
-| 4 | 30s with no answer: "超时", and the button can retry | `POSTEL_ACP_COMMAND='["sleep","60"]' uv run pytest tests/test_acp_detect.py -k timeout -v` |
+| 4 | 30s with no answer: "超时", and the button can retry | `uv run pytest tests/test_acp_detect.py -k "timeout or deadline" -v` |
 | 5 | The child is reaped on every path | `uv run pytest tests/test_acp_detect.py -k reap -v` |
+
+Two corrections to the commands above, both from review:
+
+- **Row 2** needs no `PATH=` prefix. The tests build the missing-executable state themselves
+  (`initialize(["definitely-not-a-real-agent-xyz"])`); prefixing `PATH=/nonexistent` only hides
+  `uv` from the shell (`bash: uv: command not found`), so the command as first written proved
+  nothing.
+- **Row 4** does not wait 30 s. The tests pin a **0.3 s** deadline against a fake server that never
+  answers, and set `POSTEL_ACP_COMMAND` through `monkeypatch`, so the env var on the command line
+  is overridden before it is read. The product's 30 s default is exercised only as a constant —
+  the same admission the PR body makes under "not verified".
 
 End-to-end, in a real browser:
 
 ```bash
-node tools/acceptance/s9_agent.mjs      # detect → version → flags → reaped
+node tools/acceptance/s9_agent.mjs      # detect → version → flags (reaping: pid tests)
 ```
 
 The script must also assert the **negative** case (a `POSTEL_ACP_COMMAND` pointing at a missing
@@ -439,3 +450,17 @@ and the test documents *why* the annotation is absent rather than silently delet
 | Handshake wall time (pytest) | 583 ms |
 | Handshake wall time (browser) | 705 ms |
 | Browser CHECKs | 32/32 (19 positive + 13 negative) |
+
+### 12.5 Test names as shipped
+
+§4 was written before the code, and three of the names it listed never existed. The behaviours are
+covered — by the browser script, or by a differently-named test — so the map is corrected here
+rather than rewritten in place, the same way S7 §12.5 does it.
+
+| §4 said | What actually covers it |
+|---|---|
+| `test_page_shows_unavailable_text` | no pytest node: `tools/acceptance/s9_agent.mjs` CHECKs 29–32 assert the page text and that no uncaught JS error escapes; `test_missing_executable_is_unavailable_through_the_service` asserts the same code at the service |
+| `test_button_is_re_enabled_after_error` | no pytest node: `s9_agent.mjs` CHECK 32 asserts the button is enabled and relabelled 重试 after the error |
+| `test_unknown_agent_kind_is_invalid_params` | `test_bad_agent_kind_is_invalid_params` (parametrized: missing / `null` / empty / non-string / unknown) |
+| — (matrix row "EOF" only) | `test_exit_before_answering_is_unavailable` — added after review, because `acp_client.py`'s EOF branch had no test while `07 §4.11` claimed the behaviour |
+| — | `test_command_for_defaults_to_the_registry_command`, `test_broken_override_shapes_are_refused` (empty array / non-string element / empty-string element / not an array) |

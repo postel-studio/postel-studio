@@ -12,6 +12,7 @@
 | `garbage` | 先打 banner / 非 JSON / 空行，再打合法响应 |
 | `silent` | 读到请求后永不应答，也不退出（喂超时路径） |
 | `no-version` | 回一个没有 `protocolVersion` 的 `result` |
+| `exit-early` | 读到请求后**一个字节都不写**就退出（喂「应答前关闭 stdout」路径） |
 """
 
 from __future__ import annotations
@@ -65,6 +66,9 @@ def main(argv: list[str]) -> int:
 
     # 读一行请求（不解析：这个脚本只关心"什么时候回"）。
     sys.stdin.readline()
+
+    if mode == "exit-early":
+        return 0  # 一个字节都不写：父进程读到的第一件事就是 EOF，而不是超时
 
     if mode == "silent":
         while True:  # 永远不答，只能被杀
