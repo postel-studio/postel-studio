@@ -13,7 +13,7 @@
 | 符号 | 行 | 职责 |
 |---|---|---|
 | `EventHub` | 88 | 线程安全 pub/sub：`subscribe` / `replace` / `unsubscribe` / `publish`。工作线程经 `loop.call_soon_threadsafe` 投递（`asyncio.Queue` 本身不是线程安全的，D11） |
-| `Orchestrator` | 148 | 三个帧方法 + worker。构造时 `mark_interrupted()`（D7：重启记账） |
+| `Orchestrator` | 148 | 四个帧方法（`dispatch` / `status` / `latest` / `cancel`）+ worker。构造时 `mark_interrupted()`（D7：重启记账） |
 | `dispatch` | 180 | 校验（prompt ≤ 32 KiB、baseRef 形状）→ `permission_covers(bot, L1)` → 活跃检查 → 建行 → 起线程（线程登记进 `_workers`）。`insert` 撞索引是 BUSY 的数据级后备（D5） |
 | `wait_idle(timeout)` | 223 | join 全部活着的 worker（测试收场与 S15 优雅停机共用；worker 自己在 finally 末尾把自己从登记表摘除） |
 | `status` | 237 | 按 id 取任务载荷 |

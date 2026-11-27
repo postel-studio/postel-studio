@@ -14,7 +14,7 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `API_VERSION` | 26 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
+| `API_VERSION` | 36 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
 | `health()` | 39 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
 | `create_app(ws_path, host, port)` | 50 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
 | （局部）`store = RepoStore()` | 64 | 打开 `state.db`（状态根下） | 注入链的起点 |
@@ -22,7 +22,7 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 | （局部）`bot_store = BotStore()` / `bots = BotService(bot_store, store)` | 69-70 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里）。S7 起这一个 `BotStore` 同时给 `WorktreeService` 用；S8 的 `bot.create` / `bot.set_permission` 也在同一个 service 上 | `gateway.Providers` |
 | （局部）`worktrees = WorktreeService(store, bot_store)` | 72 | S7：`worktree.acquire` / `list` / `release` 的实现（**不落库**，事实源是 git） | `gateway.Providers` |
 | （局部）`close_stores()` | 86 | **S15/U10**：`app.state.close_stores`——先 `orchestrator.wait_idle()` 再逐个关闭 5 个 store；`server._run` 的 `finally` 调用（lifespan=off，不能用 on_event） | `server._run` |
-| `gateway.Providers(…)`（18 个入口，S15 加 `task_latest`） | 129-150 | 注入给网关（**唯一**构造点；S8 加了 `bot_create` / `bot_set_permission` 两个） | `gateway.install` |
+| `gateway.Providers(…)`（21 个注入字段，S15 加 `task_latest`） | 132-154 | 注入给网关（**唯一**构造点；S8 加了 `bot_create` / `bot_set_permission` 两个） | `gateway.install` |
 
 ### 三个路由
 

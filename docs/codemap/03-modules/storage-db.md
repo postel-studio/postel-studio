@@ -18,8 +18,8 @@
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
 | `SCHEMA_VERSION` | 44 | `6`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`、v5 = S11 `candidates`、v6 = S13 `candidates.reject_reason`） | `migrate`、测试 |
-| `_MIGRATIONS` | 59 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
-| `_COLUMNS` | 121 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
+| `_MIGRATIONS` | 52 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
+| `_COLUMNS` | 149 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
 | `state_db_path()` | 152 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
 | `_connect(path)` | 157 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
 | `migrate(conn, *, path_for_chmod)` | 170 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600` | `open_state_db` |
@@ -40,7 +40,7 @@
 | `BotStore.insert(bot)` | 394 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:create`（S8 起；S6 的播种已删） |
 | `BotStore.set_permission(bot_id, permission)` | 411 | **S8**：只改 `permission` 一列并回读；行不存在 → `None`（码由调用方翻） | `bot.set_permission` |
 | `_row_to_bot(row)` | 432 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
-| `TaskStore` | 459 | **S10**：`tasks` 表的读写门面（带锁）：`insert` / `get` / `active_for_bot` / `transition` / `mark_interrupted` | `orchestrator.py`、`api/app.py` |
+| `TaskStore` | 459 | **S10**：`tasks` 表的读写门面（带锁）：`insert` / `get` / `active_for_bot` / `latest_for_bot` / `transition` / `mark_interrupted` | `orchestrator.py`、`api/app.py` |
 | `TaskStore.insert(task)` | 482 | 插入 queued 行；撞 `tasks_active_per_bot` 索引抛 `IntegrityError`（BUSY 的**数据级后备锁**，D5） | `orchestrator.dispatch` |
 | `TaskStore.get(task_id)` | 504 | 按主键取，没有给 `None` | `orchestrator.status` / `cancel` / `_finish` |
 | `TaskStore.active_for_bot(bot_id)` | 512 | 该 Bot 的活跃任务（`state IN ('queued','running')`），没有给 `None` | `orchestrator.dispatch` 的 BUSY 预检 |
@@ -51,7 +51,7 @@
 | `LeaseStore.insert(lease)` | 619 | 插入租约；撞 `leases_active_per_bot` 索引抛 `IntegrityError`（每 Bot 活跃租约唯一） | `orchestrator._run` |
 | `LeaseStore.active_for_task(task_id)` | 634 | 只读：这个任务的租约还活跃吗（测试轮询用） | `orchestrator`、测试 |
 | `LeaseStore.release(task_id)` | 644 | `released_at = now`（只对活跃行）；返回是否真的释放了 | `orchestrator._run` 的 `finally` |
-| `_row_to_task(row)` / `_row_to_lease(row)` | 614/640 | `sqlite3.Row` → `Task` / `WorktreeLease`（类型收敛只在这一处） | 内部 |
+| `_row_to_task(row)` / `_row_to_lease(row)` | 655/681 | `sqlite3.Row` → `Task` / `WorktreeLease`（类型收敛只在这一处） | 内部 |
 
 ## 关键决策与理由
 

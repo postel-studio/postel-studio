@@ -13,10 +13,10 @@
 | L0 | [gitops](gitops.md) | `src/postel_studio/gitops/worktrees.py` | 269 | git **写**操作（S7）：`worktree add` / `remove` / `prune`——写面只有这一处 |
 | L0 | [agent](agent.md) | `src/postel_studio/agent/acp_client.py` | 427 | ACP over stdio（S9 握手 + S10 会话）：`initialize` / `session/new` / `prompt` / `cancel`、跳过噪声行、无条件回收 |
 | L0 | [agent](agent.md) | `src/postel_studio/agent/registry.py` | 78 | 通道登记（S9）：`acp-stdio` 一条，命令是字面数组 + 进程级覆盖 |
-| L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 863 | `state.db`、schema 迁移（v5）、`RepoStore` / `BotStore` / `TaskStore` / `LeaseStore` / `CandidateStore` |
+| L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 863 | `state.db`、schema 迁移（v6）、`RepoStore` / `BotStore` / `TaskStore` / `LeaseStore` / `CandidateStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 261 | 进程生命周期、信号、日志 |
 | L3 | [app](app.md) | `src/postel_studio/api/app.py` | 157 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store/service/编排器并注入 |
-| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 321 | WS 认证与帧分派（19 个方法）+ `subscribe` 特判与事件泵（S10） |
+| L3 | [gateway](gateway.md) | `src/postel_studio/api/gateway.py` | 321 | WS 认证与帧分派（20 个业务方法，另含 `system.echo` / `system.health` 两个系统口）+ `subscribe` 特判与事件泵（S10） |
 | L3 | [repository](repository.md) | `src/postel_studio/api/repository.py` | 378 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的业务编排（**不碰 fastapi**） |
 | L3 | [bots](bots.md) | `src/postel_studio/api/bots.py` | 267 | `bot.list` / `bot.create` / `bot.set_permission` / `memory.charter.get` 的业务编排（判完再写 + charter 摘要/rev，**不碰 fastapi**） |
 | L3 | [worktrees](worktrees.md) | `src/postel_studio/api/worktrees.py` | 300 | `worktree.acquire` / `list` / `release` 的业务编排（复用/回收状态机，**不落库**） |
