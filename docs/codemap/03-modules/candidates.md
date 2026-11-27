@@ -6,21 +6,21 @@
 
 S10 把 Agent 的产出留在 linked worktree 里就结束了；S11 要把它**固化成可审查的分支 + 行**。
 这件事既有 git 写（`commit_all` / `create_branch`），又有 DB 写（`CandidateStore`），还有帧载荷
-（`candidate.list`）。把它塞进已经 403 行的 orchestrator 会让它变成上帝模块，所以单列一层，
+（`candidate.list`）。把它塞进已经 450 行的 orchestrator 会让它变成上帝模块，所以单列一层，
 由 `app.py` 装配并作为 `CandidateMaker` Protocol 注入编排器。
 
 ## 符号表
 
 | 符号 | 行 | 职责 |
 |---|---|---|
-| `REPO_NOT_BOUND` | 22 | 稳定码（07 §1.3 既有码），不 import `api/repository.py` 拿常量 |
-| `CandidateMaker` | 25 | orchestrator 看到的接缝：`snapshot_base` / `emerge` / `discard`（测试用假实现） |
-| `CandidateService` | 40 | 生产实现：持有 `RepoStore` 与 `CandidateStore` |
-| `snapshot_base(worktree_path)` | 45 | **会话之前**读工作区 HEAD（D2：复用工作区时上一任务候选的 commit） |
-| `emerge(task, repo_id, worktree_path, base_sha)` | 51 | 有改动才固化：脏 → `git add -A` + 内核身份 commit → 候选分支 → 落一行；无改动回 `None` |
+| `REPO_NOT_BOUND` | 35 | 稳定码（07 §1.3 既有码），不 import `api/repository.py` 拿常量 |
+| `CandidateMaker` | 38 | orchestrator 看到的接缝：`snapshot_base` / `emerge` / `discard`（测试用假实现） |
+| `CandidateService` | 50 | 生产实现：持有 `RepoStore` 与 `CandidateStore` |
+| `snapshot_base(worktree_path)` | 58 | **会话之前**读工作区 HEAD（D2：复用工作区时上一任务候选的 commit） |
+| `emerge(task, repo_id, worktree_path, base_sha)` | 62 | 有改动才固化：脏 → `git add -A` + 内核身份 commit → 候选分支 → 落一行；无改动回 `None` |
 | `discard(candidate_id)` | 105 | transition 输掉 cancel 竞态时，删掉本 worker 刚插入的那一行（D6） |
 | `list(params)` | 110 | `candidate.list`：`repoId` 必需，`taskId` / `reviewState` 可选；repoId 经 tasks→bots join |
-| `_payload(candidate)` | 132 | `Candidate` → camelCase 帧载荷；`botName` 从派生分支名拆出，不冗余落库 |
+| `_payload(candidate)` | 131 | `Candidate` → camelCase 帧载荷；`botName` 从派生分支名拆出，不冗余落库 |
 
 ## 三条实测裁决
 
