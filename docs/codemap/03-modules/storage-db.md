@@ -17,7 +17,7 @@
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `SCHEMA_VERSION` | 51 | `5`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`、v5 = S11 `candidates`） | `migrate`、测试 |
+| `SCHEMA_VERSION` | 44 | `6`（v1 = S3 初始、v2 = S3.5 `origin_hash`、v3 = S6 `bots`、v4 = S10 `tasks` + `worktree_leases`、v5 = S11 `candidates`、v6 = S13 `candidates.reject_reason`） | `migrate`、测试 |
 | `_MIGRATIONS` | 59 | 迁移 DDL 元组，**索引 = 版本号**，只往后 append | `migrate` |
 | `_COLUMNS` | 121 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
 | `state_db_path()` | 124 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
@@ -241,3 +241,15 @@ CREATE INDEX candidates_review_created ON candidates (review_state, created_at D
 - `CandidateStore.insert` / `get` / `for_task` / `list_for_repo` / `discard`：写路径必须
   `with self._lock, self._conn`（T44）；`discard` 只补偿删本 worker 刚插入的行，
   不做通用删除 API（06 §2.4：候选一旦被人看见就不该被内核删）。
+
+
+### v6（S13）：拒绝理由 + 原子迁移
+
+```sql
+ALTER TABLE candidates ADD COLUMN reject_reason TEXT;
+```
+
+`CandidateStore.transition(candidate_id, target, *, reject_reason=None)`：
+`UPDATE … SET review_state = ?, reject_reason = ? WHERE candidate_id = ? AND review_state = ?`，
+与 `TaskStore.transition` 同一纪律（T44：锁 + 连接一起拿）；竞态输家回 `None`，
+不覆盖赢家写入的理由。

@@ -1,6 +1,6 @@
 # candidates.py — 候选变更（S11，L3 纪律）
 
-`src/postel_studio/candidates.py`（148 行）· 依赖：`gitops/`、`storage/`、`domain`、`api/frames` —— **不 import 任何同层 handler**（S11 D13，与 `orchestrator.py` 同款）。
+`src/postel_studio/candidates.py`（205 行）· 依赖：`gitops/`、`storage/`、`domain`、`api/frames` —— **不 import 任何同层 handler**（S11 D13，与 `orchestrator.py` 同款）。
 
 ## 为什么有这个模块
 
@@ -13,14 +13,17 @@ S10 把 Agent 的产出留在 linked worktree 里就结束了；S11 要把它**�
 
 | 符号 | 行 | 职责 |
 |---|---|---|
-| `REPO_NOT_BOUND` | 35 | 稳定码（07 §1.3 既有码），不 import `api/repository.py` 拿常量 |
-| `CandidateMaker` | 38 | orchestrator 看到的接缝：`snapshot_base` / `emerge` / `discard`（测试用假实现） |
-| `CandidateService` | 50 | 生产实现：持有 `RepoStore` 与 `CandidateStore` |
-| `snapshot_base(worktree_path)` | 58 | **会话之前**读工作区 HEAD（D2：复用工作区时上一任务候选的 commit） |
-| `emerge(task, repo_id, worktree_path, base_sha)` | 62 | 有改动才固化：脏 → `git add -A` + 内核身份 commit → 候选分支 → 落一行；无改动回 `None` |
-| `discard(candidate_id)` | 105 | transition 输掉 cancel 竞态时，删掉本 worker 刚插入的那一行（D6） |
-| `list(params)` | 110 | `candidate.list`：`repoId` 必需，`taskId` / `reviewState` 可选；repoId 经 tasks→bots join |
-| `_payload(candidate)` | 131 | `Candidate` → camelCase 帧载荷；`botName` 从派生分支名拆出，不冗余落库 |
+| `REPO_NOT_BOUND` | 36 | 稳定码（07 §1.3 既有码），不 import `api/repository.py` 拿常量 |
+| `EventPublisher` | 39 | S13：`publish(topic, data)` 的接缝（避免同层 import `api/gateway.py`） |
+| `CandidateMaker` | 50 | orchestrator 看到的接缝：`snapshot_base` / `emerge` / `discard`（测试用假实现） |
+| `CandidateService` | 62 | 生产实现：持有 `RepoStore` 与 `CandidateStore` |
+| `snapshot_base(worktree_path)` | 76 | **会话之前**读工作区 HEAD（D2：复用工作区时上一任务候选的 commit） |
+| `emerge(task, repo_id, worktree_path, base_sha)` | 80 | 有改动才固化：脏 → `git add -A` + 内核身份 commit → 候选分支 → 落一行；无改动回 `None` |
+| `discard(candidate_id)` | 123 | transition 输掉 cancel 竞态时，删掉本 worker 刚插入的那一行（D6） |
+| `list(params)` | 128 | `candidate.list`：`repoId` 必需，`taskId` / `reviewState` 可选；repoId 经 tasks→bots join |
+| `approve(params)` | 148 | S13：`review_transition_ok` 校验 → `CandidateStore.transition` → `candidate.updated` |
+| `reject(params)` | 163 | S13：理由 trim/字节上限 → 原子迁移（理由与状态同一条 UPDATE）→ `candidate.updated` |
+| `_payload(candidate)` | 187 | `Candidate` → camelCase 帧载荷；`botName` 从派生分支名拆出，不冗余落库；S13 增 `rejectReason` |
 
 ## 三条实测裁决
 
@@ -50,3 +53,11 @@ S12 的列表/筛选/倒序全部复用 S11 已有的 `CandidateService.list` �
 `CandidateStore.list_for_repo`（`reviewState` 过滤 + `created_at DESC` + `limit=100`）。
 本刀没有给候选服务加方法、没有改载荷——S11 issue 里预告的「app.py 支持 reviewState」
 其实在 S11 就已兑现，S12 只消费它。
+
+
+### S13 审核动作
+
+`CandidateService.approve/reject({candidateId, reason?})` 校验 id、状态机、理由 trim/上限，
+调 store 原子迁移，成功后经 `EventPublisher` Protocol 发 `candidate.updated`
+（`{candidateId, reviewState}`）；`_payload` 增加 `rejectReason`。
+`push` / `open_pr` 属 S16，本层没有那两个方法。

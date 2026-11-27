@@ -39,6 +39,7 @@ PAYLOAD_FIELDS = {
     "remote",
     "target",
     "createdAt",
+    "rejectReason",  # S13 D2
 }
 
 

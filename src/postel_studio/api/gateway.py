@@ -121,6 +121,8 @@ class Providers:
     task_status: Callable[[dict[str, object]], dict[str, object]]
     task_cancel: Callable[[dict[str, object]], dict[str, object]]
     candidate_list: Callable[[dict[str, object]], list[dict[str, object]]]
+    candidate_approve: Callable[[dict[str, object]], dict[str, object]]
+    candidate_reject: Callable[[dict[str, object]], dict[str, object]]
 
 
 class EventHubLike(Protocol):
@@ -184,6 +186,10 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.task_cancel(params)
     if method == "candidate.list":  # S11 / 07 §2.5：仓库候选（taskId 单条详情）
         return providers.candidate_list(params)
+    if method == "candidate.approve":  # S13 / 07 §2.5：批准
+        return providers.candidate_approve(params)
+    if method == "candidate.reject":  # S13 / 07 §2.5：拒绝（理由持久化）
+        return providers.candidate_reject(params)
     raise frames.FrameError(frames.UNKNOWN_METHOD, f"未知方法：{method}")
 
 

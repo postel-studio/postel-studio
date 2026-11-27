@@ -407,6 +407,19 @@ INDEX_HTML: Final = """<!doctype html>
   #candidate[data-state="idle"] #candidate-detail,
   #candidate[data-state="idle"] #candidate-error,
   #candidate[data-state="loading"] #candidate-detail { display: none; }
+  /* 审核按钮（S13）：终态隐藏操作区；无「合并」按钮（L4 永不开放）。 */
+  #candidate-actions { margin-top: 10px; padding-top: 8px; border-top: 1px solid #39404f; }
+  #candidate[data-state="approved"] #candidate-actions,
+  #candidate[data-state="rejected"] #candidate-actions { display: none; }
+  #candidate-approve, #candidate-reject, #candidate-open { margin: 8px 8px 0 0;
+    padding: 7px 14px; font-size: 14px; color: inherit; background: #1f2430;
+    border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
+  #candidate-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #candidate-reason { display: block; width: 100%; box-sizing: border-box; margin-top: 8px;
+    padding: 6px 8px; color: inherit; background: #1f2430;
+    border: 1px solid #39404f; border-radius: 6px; }
+  #candidate-reason-note { margin: 4px 0 0; font-size: 12px; color: #aab2c0; }
+  #candidate-reject-reason { margin: 6px 0 0; font-size: 13px; color: #ffb4ab; }
   /* 变更收件箱（S12）：入口在左栏仓库条目下，列表在主区。状态机只有 CSS 决定显隐。 */
   #inbox[data-state="idle"] #inbox-body,
   #inbox[data-state="idle"] #inbox-error,
@@ -553,6 +566,14 @@ INDEX_HTML: Final = """<!doctype html>
       <p id="candidate-branch"></p>
       <p id="candidate-stat"></p>
       <button id="candidate-open" type="button">查看差异</button>
+      <div id="candidate-actions">
+        <button id="candidate-approve" type="button">批准</button>
+        <button id="candidate-reject" type="button">拒绝并说明</button>
+        <input id="candidate-reason" type="text" maxlength="2000"
+               placeholder="拒绝理由（可选，最多 2000 字节）" />
+        <p id="candidate-reason-note"></p>
+      </div>
+      <p id="candidate-reject-reason" hidden></p>
     </div>
     <p id="candidate-error" role="alert" hidden></p>
   </section>
@@ -562,6 +583,7 @@ INDEX_HTML: Final = """<!doctype html>
     <p id="inbox-state">选择一个仓库查看它的待审变更</p>
     <label for="inbox-filter" hidden>状态筛选</label>
     <select id="inbox-filter">
+      <option value="local_only" selected>待审（默认）</option>
       <option value="all">全部状态</option>
       <option value="local_only">仅本地</option>
       <option value="pushed">已推远端</option>
@@ -779,6 +801,11 @@ INDEX_HTML: Final = """<!doctype html>
   var candidateStat = document.getElementById("candidate-stat");
   var candidateError = document.getElementById("candidate-error");
   var candidateOpen = document.getElementById("candidate-open");
+  var candidateApprove = document.getElementById("candidate-approve");
+  var candidateReject = document.getElementById("candidate-reject");
+  var candidateReason = document.getElementById("candidate-reason");
+  var candidateReasonNote = document.getElementById("candidate-reason-note");
+  var candidateRejectReason = document.getElementById("candidate-reject-reason");
   // 变更收件箱（S12）：所有用户数据仍走 textContent，不使用 HTML 注入。
   var inboxEl = document.getElementById("inbox");
   var inboxState = document.getElementById("inbox-state");
@@ -1947,6 +1974,10 @@ INDEX_HTML: Final = """<!doctype html>
     candidateError.hidden = true;
     candidateBranch.textContent = "";
     candidateStat.textContent = "";
+    candidateReason.value = "";
+    candidateReasonNote.textContent = "";
+    candidateRejectReason.textContent = "";
+    candidateRejectReason.hidden = true;
   }
 
   function showCandidateError(text) {
@@ -1955,16 +1986,61 @@ INDEX_HTML: Final = """<!doctype html>
     candidateEl.dataset.state = "error";
   }
 
+  function reviewLabelFor(state) {
+    var labels = { local_only: "仅本地", pushed: "已推远端", pr_open: "PR 待审",
+      approved: "已批准", rejected: "已拒绝" };
+    return labels[state] || String(state || "");
+  }
+  function permissionHint() {
+    var ids = Object.keys(botPermissions);
+    var perm = selectedBotId ? String(botPermissions[selectedBotId] || "")
+      : (ids.length === 1 ? String(botPermissions[ids[0]] || "") : "");
+    var enough = perm === "L1" || perm === "L2" || perm === "L2+";
+    candidateApprove.disabled = !enough;
+    candidateReject.disabled = !enough;
+    candidateReasonNote.textContent = enough ? "" : "需要 L1 以上，当前 " + (perm || "未知");
+  }
   function trackCandidate(candidate) {
     currentCandidate = candidate;
-    candidateEl.dataset.state = "done";
-    candidateState.textContent = "候选 · 仅本地";
+    candidateEl.dataset.state = String(candidate.reviewState || "done");
+    candidateState.textContent = "候选 · " + reviewLabelFor(candidate.reviewState);
     candidateBranch.textContent = "分支 " + String(candidate.branch || "");
     candidateStat.textContent = "变更 +" + String(candidate.insertions || 0)
       + " −" + String(candidate.deletions || 0) + " · " + String(candidate.filesChanged || 0)
       + " 个文件";
+    candidateReason.value = "";
+    candidateReasonNote.textContent = "";
+    candidateRejectReason.textContent = candidate.rejectReason
+      ? "拒绝理由：" + String(candidate.rejectReason) : "";
+    candidateRejectReason.hidden = !candidate.rejectReason;
+    permissionHint();
     candidateError.textContent = "";
     candidateError.hidden = true;
+  }
+
+  // S13：审核动作。服务端判状态机；页面只按当前 Bot 的权限给提示（D4）。
+  function submitReview(kind) {
+    if (!currentCandidate) { return; }
+    var id = String(currentCandidate.candidateId || "");
+    if (!id) { return; }
+    var params = { candidateId: id };
+    if (kind === "reject") {
+      var reason = candidateReason.value.trim();
+      if (reason) { params.reason = reason; }
+    }
+    candidateApprove.disabled = true;
+    candidateReject.disabled = true;
+    request("candidate." + kind, params, function (err, data) {
+      if (err) {
+        candidateApprove.disabled = false;
+        candidateReject.disabled = false;
+        showCandidateError(kind === "approve"
+          ? "批准失败（" + err + "）" : "拒绝失败（" + err + "）");
+        return;
+      }
+      if (data) { trackCandidate(data); }
+      loadInbox();   // 默认列表隐藏 rejected（D7）
+    });
   }
 
   // 事件只带 {candidateId, taskId}（07 §3）：细节走 candidate.list 取，不塞进事件载荷。
@@ -2001,7 +2077,7 @@ INDEX_HTML: Final = """<!doctype html>
 
   function subscribeTopics() {
     // 02b §2.3：重连后必须重新订阅（内核不保存订阅状态，订阅随连接死）。
-    send("subscribe", { topics: ["task.updated", "candidate.proposed"] });
+    send("subscribe", { topics: ["task.updated", "candidate.proposed", "candidate.updated"] });
   }
 
   function selectRepo(repoId, name) {
@@ -2093,6 +2169,15 @@ INDEX_HTML: Final = """<!doctype html>
     }
     if (frame && frame.type === "evt" && frame.topic === "candidate.proposed") {
       onCandidateProposed(frame.data);
+      return;
+    }
+    if (frame && frame.type === "evt" && frame.topic === "candidate.updated") {
+      if (currentCandidate
+          && String(frame.data && frame.data.candidateId)
+         === String(currentCandidate.candidateId)) {
+        loadCandidate(String(currentCandidate.taskId || ""));
+      }
+      loadInbox();
       return;
     }
     // 心跳回包：证明内核在做帧往返，而不只是 TCP 还开着
@@ -2199,6 +2284,9 @@ INDEX_HTML: Final = """<!doctype html>
   taskCancel.addEventListener("click", cancelTask);
   // S11：查看差异是显式按钮（不是回车提交）；渲染件复用 S5 的 #diff 面板。
   candidateOpen.addEventListener("click", openCandidateDiff);
+  // S13：审核是显式按钮；终态由 CSS 隐藏，服务端是状态机的真正守门人。
+  candidateApprove.addEventListener("click", function () { submitReview("approve"); });
+  candidateReject.addEventListener("click", function () { submitReview("reject"); });
   // S12：筛选改变 = 重发 candidate.list（服务端筛，不在客户端挑）；竞态靠 token。
   inboxFilter.addEventListener("change", loadInbox);
   // S7：分配走 <form>（回车与点按钮同一条路径）；回收是显式按钮（删目录不该被回车触发）。

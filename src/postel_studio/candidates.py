@@ -22,6 +22,7 @@ from typing import Final, Protocol
 from postel_studio.api import frames
 from postel_studio.domain.models import (
     CANDIDATE_ID_PREFIX,
+    REASON_MAX_BYTES,
     REVIEW_STATES,
     Candidate,
     Task,
@@ -33,6 +34,17 @@ from postel_studio.gitops import worktrees
 from postel_studio.storage.db import CandidateStore, RepoStore
 
 REPO_NOT_BOUND: Final = "REPO_NOT_BOUND"
+
+
+class EventPublisher(Protocol):
+    """事件泵的接缝（与 orchestrator.EventHub 同形，同层不 import）。"""
+
+    def publish(self, topic: str, data: dict[str, object]) -> None: ...
+
+
+class _NullPublisher:
+    def publish(self, topic: str, data: dict[str, object]) -> None:
+        return None
 
 
 class CandidateMaker(Protocol):
@@ -50,9 +62,15 @@ class CandidateMaker(Protocol):
 class CandidateService:
     """生产实现：`RepoStore` 解析允许根，`CandidateStore` 落库。"""
 
-    def __init__(self, repos: RepoStore, candidates: CandidateStore) -> None:
+    def __init__(
+        self,
+        repos: RepoStore,
+        candidates: CandidateStore,
+        hub: EventPublisher | None = None,
+    ) -> None:
         self._repos = repos
         self._candidates = candidates
+        self._hub = hub or _NullPublisher()  # 缺省空泵：测试/CLI 不必装配事件循环
 
     # -- 候选产出（worker 线程） ----------------------------------------------
     def snapshot_base(self, worktree_path: str) -> str:
@@ -127,6 +145,44 @@ class CandidateService:
         )
         return [self._payload(candidate) for candidate in rows]
 
+    def approve(self, params: dict[str, object]) -> dict[str, object]:
+        """S13：`candidate.approve({candidateId})` → 新载荷（07 §2.5）。"""
+        candidate_id = params.get("candidateId")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise frames.FrameError(frames.INVALID_PARAMS, "candidateId 缺失或不是字符串")
+        if self._candidates.get(candidate_id) is None:
+            raise frames.FrameError(frames.INVALID_PARAMS, "候选不存在")
+        updated = self._candidates.transition(candidate_id, "approved")
+        if updated is None:
+            raise frames.FrameError(frames.INVALID_PARAMS, "候选状态不允许批准（可能已被处理）")
+        self._hub.publish(
+            "candidate.updated", {"candidateId": candidate_id, "reviewState": "approved"}
+        )
+        return self._payload(updated)
+
+    def reject(self, params: dict[str, object]) -> dict[str, object]:
+        """S13：`candidate.reject({candidateId, reason?})` → 新载荷（07 §2.5）。"""
+        candidate_id = params.get("candidateId")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise frames.FrameError(frames.INVALID_PARAMS, "candidateId 缺失或不是字符串")
+        reason = params.get("reason")
+        if reason is not None:
+            if not isinstance(reason, str):
+                raise frames.FrameError(frames.INVALID_PARAMS, "reason 不是字符串")
+            reason = reason.strip()
+            if len(reason.encode("utf-8")) > REASON_MAX_BYTES:
+                raise frames.FrameError(frames.INVALID_PARAMS, "拒绝理由过长")
+            reason = reason or None
+        if self._candidates.get(candidate_id) is None:
+            raise frames.FrameError(frames.INVALID_PARAMS, "候选不存在")
+        updated = self._candidates.transition(candidate_id, "rejected", reject_reason=reason)
+        if updated is None:
+            raise frames.FrameError(frames.INVALID_PARAMS, "候选状态不允许拒绝（可能已被处理）")
+        self._hub.publish(
+            "candidate.updated", {"candidateId": candidate_id, "reviewState": "rejected"}
+        )
+        return self._payload(updated)
+
     @staticmethod
     def _payload(candidate: Candidate) -> dict[str, object]:
         """`Candidate` → 帧载荷（camelCase 只在边界发生，06 §2.4 的字段表）。"""
@@ -145,4 +201,5 @@ class CandidateService:
             "remote": candidate.remote,
             "target": candidate.target,
             "createdAt": candidate.created_at,
+            "rejectReason": candidate.reject_reason,  # S13 D2：拒绝理由随详情可见
         }

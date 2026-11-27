@@ -388,6 +388,29 @@ CANDIDATE_ID_PREFIX: Final = "cand_"
 REVIEW_STATES: Final[frozenset[str]] = frozenset(
     {"local_only", "pushed", "pr_open", "approved", "rejected"}
 )
+# 06 §3.2 / S13 D1：审核迁移的**唯一事实源**（纯函数，无 IO）。
+# `approved` / `rejected` 是终态；`local_only → approved` 在 MVP 合法（不要求先 push/PR）。
+REVIEW_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
+    "local_only": frozenset({"pushed", "approved", "rejected"}),
+    "pushed": frozenset({"pr_open", "approved", "rejected"}),
+    "pr_open": frozenset({"approved", "rejected"}),
+    "approved": frozenset(),
+    "rejected": frozenset(),
+}
+REASON_MAX_BYTES: Final = 2000  # S13 D2：拒绝理由的 UTF-8 字节上限
+
+
+def review_transition_ok(current: object, target: object) -> bool:
+    """`(current, target)` 是否是 06 §3.2 允许的审核迁移——纯判定，不抛。
+
+    未知状态一律 `False`（fail closed）：坏数据不能靠"没查到规则就放行"绕过状态机。
+    """
+    if not isinstance(current, str) or not isinstance(target, str):
+        return False
+    allowed = REVIEW_TRANSITIONS.get(current)
+    return allowed is not None and target in allowed
+
+
 _TASK_SHORT_LENGTH: Final = 8
 # 06 §2.4 的命名空间；gitops/worktrees.BRANCH_PREFIX 是同一常量的另一个副本
 # （分层表禁止 gitops → domain 的 import，不能在这里共享一个事实源）。
@@ -434,6 +457,8 @@ class Candidate:
     remote: str | None
     target: str | None
     created_at: float
+    # S13 D2：拒绝理由；v6 加列，缺省 None 让 S11 的构造点不必改。
+    reject_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -967,6 +967,24 @@ S11 的"无事可做"有三道守卫（commit 前、commit 后、`diff_stat == 0
 这是 T45（BUSY 双锁）的同一教训第二次出现，已把 S11 #3 登记成组合注入。
 **通用**：写注入前先数一数代码里有几道等价守卫；"注入了但绿"先怀疑冗余，再怀疑注入没打中。
 
+### T49 ⚠️ 改 `data-state` 取值要同步所有验收脚本（S13 实测）
+
+`#candidate[data-state]` 从 S11/S12 的 `done` 改成 S13 的 `reviewState` 后，s11/s12
+验收脚本里 `=== "done"` 的等待条件永远不满足（CHECK 6 / CHECK 15 超时）。
+**通用**：`data-state` 是 DOM 契约，和 id 一样要全仓 grep 所有断言；前端改它的取值集合时，
+把 `tools/acceptance/*.mjs` 当作消费者同步更新，并在 spec 里显式记录破坏性变更。
+
+### T48 ⚠️ 验收脚本的 check(ok, label) 参数顺序写反 → 全程假绿（S13 实测）
+
+`s12_inbox.mjs` 的调用写成 `check("标签", 布尔表达式)`，而 `check(ok, label, detail)`
+把第一个参数当布尔——标签是非空字符串（truthy），于是**每条检查都 ✓**，布尔表达式
+被打印成 `true`/`false` 当标签。直到 `CHECK ✓ 10 false` 才暴露。
+
+**正解**：`check()` 同时兼容两种顺序（`typeof a === "string" ? b : a`），并把 s12/s13
+两个脚本都修好重跑；修后 s12 仍 17/17 真绿、s13 暴露出一条真实失败（默认列表未隐藏
+rejected），修正后 14/14。**通用**：验收脚本的 `✓` 也要反向注入一次——故意让一条检查失败，
+确认计数真的加了；否则"全绿"可能只是断言没接上。
+
 ## 已知未决问题
 
 **S4.5 起的规则**：每项必须有「到期切片」——到那一刀开工前，要么修掉，要么明确豁免并写清后果。
@@ -997,6 +1015,7 @@ S11 的"无事可做"有三道守卫（commit 前、commit 后、`diff_stat == 0
 | U18 | **`bot.agentKind` 仍不可写**：S8 的 `_refuse_agent_kind` 拒绝一切非 null 值，理由是「S9 之前没有任何通道被验证过」。S9 验证了 `acp-stdio`，但**没有**开这个字段——因为它没有「选通道」的 UI，接受页面产生不了的值等于接口先于用户路径（S9 D13）。 | ✅ **已收口（S10 D3）**：派活的通道选择裁决为**缺省第一条已登记通道**（`orchestrator._channel_for`：`bot.agentKind` 优先、缺省 `acp-stdio`；库里存了未登记的 kind 按坏数据报 `INVALID_PARAMS`，不静默回退）。`bot.create` 对非 null `agentKind` **仍拒绝**——页面依然产生不了这个值，但派活不再依赖它 | ✅ **已收口（S10）** | — |
 | U19 | **握手在事件循环里同步执行**：`api/gateway.py:191` 在 async WS handler 里直接调同步的 `dispatch()`；`agent.capabilities` 最坏把**所有** WS/HTTP 请求（含 `system.health`）冻结 30s + 两次 5s reap grace。S9 之前 `worktree add` 已有同样形状，但 S9 让它变成一次普通按钮点击就能触发。 | **部分收口（S10）**：派活这条**分钟级**路径已移出事件循环——`task.dispatch` 只做毫秒级校验与建行，慢活全部在 worker 线程（`orchestrator._run`），ACP 会话在 `acp_client.Session` 里阻塞等（worker 不在事件循环里，实测一轮 8.7s 不影响其它请求）。**但 `dispatch()` 本身仍是同步调用**：`agent.capabilities` / `worktree.acquire` 的 30s 最坏情况还在事件循环里，属既有架构，本刀不顺手改（预算纪律）——升级为独立项 U20 | **U19 主体已收口（S10）；残余进 U20（到期 S15 前，重启恢复会重构 dispatch 形状）** | 派活不再冻结页面；握手/建工作区的长操作仍可能卡别的请求几十秒 |
 | U20 | **`dispatch()` 仍在事件循环里同步执行**（U19 的残余）：`agent.capabilities` 最坏 30s + 两次 5s reap grace、`worktree.acquire` 最坏几秒，期间所有 WS/HTTP 请求冻结。S10 把分钟级的派活移出了事件循环（worker 线程），但这条既有形状没动——本刀只加不重构。 | **未修（S10 只收口了派活路径）** | 到期 **S15 前**（重启恢复必然重构 dispatch/生命周期形状，届时一并裁决 `asyncio.to_thread` 或线程池） | 点「检测 Agent」期间页面其它按钮（health、切仓库）最长卡 40 秒 |
+| U21 | **真实 opencode 集成用例依赖外部免费额度**：`tests/test_dispatch.py::test_real_integration_creates_file_and_dirty_worktree` 用真 `opencode acp`（默认 `opencode/big-pickle`）。额度耗尽时 prompt **既不回终态帧也不报错**（日志 `AI_APICallError: Free usage limit reached`），任务永远停在 `running` → 180s 超时；另一形态是终态 `failed/INTERNAL`（维护者独立复跑 0/3）。默认免费模型账号级限额，换免费模型无效。 | **✅ 已收口（S13 收尾）**：测试注入 `session_factory`，用 `XDG_DATA_HOME` 指回本机真实 opencode 凭据库、`OPENCODE_CONFIG_CONTENT` 指定付费模型 `deepseek/deepseek-flash`（凭据只由 opencode 自己读，测试不碰 key），真跑真绿——3/3 独立复跑全 `passed`（2~3s）。无 opencode / 无 deepseek 凭据才 skip；两种失败形态（超时、`failed/INTERNAL`）都只在拿到明确限流日志证据时才跳过，泛化 `INTERNAL` 照常 fail。产品代码零改动（无 prompt 超时，S10 D8 不变） | ✅ **已收口（S13 收尾）**；若日后 deepseek 凭据失效，测试会明确 skip 而非假绿 | — |
 
 ---
 

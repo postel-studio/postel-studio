@@ -26,7 +26,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let failures = 0;
 let checks = 0;
-function check(ok, label, detail) {
+function check(a, b, detail) {
+  // Accept both check(ok, label) and check(label, ok): earlier s12/s13 calls
+  // passed the label first, which made every check silently green.
+  const ok = typeof a === "string" ? b : a;
+  const label = typeof a === "string" ? a : b;
   checks += 1;
   const tail = detail === undefined ? "" : `  ${JSON.stringify(detail)}`;
   if (ok) process.stdout.write(`CHECK ✓ ${checks} ${label}${tail}\n`);
@@ -260,13 +264,13 @@ async function main() {
       li.click();
     });
     await page.waitForFunction(
-      () => document.getElementById("candidate")?.dataset.state === "done", { timeout: 15000 },
+      () => document.getElementById("candidate")?.dataset.state === "local_only", { timeout: 15000 },
     );
     const detail = await page.evaluate(() => ({
       branch: document.getElementById("candidate-branch")?.textContent || "",
       state: document.getElementById("candidate")?.dataset.state || "",
     }));
-    check("6 点击行复用 S11 详情", detail.state === "done"
+    check("6 点击行复用 S11 详情", detail.state === "local_only"
       && /^分支 bot\/builder\//.test(detail.branch), detail);
 
     // 刷新 + 重选仓库 → 列表仍在（页面状态不落盘，同 S8/S11）。

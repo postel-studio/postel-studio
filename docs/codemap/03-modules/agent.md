@@ -119,6 +119,6 @@ token；转发等于把 02b §5 的节流问题提前拖进来。`_request` 丢�
 | 文件 | 覆盖 |
 |---|---|
 | `tests/test_acp_detect.py` | 真握手（本机 `opencode`，未装则 skip）、噪声行、超时、缺 `protocolVersion`、回收 pid、凭据过滤、覆盖值三条分支 |
-| `tests/test_dispatch.py` | S10：假会话下的取消两条路径（queued / running）、未知 stopReason fail-closed、cwd = 真实工作区、真集成（`skip without opencode`） |
+| `tests/test_dispatch.py` | S10：假会话下的取消两条路径（queued / running）、未知 stopReason fail-closed、cwd = 真实工作区、真集成（本机 opencode + 已配 deepseek 凭据则真跑；无 opencode / 无凭据才 skip） |
 | `tests/test_reverse_checks.py` | 注入 `S9 #1`（能力写死）/ `S9 #2`（不回收）必须让目标测试变红 |
 | `tools/acceptance/s9_agent.mjs` | 真浏览器：点检测 → 真版本与能力、命令不存在时的负例文案 |

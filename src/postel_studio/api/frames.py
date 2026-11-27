@@ -36,7 +36,7 @@ INTERNAL: Final = "INTERNAL"
 # S10 D11：可订阅 topic 的**唯一清单**。网关用它校验 `subscribe` 的入参（白名单外的
 # topic 一律 `INVALID_PARAMS`——客户端拿不到一个"永远不会有事件"的假订阅）；编排器
 # 只发布这里出现过的 topic。加 topic = 改这一行，两处自动一致。
-KNOWN_TOPICS: Final = ("task.updated", "candidate.proposed")
+KNOWN_TOPICS: Final = ("task.updated", "candidate.proposed", "candidate.updated")
 
 
 class FrameError(Exception):

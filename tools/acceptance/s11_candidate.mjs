@@ -27,7 +27,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let failures = 0;
 let checks = 0;
-function check(ok, label, detail) {
+function check(a, b, detail) {
+  const ok = typeof a === "string" ? b : a;
+  const label = typeof a === "string" ? a : b;
   checks += 1;
   const tail = detail === undefined ? "" : `  ${JSON.stringify(detail)}`;
   if (ok) process.stdout.write(`CHECK ✓ ${checks} ${label}${tail}\n`);
@@ -210,10 +212,10 @@ async function main() {
     check("2 任务成功", taskText.includes("已完成"), taskText);
 
     await page.waitForFunction(
-      () => document.getElementById("candidate")?.dataset.state === "done", { timeout: 30000 },
+      () => document.getElementById("candidate")?.dataset.state === "local_only", { timeout: 30000 },
     );
     const candidate = await page.evaluate(CANDIDATE_SNAPSHOT);
-    check("3 候选卡 done", candidate.state === "done", candidate.state);
+    check("3 候选卡 done", candidate.state === "local_only", candidate.state);
     check("3 分支可预测（bot/builder/8位）",
       /^分支 bot\/builder\/[a-z0-9-]{8}$/.test(candidate.branch), candidate.branch);
     check("3 状态「仅本地」", candidate.stateText.includes("仅本地"), candidate.stateText);
@@ -237,7 +239,7 @@ async function main() {
     );
     await selectRepoRow(page);  // 页面状态不落盘：仓库要重选（S8 的既定行为）
     await page.waitForFunction(
-      () => document.getElementById("candidate")?.dataset.state === "done", { timeout: 20000 },
+      () => document.getElementById("candidate")?.dataset.state === "local_only", { timeout: 20000 },
     );
     const reloaded = await page.evaluate(CANDIDATE_SNAPSHOT);
     check("5 刷新后候选仍在", reloaded.branch === candidate.branch, reloaded.branch);

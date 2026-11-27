@@ -245,7 +245,7 @@ def test_unknown_method_is_unknown_method_not_subscribe(kernel: Kernel):
                     "bot.delete",
                     "task.list",  # S10：task.dispatch/status/cancel 已是真方法，换 S11 的
                     "memory.charter.set",  # S9：agent.list 已变成真方法，换一个还没实现的（S22）
-                    "candidate.approve",  # S11：`candidate.list` 已实现，换 S13 的审核动作
+                    "candidate.push",  # S13：approve/reject 已实现，push 属 S16
                     "system.echo.x",
                 ]
             ):
