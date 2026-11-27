@@ -528,6 +528,18 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_no_merge_button_anywhere", file="test_review"),
         "S13 #3：页面出现「合并」按钮（L4 永不开放给 Bot）",
     ),
+    # ---- S15：显式重跑与 interrupted 终态封死（09 §2.1 的注册反向验证）----
+    # test_recovery.py 从**实际加载的** assets 模块读源码，所以这里改副本确实能改到断言目标。
+    (
+        "postel_studio/web/assets.py",
+        "  function onTaskUpdated(data) {\n"
+        "    if (!data || String(data.taskId) !== currentTaskId) { return; }",
+        "  function onTaskUpdated(data) {\n"
+        "    rerunTask();  // 注入：事件回调自动重跑（S15 禁止）\n"
+        "    if (!data || String(data.taskId) !== currentTaskId) { return; }",
+        _target_test("test_no_auto_rerun", file="test_recovery"),
+        "S15 #1：任务事件回调自动调 rerunTask（推翻「只在显式点击时重跑」）",
+    ),
 )
 
 
@@ -636,6 +648,27 @@ COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], .
         ),
         _target_test("test_second_dispatch_while_active_is_busy", file="test_dispatch"),
         "S10 #2（组合）：检查 + 唯一索引一起拆 → 第二刀并发派活必须被拒（测试红）",
+    ),
+    # ---- S15：终态封死由两道锁共同保证，必须两处一起拆才复现（同 S10 #2 的口径）----
+    # 只拆 TASK_TERMINAL 守卫时，TASK_TRANSITIONS 里没有 interrupted 这个 key，`allowed`
+    # 仍是 None —— 目标测试照样绿。只有「守卫拆掉 + 补一条 interrupted→succeeded 边」
+    # 才真正推翻「已中断任务永不撒谎成 succeeded」。
+    (
+        (
+            (
+                "postel_studio/domain/models.py",
+                "    if current in TASK_TERMINAL:\n        return False",
+                "    if False:  # 注入：终态守卫拆掉\n        return False",
+            ),
+            (
+                "postel_studio/domain/models.py",
+                '    "running": frozenset({"succeeded", "failed", "cancelled", "interrupted"}),\n}',
+                '    "running": frozenset({"succeeded", "failed", "cancelled", "interrupted"}),\n'
+                '    "interrupted": frozenset({"succeeded"}),\n}',
+            ),
+        ),
+        _target_test("test_interrupted_cannot_become_succeeded", file="test_recovery"),
+        "S15 #2（组合）：终态守卫拆掉 + interrupted→succeeded 放行 → 中断任务被伪装成成功",
     ),
 )
 

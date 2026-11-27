@@ -379,22 +379,27 @@ INDEX_HTML: Final = """<!doctype html>
   #task-form { display: flex; gap: 8px; margin-top: 8px; }
   #task-prompt { flex: 1; padding: 7px 10px; font-size: 14px; color: inherit;
     background: #1f2430; border: 1px solid #39404f; border-radius: 6px; }
-  #task-dispatch, #task-cancel { padding: 7px 14px; font-size: 14px; color: inherit;
+  #task-dispatch, #task-cancel, #task-rerun { padding: 7px 14px; font-size: 14px; color: inherit;
     background: #1f2430; border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
-  #task-dispatch:hover, #task-cancel:hover { border-color: #58627a; }
+  #task-dispatch:hover, #task-cancel:hover, #task-rerun:hover { border-color: #58627a; }
   #task-dispatch:disabled { opacity: .5; cursor: progress; }
   #task-cancel { border-color: rgb(248 81 73 / 55%); color: #ffb4ab; }
+  /* S15：重跑按钮只在 interrupted 态出现（显隐由 data-state 决定，JS 不碰 style.display）。 */
+  #task-rerun { border-color: rgb(210 153 34 / 55%); color: #e3b341; }
   #task-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
   #task-details { margin: 10px 0 0; }
   #task-id, #task-status-line { margin: 4px 0 0; font-size: 13px;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
+  /* S15：重跑按钮只在 interrupted 出现；其它态一律收起。 */
+  #task:not([data-state="interrupted"]) #task-rerun { display: none; }
   #task[data-state="idle"] #task-form,
   #task[data-state="idle"] #task-details,
   #task[data-state="running"] #task-form,
   #task[data-state="ready"] #task-cancel,
   #task[data-state="done"] #task-cancel,
-  #task[data-state="error"] #task-cancel { display: none; }
+  #task[data-state="error"] #task-cancel,
+  #task[data-state="interrupted"] #task-cancel { display: none; }
   /* 候选详情卡（S11）：只跟选中的仓库/最近一次任务，单条详情，不是列表页（S12 才是）。
      状态由 data-state 决定；打开 diff 复用 #diff 面板，不在这里画第二份。 */
   #candidate-detail { margin-top: 8px; }
@@ -551,6 +556,8 @@ INDEX_HTML: Final = """<!doctype html>
       <button id="task-dispatch" type="submit" disabled>派活</button>
     </form>
     <button id="task-cancel" type="button" hidden>取消任务</button>
+    <!-- S15：内核重启过、任务被打断时由用户显式点「重跑」；页面绝不自作主张重派。 -->
+    <button id="task-rerun" type="button" hidden>重跑这个任务</button>
     <p id="task-error" role="alert" hidden></p>
     <div id="task-details" hidden>
       <p id="task-id"></p>
@@ -790,6 +797,8 @@ INDEX_HTML: Final = """<!doctype html>
   var taskPrompt = document.getElementById("task-prompt");
   var taskDispatch = document.getElementById("task-dispatch");
   var taskCancel = document.getElementById("task-cancel");
+  var taskRerun = document.getElementById("task-rerun");  // S15：显式重跑（绝不自动派）
+  var lastTaskPrompt = "";  // S15：被中断任务的原 prompt，重跑时填回输入框供用户确认/修改
   var taskError = document.getElementById("task-error");
   var taskDetails = document.getElementById("task-details");
   var taskIdLine = document.getElementById("task-id");
@@ -1788,6 +1797,8 @@ INDEX_HTML: Final = """<!doctype html>
     // S10：选中的 Bot 变了，卡片跟踪的任务也随之作废——上一个 Bot 的任务不归这个灯管。
     resetTask("ready", TASK_HINT);
     resetCandidate("idle", CANDIDATE_HINT);  // S11：换 Bot 就不跟上一个 Bot 的候选
+    // S15：选 Bot 后也查一次（onopen 时可能还没选 Bot）——只有 interrupted 会覆盖 ready。
+    restoreInterruptedTask();
   }
 
   // ---- 派活卡片（S10） ------------------------------------------------------
@@ -1805,8 +1816,10 @@ INDEX_HTML: Final = """<!doctype html>
     taskIdLine.textContent = "";
     taskStatusLine.textContent = "";
     taskPrompt.value = "";
+    lastTaskPrompt = "";
     taskDispatch.disabled = !selectedBotId;
     taskCancel.hidden = true;
+    taskRerun.hidden = true;
   }
 
   function showTaskError(text) { taskError.textContent = text; taskError.hidden = false; }
@@ -1818,13 +1831,19 @@ INDEX_HTML: Final = """<!doctype html>
     taskIdLine.textContent = "任务 " + taskId;
     var label = TASK_STATE_TEXT[state] || state;
     taskStatusLine.textContent = errorCode ? label + "（" + errorCode + "）" : label;
+    taskRerun.hidden = true;
     if (state === "running" || state === "queued") {
       taskEl.dataset.state = "running";
       taskCancel.hidden = false;
     } else if (state === "succeeded" || state === "cancelled") {
       taskEl.dataset.state = "done";
       taskCancel.hidden = true;
-    } else {  // failed / interrupted / 表外状态：不隐藏 details，用户能看见并重派
+    } else if (state === "interrupted") {
+      // S15：内核重启导致 worker 消失——专用态，显式重跑，绝不自动派。
+      taskEl.dataset.state = "interrupted";
+      taskCancel.hidden = true;
+      taskRerun.hidden = false;
+    } else {  // failed / 表外状态：不隐藏 details，用户能看见并重派
       taskEl.dataset.state = "error";
       taskCancel.hidden = true;
     }
@@ -1846,10 +1865,19 @@ INDEX_HTML: Final = """<!doctype html>
           ? errorText(err) : TASK_ERROR_FALLBACK + "（" + err + "）");
         return;
       }
+      lastTaskPrompt = prompt;  // S15：重跑时填回输入框（用户可改写）
       taskPrompt.value = "";
       // 应答只有 {taskId, state, botId}：以它为起点建卡，后续变化由 task.updated 接管。
       trackTask(String(data.taskId), String(data.state || "queued"), null);
     });
+  }
+
+  // S15：重跑 = 把原 prompt 填回输入框，交给同一条 submitTask 路径 → 内核生成新 taskId。
+  // 只在用户显式点击时调用；页面加载 / interrupted 事件都不会走到这里（禁止事项 #4）。
+  function rerunTask() {
+    if (!lastTaskPrompt) { showTaskError("没有可重跑的指令，请重新输入"); return; }
+    taskPrompt.value = lastTaskPrompt;
+    submitTask();
   }
 
   function cancelTask() {
@@ -1866,6 +1894,17 @@ INDEX_HTML: Final = """<!doctype html>
   }
 
   function clearTaskError() { taskError.textContent = ""; taskError.hidden = true; }
+
+  // S15：重连后（含页面首次加载）查一次该 Bot 最近任务；只有 interrupted 才落到卡片上。
+  // 其它状态不碰——不能把上次 succeeded 的旧任务伪装成"当前在跑"（S10 断连纪律）。
+  function restoreInterruptedTask() {
+    if (!selectedBotId) { return; }
+    request("task.latest", { botId: selectedBotId }, function (err, data) {
+      if (err || !data || data.state !== "interrupted") { return; }
+      lastTaskPrompt = String(data.prompt || "");
+      trackTask(String(data.taskId), "interrupted", data.errorCode ? String(data.errorCode) : null);
+    });
+  }
 
   // task.updated 事件（S10 D12：载荷恰为 {taskId, state, errorCode?}）。只认卡片正在
   // 跟踪的任务；失败的码也用 ERROR_TEXT 翻译（ADAPTER_UNAVAILABLE 等在表里）。
@@ -2254,6 +2293,7 @@ INDEX_HTML: Final = """<!doctype html>
       setState("connected", "已连接");
       subscribeTopics();  // S10 D11：先订阅再干活，否则第一批 evt 会漏
       startHeartbeat();
+      restoreInterruptedTask();  // S15：内核重启过？把上次被中断的任务找回来明示
     };
     ws.onmessage = onMessage;
     ws.onclose = function () { if (socket === ws) { fail(); } };
@@ -2282,6 +2322,8 @@ INDEX_HTML: Final = """<!doctype html>
   // S10：派活走 <form>（回车 = 点「派活」）；取消是显式按钮（打断会话不该被回车触发）。
   taskForm.addEventListener("submit", function (ev) { ev.preventDefault(); submitTask(); });
   taskCancel.addEventListener("click", cancelTask);
+  // S15：重跑是显式按钮（读 prompt → 新建任务），绝不绑在加载/事件回调上。
+  taskRerun.addEventListener("click", rerunTask);
   // S11：查看差异是显式按钮（不是回车提交）；渲染件复用 S5 的 #diff 面板。
   candidateOpen.addEventListener("click", openCandidateDiff);
   // S13：审核是显式按钮；终态由 CSS 隐藏，服务端是状态机的真正守门人。

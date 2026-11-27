@@ -17,7 +17,7 @@
 | `BUILD_SETTLE_SECONDS` `0.2` | 56 | 建设期收信号的等待 | |
 | `LISTEN_BACKLOG` `2048` | 57 | | |
 | `ERR_PORT_INVALID` / `ERR_LISTEN_FAILED` | 59-60 | 稳定码 | 测试 |
-| `_BUILDING` / `_STOP` | 60-61 | 两个 `threading.Event`，见下 | |
+| `_BUILDING` / `_STOP` | 66-67 | 两个 `threading.Event`，见下 | |
 | `listen(port=0)` | 70 | 绑 loopback 并监听，返回已监听 socket | `serve`、测试 |
 | `serve(port=0, force=False)` | 86 | 前台常驻，返回退出码 | CLI |
 | `_WsQueryRedactor` | 110 | 日志过滤器，打掉 WS URL 查询串 | `_install_ws_log_redaction` |
@@ -26,7 +26,7 @@
 | `_configured_log_config()` | 158 | 合体版 | `_run` |
 | `_install_signal_handlers()` | 164 | SIGTERM/SIGINT → 优雅停止 | `_run` |
 | `gateway_path(root)` | 187 | 由状态根派生 `/gateway/<sha16>` | `_run` |
-| `_run(root, sock)` | 199 | 真正的启动与收场 | `serve` |
+| `_run(root, sock)` | 199 | 真正的启动与收场；**S15/U10**：`finally` 里 `app.state.close_stores()` 关闭所有 store | `serve` |
 
 ## 关键决策与理由
 

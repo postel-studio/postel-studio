@@ -519,6 +519,19 @@ class TaskStore:
             ).fetchone()
         return None if row is None else _row_to_task(row)
 
+    def latest_for_bot(self, bot_id: str) -> Task | None:
+        """S15：这个 Bot 最近一条任务（含终态），供页面重连后恢复中断态。
+
+        `created_at DESC, task_id DESC`：两条任务落在同一毫秒时也有确定顺序（id 作第二排序键）。
+        """
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE bot_id = ?"
+                " ORDER BY created_at DESC, task_id DESC LIMIT 1",
+                (bot_id,),
+            ).fetchone()
+        return None if row is None else _row_to_task(row)
+
     def transition(
         self,
         task_id: str,

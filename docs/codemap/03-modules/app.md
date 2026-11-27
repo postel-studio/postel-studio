@@ -14,23 +14,24 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `API_VERSION` | 26 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
-| `health()` | 29 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
-| `create_app(ws_path, host, port)` | 40 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
-| （局部）`store = RepoStore()` | 54 | 打开 `state.db`（状态根下） | 注入链的起点 |
-| （局部）`repositories = RepositoryService(store)` | 55 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的实现 | `gateway.Providers` |
-| （局部）`bot_store = BotStore()` / `bots = BotService(bot_store, store)` | 59-60 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里）。S7 起这一个 `BotStore` 同时给 `WorktreeService` 用；S8 的 `bot.create` / `bot.set_permission` 也在同一个 service 上 | `gateway.Providers` |
-| （局部）`worktrees = WorktreeService(store, bot_store)` | 62 | S7：`worktree.acquire` / `list` / `release` 的实现（**不落库**，事实源是 git） | `gateway.Providers` |
-| `gateway.Providers(health=…, repo_bind=…, repo_list=…, repo_branches=…, repo_diff=…, bot_list=…, bot_create=…, bot_set_permission=…, memory_charter_get=…, worktree_acquire=…, worktree_list=…, worktree_release=…)` | 97-108 | 注入给网关（**唯一**构造点；S8 加了 `bot_create` / `bot_set_permission` 两个） | `gateway.install` |
+| `API_VERSION` | 36 | `"1"`，协议版本 | `server._run` 写进 server.json；`test_server_boot.py` |
+| `health()` | 39 | 内核存活应答 dict | `/api/health`、网关 `system.health`、测试 |
+| `create_app(ws_path, host, port)` | 50 | 构造应用 + 构造 store/service 并注入网关 | `server._run`、`test_gateway_inprocess.py` |
+| （局部）`store = RepoStore()` | 64 | 打开 `state.db`（状态根下） | 注入链的起点 |
+| （局部）`repositories = RepositoryService(store)` | 65 | `repo.bind` / `repo.list` / `repo.branches` / `repo.diff` 的实现 | `gateway.Providers` |
+| （局部）`bot_store = BotStore()` / `bots = BotService(bot_store, store)` | 69-70 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里）。S7 起这一个 `BotStore` 同时给 `WorktreeService` 用；S8 的 `bot.create` / `bot.set_permission` 也在同一个 service 上 | `gateway.Providers` |
+| （局部）`worktrees = WorktreeService(store, bot_store)` | 72 | S7：`worktree.acquire` / `list` / `release` 的实现（**不落库**，事实源是 git） | `gateway.Providers` |
+| （局部）`close_stores()` | 86 | **S15/U10**：`app.state.close_stores`——先 `orchestrator.wait_idle()` 再逐个关闭 5 个 store；`server._run` 的 `finally` 调用（lifespan=off，不能用 on_event） | `server._run` |
+| `gateway.Providers(…)`（21 个注入字段，S15 加 `task_latest`） | 132-154 | 注入给网关（**唯一**构造点；S8 加了 `bot_create` / `bot_set_permission` 两个） | `gateway.install` |
 
 ### 三个路由
 
 | 路由 | 行 | 认证 | 返回 |
 |---|---|---|---|
-| `GET /` | 76 | 无 | HTML（每次渲染签发新 ticket） |
-| `GET /api/health` | 78 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
-| `GET /api/where` | 82 | 无 | `{host, port, wsPath, pid}` |
-| `WS /gateway/<sha16>` | 93（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
+| `GET /` | 99 | 无 | HTML（每次渲染签发新 ticket） |
+| `GET /api/health` | 114 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
+| `GET /api/where` | 118 | 无 | `{host, port, wsPath, pid}` |
+| `WS /gateway/<sha16>` | 146（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
 
 **S3~S8 都没有加路由。** `repo.*` / `bot.*` / `worktree.*` 全走 WS，`/api/repos` 是 404
 （`test_bind.py::test_no_http_route_for_repositories` 守着）。
@@ -84,9 +85,9 @@ gateway.install(
 - **S4 只加了一个注入字段**（`repo_branches=repositories.branches`）、**S5 也只加一个**
   （`repo_diff=repositories.diff`）、**S6 加了两个**（`bot_list` / `memory_charter_get`）：
   没有新路由、没有新依赖（`BotStore` 与 `RepoStore` 打开同一份 `state.db`）。
-- **已知未决**：`RepoStore` 在这个函数里构造，但**没有地方关它**（进程退出时由 OS 回收；
-  `state.db` 不会被删）。S3 不做退出收场，记在 [06 §已知未决](../06-pitfalls.md#已知未决问题) U10。
-  `sqlite3` 的连接不关不会丢数据（WAL 会 fsync），但"有开必有关"这条纪律目前是破的。
+- **已收口（S15/U10）**：`app.state.close_stores` 由 `server._run` 的 `finally` 调用——先 `orchestrator.wait_idle()`
+  等 worker 退尽，再逐个关闭 5 个 store；进程退出不再只靠 OS 回收。S3 时这条纪律是破的（记在
+  [06 §已知未决](../06-pitfalls.md#已知未决问题) U10）；S15 补上后 U10 收口。
 
 ### 为什么 `docs_url=None, redoc_url=None, openapi_url=None`
 

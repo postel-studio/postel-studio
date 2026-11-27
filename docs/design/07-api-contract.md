@@ -100,14 +100,16 @@
 
 ### 2.4 任务
 
-> **S10 实现了前三行**（`task.dispatch` / `task.cancel` / `task.status`）；`task.list` 仍是
-> 后续切片（S10 的页面只跟「选中 Bot 的最近一次任务」，不需要列表）。
+> **S10 实现了前三行**（`task.dispatch` / `task.cancel` / `task.status`）；S15 加了
+> `task.latest`（单条、只读，供重连恢复中断态）；`task.list` 仍是后续切片（页面只跟
+> 「选中 Bot 的最近一次任务」，不需要全列表）。
 
-| 方法 | 参数 | 返回 | S10 |
+| 方法 | 参数 | 返回 | 状态 |
 |---|---|---|---|
-| `task.dispatch` | `botId, prompt, baseRef?` | `task`（queued 载荷） | ✅ §4.3 |
-| `task.cancel` | `taskId` | `task` | ✅ §4.3（running 时异步生效） |
-| `task.status` | `taskId` | `task` | ✅ §4.3 |
+| `task.dispatch` | `botId, prompt, baseRef?` | `task`（queued 载荷） | ✅ §4.3（S10） |
+| `task.cancel` | `taskId` | `task` | ✅ §4.3（S10，running 时异步生效） |
+| `task.status` | `taskId` | `task` | ✅ §4.3（S10） |
+| `task.latest` | `botId` | `task` 或 `null` | ✅ S15（D8：重连恢复中断态；只查最近一条，非全列表） |
 | `task.list` | `botId?, state?` | `task[]` | 未实现（`UNKNOWN_METHOD`） |
 
 ### 2.5 候选变更

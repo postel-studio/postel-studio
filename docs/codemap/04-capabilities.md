@@ -346,7 +346,7 @@
 | S12 | 收件箱列表 | 前端大幅扩张 | `assets.py` 会超 400 行 → **考虑拆文件** |
 | S13 | 批准/拒绝 | 审核状态机 | |
 | ~~S14~~ | **已完成**：派活→候选→批准一条命令真跑（真 Agent / 真内核 / 真 git） | `scripts/accept_m2.py`、`tests/test_accept_m2.py`；无 `src/` 改动 | 新增 M2 收口；沿用 U21 快照方案（S13 已收口） |
-| S15 | 重启不丢 | 持久化恢复 | |
+| S15 | **规格已定（代码中）**：后端恢复在 S10 已落地；S15 补 UI `interrupted` 态 + 重跑按钮、真重启端到端测试；U10 收口、U1/U20 顺延 | `web/assets.py`、`api/server.py`、`tests/test_recovery.py`、`tools/acceptance/s15_recovery.mjs` | 后端零重写（预算纪律）；U20 顺延 S16 与权限门一并裁决 |
 | S16 | 越权被拦 | `permission/`（纯函数） | **新增 L1 模块，05 §2 的核心** |
 | S17 | 上下文可见 | 记忆注入 | |
 | S18 | 空态/错误态 | 前端文案体系 | |
