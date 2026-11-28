@@ -110,21 +110,41 @@ def _read_source(path: Path, rel: str, level: str) -> ContextSource:
     return ContextSource(path=rel, level=level, bytes=len(raw), text=text)
 
 
+def _safe_source(path: Path, rel: str, level: str, root: Path) -> ContextSource:
+    """仓库外来源绝不读内容：符号链接 / 解析后越界都记成 skipped 行（05 §7）。
+
+    路径先 `resolve(strict=True)` 再要求 `is_relative_to(root)`，所以 `..`、
+    绝对路径变体与指向仓库外文件的符号链接都无法把内容塞进 prompt；
+    skipped 行仍出现在预览里，方便用户看见「有来源被拒绝」。
+    """
+    if path.is_symlink():
+        return ContextSource(path=rel, level=level, bytes=0, skipped="symlink")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return ContextSource(path=rel, level=level, bytes=0, skipped="outside-root")
+    if not resolved.is_relative_to(root):
+        return ContextSource(path=rel, level=level, bytes=0, skipped="outside-root")
+    return _read_source(resolved, rel, level)
+
+
 def _repo_sources(repo_root: Path) -> list[ContextSource]:
     """S17 D2：仓库实时来源，按 (路径深度, 路径字典序) 排序；不复制、不缓存。"""
+    raw_root = Path(repo_root)
+    root = raw_root.resolve()
     found: list[tuple[Path, str, str]] = []
-    for agents in sorted(repo_root.rglob("AGENTS.md")):
+    for agents in sorted(raw_root.rglob("AGENTS.md")):
         if not agents.is_file():
             continue
-        rel = agents.relative_to(repo_root).as_posix()
+        rel = agents.relative_to(raw_root).as_posix()
         parent = str(Path(rel).parent)
         level = "AGENTS.md (仓库根)" if parent == "." else f"AGENTS.md (子目录: {parent})"
         found.append((agents, rel, level))
-    readme = repo_root / "README.md"
+    readme = raw_root / "README.md"
     if readme.is_file():
         found.append((readme, "README.md", "README.md (仓库根)"))
     found.sort(key=lambda item: (item[1].count("/"), item[1]))
-    return [_read_source(path, rel, level) for path, rel, level in found]
+    return [_safe_source(path, rel, level, root) for path, rel, level in found]
 
 
 def _charter_source(repo_id: str, name: str) -> ContextSource:

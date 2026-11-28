@@ -15,7 +15,7 @@
 | L0 | [agent](agent.md) | `src/postel_studio/agent/registry.py` | 78 | 通道登记（S9）：`acp-stdio` 一条，命令是字面数组 + 进程级覆盖 |
 | L0 | [domain](domain.md) | `src/postel_studio/domain/permission.py` | 77 | S16：权限级别 → opencode 工具规则（纯函数，fail-closed） |
 | L1 | [agent](agent.md) | `src/postel_studio/agent/gate.py` | 85 | S16：会话启动前注入权限规则 + 写审计；不读 Agent 类型/凭据 |
-| L0 | [memory](memory.md) | `src/postel_studio/memory/inject.py` | 243 | S17：实时读取 AGENTS.md/README.md/charter 的分层上下文（只读，不复制）+ 冲突/预算判定 |
+| L0 | [memory](memory.md) | `src/postel_studio/memory/inject.py` | 263 | S17：实时读取 AGENTS.md/README.md/charter 的分层上下文（只读，不复制）+ 冲突/预算判定 |
 | L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 880 | `state.db`、schema 迁移（v6）、`RepoStore` / `BotStore` / `TaskStore` / `LeaseStore` / `CandidateStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 261 | 进程生命周期、信号、日志 |
 | L3 | [app](app.md) | `src/postel_studio/api/app.py` | 159 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store/service/编排器并注入 |

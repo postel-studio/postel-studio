@@ -78,6 +78,28 @@ def test_preview_lists_three_layers_with_bytes(repo: Path) -> None:
     assert plan.total_bytes == sum(s.injected_bytes for s in plan.sources)
 
 
+def test_symlinks_outside_repo_never_enter_prompt(repo: Path, tmp_path: Path) -> None:
+    """05-security §7：越根符号链接不能把仓库外的文件塞进 Agent prompt。
+
+    审查实测的形状：根 `AGENTS.md` 指向仓库外的文件 → secret 出现在 prompt_text。
+    根 README 与子目录 AGENTS.md 走同一条 containment 检查。
+    """
+    outside = tmp_path / "outside.txt"
+    outside.write_text("SECRET_OUTSIDE_ROOT=abc123\n", encoding="utf-8")
+    (repo / "AGENTS.md").symlink_to(outside)
+    (repo / "README.md").symlink_to(outside)
+    (repo / "src" / "AGENTS.md").symlink_to(outside)
+
+    plan = inject.build_plan(repo, REPO_ID, BOT_NAME)
+    assert "SECRET_OUTSIDE_ROOT" not in plan.prompt_text
+    repo_sources = [s for s in plan.sources if s.level != "charter (Bot)"]
+    assert len(repo_sources) == 3
+    assert all(s.skipped is not None and s.text == "" for s in repo_sources)
+    assert all(
+        Path(repo, s.path).resolve().is_relative_to(repo.resolve()) is False for s in repo_sources
+    )
+
+
 # ---- 验收 2：实时读取，不复制 ---------------------------------------------------------
 
 

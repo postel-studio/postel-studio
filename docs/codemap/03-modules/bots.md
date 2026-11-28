@@ -1,6 +1,6 @@
 # 03 · bots — `src/postel_studio/api/bots.py`
 
-> 层 L3 · 267 行 · 上游：[模块索引](README.md) · 相关：[storage-db](storage-db.md) · [paths](paths.md) · [domain](domain.md) · [06 §2.2](../../design/06-data-model.md) · [07 §4.7/§4.8/§4.10](../../design/07-api-contract.md) · [S8 规格](../../design/issues/S8-create-bot.md)
+> 层 L3 · 283 行 · 上游：[模块索引](README.md) · 相关：[storage-db](storage-db.md) · [paths](paths.md) · [domain](domain.md) · [06 §2.2](../../design/06-data-model.md) · [07 §4.7/§4.8/§4.10](../../design/07-api-contract.md) · [S8 规格](../../design/issues/S8-create-bot.md)
 
 ## 职责
 
@@ -19,28 +19,28 @@ S8 把 M1 的一处临时形态清掉了：**`bot.list` 不再惰性播种**（�
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `INVALID_PARAMS` / `INTERNAL` / `NOT_SUPPORTED` / `REPO_NOT_BOUND` | 42-45 | 07 §1.3 的既有码 | 错误映射 |
-| `ALREADY_EXISTS` | 48 | **S8 新增码**：创建撞名（为什么不是 `INVALID_PARAMS` 见下） | `create`、页面 |
-| `MSG_*` 十一个文案 | 51-62 | 可读中文，**不含任何用户输入**（05 §4.2） | 错误映射 |
-| `DEFAULT_SUMMARY` | 65 | `"尚未填写职责"`（D5 第 5 条：空正文不是空串） | `charter_summary` |
-| `SUMMARY_MAX_CHARS` | 66 | `80`（D5 第 4 条：按字符数截断 + `…`） | `charter_summary` |
-| `type BotPayloads` | 70 | `list[dict]` 的类型别名（`list` 方法名会遮蔽泛型，同 `repository.py`） | 注解 |
-| `_COMMENT` / `_EMPHASIS` | 72-73 | 摘要规则的正则：整段 HTML 注释 / 行内强调标记 | `charter_summary` |
-| `_fail(code, message)` | 76 | 抛 `frames.FrameError`（网关翻成 `ok:false` 帧） | 本模块 |
-| `charter_rev(content)` | 81 | D5：`int(sha256(content)[:8], 16)`，随内容变、无状态 | `_split`、`create`、`charter_get` |
-| `charter_summary(content)` | 86 | D5 的摘要五条（跳过标题/空行/注释 → 首段 → 去强调 → 截断 → 默认文案） | `_split` |
-| `BotService` | 108 | 五个帧方法的实现（构造时注入两个 store） | `app.create_app` → `gateway.Providers` |
-| `BotService.list(params)` | 119 | `repoId` → Bot 数组；**纯读**，空仓库回 `[]`（S8 D7） | `bot.list` |
-| `BotService.create(params)` | 124 | 七步：repoId → 名字 → 权限 → agentKind → 重名 → 记忆空间 → 落行（D6） | `bot.create` |
-| `BotService.set_permission(params)` | 158 | `botId` + 权限 → 改库并回载荷（同值幂等） | `bot.set_permission` |
+| `INVALID_PARAMS` / `INTERNAL` / `NOT_SUPPORTED` / `REPO_NOT_BOUND` | 43-46 | 07 §1.3 的既有码 | 错误映射 |
+| `ALREADY_EXISTS` | 49 | **S8 新增码**：创建撞名（为什么不是 `INVALID_PARAMS` 见下） | `create`、页面 |
+| `MSG_*` 十一个文案 | 52-63 | 可读中文，**不含任何用户输入**（05 §4.2） | 错误映射 |
+| `DEFAULT_SUMMARY` | 66 | `"尚未填写职责"`（D5 第 5 条：空正文不是空串） | `charter_summary` |
+| `SUMMARY_MAX_CHARS` | 67 | `80`（D5 第 4 条：按字符数截断 + `…`） | `charter_summary` |
+| `type BotPayloads` | 71 | `list[dict]` 的类型别名（`list` 方法名会遮蔽泛型，同 `repository.py`） | 注解 |
+| `_COMMENT` / `_EMPHASIS` | 73-74 | 摘要规则的正则：整段 HTML 注释 / 行内强调标记 | `charter_summary` |
+| `_fail(code, message)` | 77 | 抛 `frames.FrameError`（网关翻成 `ok:false` 帧） | 本模块 |
+| `charter_rev(content)` | 82 | D5：`int(sha256(content)[:8], 16)`，随内容变、无状态 | `_split`、`create`、`charter_get` |
+| `charter_summary(content)` | 87 | D5 的摘要五条（跳过标题/空行/注释 → 首段 → 去强调 → 截断 → 默认文案） | `_split` |
+| `BotService` | 109 | 五个帧方法的实现（构造时注入两个 store） | `app.create_app` → `gateway.Providers` |
+| `BotService.list(params)` | 120 | `repoId` → Bot 数组；**纯读**，空仓库回 `[]`（S8 D7） | `bot.list` |
+| `BotService.create(params)` | 125 | 七步：repoId → 名字 → 权限 → agentKind → 重名 → 记忆空间 → 落行（D6） | `bot.create` |
+| `BotService.set_permission(params)` | 159 | `botId` + 权限 → 改库并回载荷（同值幂等） | `bot.set_permission` |
 | `BotService.charter_get(params)` | 170 | `botId` → `{content, rev}`（读文件，缺目录自愈） | `memory.charter.get` |
 | `BotService.context_preview(params)` | 181 | **S17**：`botId` → 只读来源清单（仓库实时读取 + `conflict` 标记，不抛错） | `memory.context.preview` |
-| `_require_repo` / `_require_bot` | 181/191 | 参数形状 + 存在性 → D6 的错误码 | 四个公开方法 |
-| `_require_name(params)` | 205 | 新名字的白名单（06 §2.2）；非 `str` 走同一句错误 | `create` |
-| `_permission(params, *, default)` | 212 | 入站权限 → `Permission`；缺省 / `L3` / 其它 三种拒绝各有各的码 | `create`、`set_permission` |
-| `_refuse_agent_kind(params)` | 233 | 只收缺省/`null`：给名字 → `NOT_SUPPORTED`，给别的类型 → `INVALID_PARAMS` | `create` |
-| `_split(bot)` | 246 | 实体 → **恰好 8 字段**的 camelCase 载荷（D1） | 四个方法 |
-| `_charter(bot)` | 260 | 读 charter；目录被用户删掉时按空正文处理（不在读路径上重建） | `_split` |
+| `_require_repo` / `_require_bot` | 197/207 | 参数形状 + 存在性 → D6 的错误码 | 四个公开方法 |
+| `_require_name(params)` | 221 | 新名字的白名单（06 §2.2）；非 `str` 走同一句错误 | `create` |
+| `_permission(params, *, default)` | 228 | 入站权限 → `Permission`；缺省 / `L3` / 其它 三种拒绝各有各的码 | `create`、`set_permission` |
+| `_refuse_agent_kind(params)` | 249 | 只收缺省/`null`：给名字 → `NOT_SUPPORTED`，给别的类型 → `INVALID_PARAMS` | `create` |
+| `_split(bot)` | 262 | 实体 → **恰好 8 字段**的 camelCase 载荷（D1） | 四个方法 |
+| `_charter(bot)` | 276 | 读 charter；目录被用户删掉时按空正文处理（不在读路径上重建） | `_split` |
 
 ## 关键决策与理由
 

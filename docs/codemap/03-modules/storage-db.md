@@ -1,6 +1,6 @@
 # 03 · storage-db — `src/postel_studio/storage/db.py`
 
-> 层 L0（**碰磁盘**）· 813 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
+> 层 L0（**碰磁盘**）· 880 行 · 上游：[模块索引](README.md) · 相关：[06-data-model §2.1/§7](../../design/06-data-model.md) · [05-security §4.1](../../design/05-security.md)
 
 ## 职责
 
@@ -24,34 +24,34 @@
 | `_connect(path)` | 157 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
 | `migrate(conn, *, path_for_chmod)` | 170 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600`；**S17 幂等修复**：对象已存在但版本落后时推进版本继续（SIGKILL 落在 executescript 与版本写入之间的 flake） | `open_state_db` |
 | `open_state_db(path=None)` | 202 | 建目录 → 打开 → 迁移；失败关连接再抛 | `RepoStore` |
-| `RepoStore` | 201 | `repos` 表的读写门面（带锁） | `api/app.py`、`api/repository.py` |
-| `RepoStore.__init__(path=None)` | 209 | 打开库；`path=None` 表示用状态根 | `app.create_app` |
-| `RepoStore.path`（property） | 215 | 这份 store 打开的库文件路径（只读） | 测试 |
-| `RepoStore.close()` / `__enter__` / `__exit__` | 220/225/228 | 关闭；`with` 支持 | 测试、将来的 server 收场 |
-| `RepoStore.list()` | 232 | 全部仓库，`ORDER BY added_at, repo_id`（**输出确定**） | `repo.list` |
-| `RepoStore.get(repo_id)` | 240 | 按 id 取，没有给 `None` | `repo.get`（S4 入口） |
-| `RepoStore.upsert(repo)` | 250 | 绑定写库：同路径**不产生第二行**，且**不改写已有 `repo_id`**；返回落库后的记录 | `repo.bind` |
-| `_row_to_repo(row)` | 322 | `sqlite3.Row` → `Repo`，类型收敛只在这一处 | 内部 |
-| `open_store(path=None)` | 342 | `with` 版工厂（异常路径也关连接） | 暂无生产调用方（测试与将来的 CLI） |
-| `_BOT_COLUMNS` | 352 | `bots` 的列清单（同 `_COLUMNS` 的理由：只写一份） | `BotStore` |
-| `BotStore` | 355 | `bots` 表的读写门面（带锁）：`list_for_repo` / `get` / `insert` / `set_permission`（S8） | `api/app.py`、`api/bots.py` |
-| `BotStore.list_for_repo(repo_id)` | 377 | 某仓库全部 Bot，`ORDER BY created_at, bot_id`（确定性） | `bot.list` |
-| `BotStore.get(bot_id)` | 386 | 按复合主键取，没有给 `None` | `memory.charter.get`、`orchestrator._channel_for` |
-| `BotStore.insert(bot)` | 394 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:create`（S8 起；S6 的播种已删） |
-| `BotStore.set_permission(bot_id, permission)` | 411 | **S8**：只改 `permission` 一列并回读；行不存在 → `None`（码由调用方翻） | `bot.set_permission` |
-| `_row_to_bot(row)` | 432 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
-| `TaskStore` | 459 | **S10**：`tasks` 表的读写门面（带锁）：`insert` / `get` / `active_for_bot` / `latest_for_bot` / `transition` / `mark_interrupted` | `orchestrator.py`、`api/app.py` |
-| `TaskStore.insert(task)` | 482 | 插入 queued 行；撞 `tasks_active_per_bot` 索引抛 `IntegrityError`（BUSY 的**数据级后备锁**，D5） | `orchestrator.dispatch` |
-| `TaskStore.get(task_id)` | 504 | 按主键取，没有给 `None` | `orchestrator.status` / `cancel` / `_finish` |
-| `TaskStore.active_for_bot(bot_id)` | 512 | 该 Bot 的活跃任务（`state IN ('queued','running')`），没有给 `None` | `orchestrator.dispatch` 的 BUSY 预检 |
-| `TaskStore.latest_for_bot(bot_id)` | 522 | **S15 D8**：该 Bot 最近一条任务（含终态），`ORDER BY created_at DESC, task_id DESC LIMIT 1`；页面重连恢复中断态 | `orchestrator.latest` |
-| `TaskStore.transition(task_id, state, error_code=None)` | 535 | **唯一的迁移入口**（D6）：`UPDATE … WHERE state=<from>` 原子完成，竞态输家拿 `None`；非法迁移直接 `ValueError`（状态机是表的守卫，先于 SQL） | `orchestrator` 全部状态变化 |
-| `TaskStore.mark_interrupted()` | 579 | **S10 D7**：把库里遗留的活跃任务（queued + running）标 `interrupted`；返回行数。构造 `Orchestrator` 时调一次 | `Orchestrator.__init__`（重启记账） |
-| `LeaseStore` | 596 | **S10**：`worktree_leases` 表的读写门面：`insert` / `active_for_task` / `release` | `orchestrator._run` |
-| `LeaseStore.insert(lease)` | 619 | 插入租约；撞 `leases_active_per_bot` 索引抛 `IntegrityError`（每 Bot 活跃租约唯一） | `orchestrator._run` |
-| `LeaseStore.active_for_task(task_id)` | 634 | 只读：这个任务的租约还活跃吗（测试轮询用） | `orchestrator`、测试 |
-| `LeaseStore.release(task_id)` | 644 | `released_at = now`（只对活跃行）；返回是否真的释放了 | `orchestrator._run` 的 `finally` |
-| `_row_to_task(row)` / `_row_to_lease(row)` | 655/681 | `sqlite3.Row` → `Task` / `WorktreeLease`（类型收敛只在这一处） | 内部 |
+| `RepoStore` | 218 | `repos` 表的读写门面（带锁） | `api/app.py`、`api/repository.py` |
+| `RepoStore.__init__(path=None)` | 226 | 打开库；`path=None` 表示用状态根 | `app.create_app` |
+| `RepoStore.path`（property） | 232 | 这份 store 打开的库文件路径（只读） | 测试 |
+| `RepoStore.close()` / `__enter__` / `__exit__` | 237/242/245 | 关闭；`with` 支持 | 测试、将来的 server 收场 |
+| `RepoStore.list()` | 249 | 全部仓库，`ORDER BY added_at, repo_id`（**输出确定**） | `repo.list` |
+| `RepoStore.get(repo_id)` | 257 | 按 id 取，没有给 `None` | `repo.get`（S4 入口） |
+| `RepoStore.upsert(repo)` | 267 | 绑定写库：同路径**不产生第二行**，且**不改写已有 `repo_id`**；返回落库后的记录 | `repo.bind` |
+| `_row_to_repo(row)` | 339 | `sqlite3.Row` → `Repo`，类型收敛只在这一处 | 内部 |
+| `open_store(path=None)` | 359 | `with` 版工厂（异常路径也关连接） | 暂无生产调用方（测试与将来的 CLI） |
+| `_BOT_COLUMNS` | 369 | `bots` 的列清单（同 `_COLUMNS` 的理由：只写一份） | `BotStore` |
+| `BotStore` | 372 | `bots` 表的读写门面（带锁）：`list_for_repo` / `get` / `insert` / `set_permission`（S8） | `api/app.py`、`api/bots.py` |
+| `BotStore.list_for_repo(repo_id)` | 394 | 某仓库全部 Bot，`ORDER BY created_at, bot_id`（确定性） | `bot.list` |
+| `BotStore.get(bot_id)` | 403 | 按复合主键取，没有给 `None` | `memory.charter.get`、`orchestrator._channel_for` |
+| `BotStore.insert(bot)` | 411 | 插入一行；重复主键抛 `IntegrityError`（**不静默覆盖**） | `api/bots.py:create`（S8 起；S6 的播种已删） |
+| `BotStore.set_permission(bot_id, permission)` | 428 | **S8**：只改 `permission` 一列并回读；行不存在 → `None`（码由调用方翻） | `bot.set_permission` |
+| `_row_to_bot(row)` | 449 | `sqlite3.Row` → `Bot`（类型收敛只在这一处） | 内部 |
+| `TaskStore` | 476 | **S10**：`tasks` 表的读写门面（带锁）：`insert` / `get` / `active_for_bot` / `latest_for_bot` / `transition` / `mark_interrupted` | `orchestrator.py`、`api/app.py` |
+| `TaskStore.insert(task)` | 499 | 插入 queued 行；撞 `tasks_active_per_bot` 索引抛 `IntegrityError`（BUSY 的**数据级后备锁**，D5） | `orchestrator.dispatch` |
+| `TaskStore.get(task_id)` | 521 | 按主键取，没有给 `None` | `orchestrator.status` / `cancel` / `_finish` |
+| `TaskStore.active_for_bot(bot_id)` | 529 | 该 Bot 的活跃任务（`state IN ('queued','running')`），没有给 `None` | `orchestrator.dispatch` 的 BUSY 预检 |
+| `TaskStore.latest_for_bot(bot_id)` | 539 | **S15 D8**：该 Bot 最近一条任务（含终态），`ORDER BY created_at DESC, task_id DESC LIMIT 1`；页面重连恢复中断态 | `orchestrator.latest` |
+| `TaskStore.transition(task_id, state, error_code=None)` | 552 | **唯一的迁移入口**（D6）：`UPDATE … WHERE state=<from>` 原子完成，竞态输家拿 `None`；非法迁移直接 `ValueError`（状态机是表的守卫，先于 SQL） | `orchestrator` 全部状态变化 |
+| `TaskStore.mark_interrupted()` | 596 | **S10 D7**：把库里遗留的活跃任务（queued + running）标 `interrupted`；返回行数。构造 `Orchestrator` 时调一次 | `Orchestrator.__init__`（重启记账） |
+| `LeaseStore` | 613 | **S10**：`worktree_leases` 表的读写门面：`insert` / `active_for_task` / `release` | `orchestrator._run` |
+| `LeaseStore.insert(lease)` | 636 | 插入租约；撞 `leases_active_per_bot` 索引抛 `IntegrityError`（每 Bot 活跃租约唯一） | `orchestrator._run` |
+| `LeaseStore.active_for_task(task_id)` | 651 | 只读：这个任务的租约还活跃吗（测试轮询用） | `orchestrator`、测试 |
+| `LeaseStore.release(task_id)` | 661 | `released_at = now`（只对活跃行）；返回是否真的释放了 | `orchestrator._run` 的 `finally` |
+| `_row_to_task(row)` / `_row_to_lease(row)` | 672/698 | `sqlite3.Row` → `Task` / `WorktreeLease`（类型收敛只在这一处） | 内部 |
 
 ## 关键决策与理由
 

@@ -769,6 +769,26 @@ COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], .
         _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
         "S16 #7（组合）：绝对路径 + -C 的三条前导通配退回旧形状 → 审查实测的 fail-open 复现",
     ),
+    # ---- S17 #5（组合）：符号链接守卫 + 越根 containment 一起拆，才回放审查的泄漏 ----
+    (
+        (
+            (
+                "postel_studio/memory/inject.py",
+                "    if path.is_symlink():\n"
+                '        return ContextSource(path=rel, level=level, bytes=0, skipped="symlink")',
+                "    if False:  # injected: 符号链接守卫被拆\n        pass",
+            ),
+            (
+                "postel_studio/memory/inject.py",
+                "    if not resolved.is_relative_to(root):\n"
+                "        return ContextSource(path=rel, level=level, bytes=0, "
+                'skipped="outside-root")',
+                "    if False:  # injected: containment 被拆\n        pass",
+            ),
+        ),
+        _target_test("test_symlinks_outside_repo_never_enter_prompt", file="test_injection"),
+        "S17 #5（组合）：越根读取守卫被拆 → 仓库外 secret 进入 Agent prompt",
+    ),
 )
 
 
