@@ -14,8 +14,8 @@
 |---|---|
 | 用户路径 | 终端打印 `http://127.0.0.1:PORT` → 浏览器打开 |
 | 打印地址 | `api/server.py:224`（`_run` 里那几行 `print`） |
-| 渲染页面 | web/assets.py:2495 `render_index()` |
-| 路由 | `api/app.py:111` `GET /` |
+| 渲染页面 | web/assets.py:2593 `render_index()` |
+| 路由 | `api/app.py:113` `GET /` |
 | 由谁守住 | `test_server_boot.py::test_stdout_prints_clickable_loopback_url`、`::test_page_shows_version_and_state_root` |
 
 ### C2 · 单实例保护（不重复启动）
@@ -43,16 +43,16 @@
 |---|---|
 | 用户路径 | 右上角状态灯：已连接 / 已断开 / 重连中 |
 | DOM | `web/assets.py` 里 `id="status"`、`id="status-text"` |
-| 状态切换 | `web/assets.py:878` `setState()` |
+| 状态切换 | `web/assets.py:936` `setState()` |
 | 由谁守住 | `test_gateway.py::test_page_declares_status_lamp_and_three_states`（**文本断言**） |
 
 ### C5 · 断连 ≤3 秒可见 + 灰化 + 重连按钮
 
 | 项 | 位置 |
 |---|---|
-| 心跳判活 | `web/assets.py:2359` `startHeartbeat()` |
-| 唯一向下出口 | `web/assets.py:2296` `fail()` |
-| 灰化规则 | `web/assets.py:122-123` `#content.stale` / `::after` |
+| 心跳判活 | `web/assets.py:2455` `startHeartbeat()` |
+| 唯一向下出口 | `web/assets.py:2391` `fail()` |
+| 灰化规则 | `web/assets.py:130-131` `#content.stale` / `::after` |
 | 按钮显示 | `setState()` 里 `button.style.display = ...` |
 | 由谁守住 | `test_gateway.py::test_server_cleans_up_connection_after_client_disconnect`（**后端侧**）、`::test_page_has_stale_rule_and_toggles_it_on_disconnect`（**文本**） |
 | ⚠️ 真实 DOM 行为 | **无自动化测试**，靠人工浏览器验证 |
@@ -61,10 +61,10 @@
 
 | 项 | 位置 |
 |---|---|
-| 重连入口 | `web/assets.py:2422` `reconnect()` |
-| 取新票 | `web/assets.py:2370` `freshTicket()` |
-| 端口校验 | `web/assets.py:2381` `PORT_CHANGED` |
-| 建连 | `web/assets.py:2396` `connect()` |
+| 重连入口 | `web/assets.py:2520` `reconnect()` |
+| 取新票 | `web/assets.py:2466` `freshTicket()` |
+| 端口校验 | `web/assets.py:2477` `PORT_CHANGED` |
+| 建连 | `web/assets.py:2492` `connect()` |
 | 由谁守住 | `test_gateway.py::test_reconnect_after_disconnect_works_without_restart`（网关侧）、`::test_frontend_reports_port_change_and_does_not_guess`（文本） |
 | ⚠️ 边界 | **端口变了无法自动恢复**（D7），页面会明确告知 |
 
@@ -74,7 +74,7 @@
 |---|---|
 | 用户路径 | 无 UI 入口；是通道自检与心跳的基础 |
 | 方法表 | `api/gateway.py:152` `dispatch()` |
-| 编解码 | `api/frames.py:61` / `:102` |
+| 编解码 | `api/frames.py:63` / `:104` |
 | 由谁守住 | `test_gateway.py::test_echo_roundtrip_returns_data_and_seq`、`test_frames.py`（18 例） |
 
 ### C8 · 连接认证（一次性 ticket）
@@ -91,7 +91,7 @@
 
 | 项 | 位置 |
 |---|---|
-| 路由 | `api/app.py:111` |
+| 路由 | `api/app.py:113` |
 | 数据来源 | `create_app(ws_path, host=, port=)` 注入的**本进程真实绑定** |
 | 由谁守住 | `test_gateway_inprocess.py::test_where_reports_this_kernels_real_binding`（删掉 server.json 后仍答同样值） |
 
@@ -109,7 +109,7 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 左栏输入框粘绝对路径 → 点「绑定」→ 左栏出现「名称 / 默认分支」 |
-| 前端入口 | `web/assets.py:2265` `submitBind()`（真 `<form>`，回车也可） |
+| 前端入口 | `web/assets.py:2354` `submitBind()`（真 `<form>`，回车也可） |
 | 方法表 | `api/gateway.py:158` `dispatch()` 的 `repo.bind` 分支 |
 | 业务编排 | api/repository.py:205 `RepositoryService.bind()` |
 | 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
@@ -127,7 +127,7 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 页面加载 / 重连成功后自动拉一次 |
-| 前端 | `web/assets.py:1026` `loadRepos()` → `:940` `renderRepos()` |
+| 前端 | `web/assets.py:1087` `loadRepos()` → `:1001` `renderRepos()` |
 | 方法表 | `api/gateway.py:160` |
 | 业务 | api/repository.py:201 `RepositoryService.list()` |
 | 读库 | `storage/db.py:249` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
@@ -138,8 +138,8 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 内核不在 / 断连时，左栏仓库区显示「已断开：内核没有连着，仓库列表未知」，**不显示**空态 |
-| 状态源 | `web/assets.py:889` `setRepoState()` → `#repos[data-state]` |
-| 显隐规则 | `web/assets.py:95-468` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
+| 状态源 | `web/assets.py:949` `setRepoState()` → `#repos[data-state]` |
+| 显隐规则 | `web/assets.py:80-507` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
 | 由谁守住 | `tools/acceptance/s3_bind.mjs` 的 `CHECK D1 …` 四行（CDP 断网 → 读 DOM → 恢复 → 点重连，见 06 T27） |
 
 ### C14 · 点仓库 → 看到分支列表（`repo.branches`）—— S4
@@ -147,7 +147,7 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 点左栏仓库行（鼠标，或聚焦后 `Enter`/`Space`）→ 主区分支面板列出该仓库的**本地**分支：当前分支带「当前」徽章、每个 8 位 sha、有 upstream 才显示 |
-| 前端入口 | `web/assets.py:2241` `selectRepo()` → `:1120` `loadBranches()` → `:1076` `renderBranches()`；断连/切换的收口是 `:1050` `resetBranches()` |
+| 前端入口 | `web/assets.py:2330` `selectRepo()` → `:1181` `loadBranches()` → `:1137` `renderBranches()`；断连/切换的收口是 `:1111` `resetBranches()` |
 | DOM 契约 | `#branches[data-state]`（idle/loading/ready/error）+ `#branches-title` / `#branch-list` / `#branch-empty` / `#branches-error`（D6） |
 | 方法表 | `api/gateway.py:162` `dispatch()` 的 `repo.branches` 分支 |
 | 业务编排 | api/repository.py:269 `RepositoryService.branches()`；`repoId` → 允许根走 `:250` `_require_repo()`（与 `get()` / `diff()` 共用） |
@@ -227,7 +227,7 @@
 | | |
 |---|---|
 | 用户路径 | 主区顶部点「检测 Agent」→ 显示 `Agent：OpenCode 1.19.6`、`protocolVersion：1`、握手耗时、以及 **9 条**能力（`loadSession` / `mcp.http` / `session.list` …）；没装时显示「本机没有可用的 Agent 命令」并可重试 |
-| 前端入口 | `web/assets.py:489` 的 `#agent` 卡片：`detectAgent()`（:1802）/ `renderAgent()`（:1765）/ `resetAgent()`（:1755）/ `agentErrorText()`（:1745） |
+| 前端入口 | `web/assets.py:530` 的 `#agent` 卡片：`detectAgent()`（:1864）/ `renderAgent()`（:1827）/ `resetAgent()`（:1817）/ `agentErrorText()`（:1807） |
 | DOM 契约 | `#agent[data-state]`（idle/loading/ready/error）+ `#agent-state` / `#agent-detect` / `#agent-error` / `#agent-detail` / `#agent-kind` / `#agent-version` / `#agent-protocol` / `#agent-elapsed` / `#agent-flags`（S9 D9）；卡片在 `#branches` **之前** |
 | 方法表 | `api/gateway.py:182` `agent.list` / `api/gateway.py:184` `agent.capabilities` |
 | 业务编排 | `api/agents.py:37` `AgentsService`：`list`（:43，**不启进程**）/ `capabilities`（:57，真握手 + 三种失败码） |

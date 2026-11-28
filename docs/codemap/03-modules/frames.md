@@ -14,20 +14,20 @@
 
 | 符号 | 行 | 做什么 |
 |---|---|---|
-| `MAX_FRAME_BYTES` | 24 | 1 MiB（02b §5 / 05 §3.1） |
-| `MAX_ID_LENGTH` | 25 | 128（05 §3.1） |
-| `REQ` / `RES` / `EVT` | 27-29 | `"req"` / `"res"` / `"evt"` |
-| `FRAME_TOO_LARGE` | 31 | 稳定错误码 |
-| `INVALID_PARAMS` | 32 | 稳定错误码 |
-| `UNKNOWN_METHOD` | 33 | 稳定错误码 |
-| `INTERNAL` | 34 | 稳定错误码 |
-| `FrameError(code, message, reply_id)` | 37 | 帧不合法。`reply_id is None` = 「有错但没 id 可回」 |
-| `ReqFrame` | 48 | frozen dataclass：`id` / `method` / `params` |
-| `decode_incoming(text)` | 56 | `str → ReqFrame`，失败抛 `FrameError` |
-| `encode_response(id, seq=, data)` | 102 | 成功帧 |
+| `MAX_FRAME_BYTES` | 26 | 1 MiB（02b §5 / 05 §3.1） |
+| `MAX_ID_LENGTH` | 27 | 128（05 §3.1） |
+| `REQ` / `RES` / `EVT` | 29-31 | `"req"` / `"res"` / `"evt"` |
+| `FRAME_TOO_LARGE` | 33 | 稳定错误码 |
+| `INVALID_PARAMS` | 34 | 稳定错误码 |
+| `UNKNOWN_METHOD` | 35 | 稳定错误码 |
+| `INTERNAL` | 36 | 稳定错误码 |
+| `FrameError(code, message, reply_id)` | 44 | 帧不合法。`reply_id is None` = 「有错但没 id 可回」 |
+| `ReqFrame` | 55 | frozen dataclass：`id` / `method` / `params` |
+| `decode_incoming(text)` | 63 | `str → ReqFrame`，失败抛 `FrameError` |
+| `encode_response(id, seq=, data)` | 104 | 成功帧 |
 | `encode_error(id, code, message)` | 113 | 失败帧；`message` 先过 `errors.message_safe`（S18 D4） |
-| `encode_event(topic, seq=, data)` | 120 | 推送帧（**S10 起有真实调用方**：网关的 pump task） |
-| `KNOWN_TOPICS` | 39 | 订阅白名单：`("task.updated", "candidate.proposed")`（S10/S11）；`subscribe` 的入参校验与 `_topics_of` 都读它 |
+| `encode_event(topic, seq=, data)` | 131 | 推送帧（**S10 起有真实调用方**：网关的 pump task） |
+| `KNOWN_TOPICS` | 41 | 订阅白名单：`("task.updated", "candidate.proposed")`（S10/S11）；`subscribe` 的入参校验与 `_topics_of` 都读它 |
 
 ## 关键决策与理由
 
