@@ -103,7 +103,7 @@ S6 的 Bots 区与 charter 面板（D8）：
 | `botsEl` … `charterContent` | 798-808 | 两个面板的元素引用 |
 | `BOT_HINT` / `CHARTER_HINT` / `BOT_ERROR_FALLBACK` / `CHARTER_ERROR_FALLBACK` | 811-815 | 提示文案与**各自**的兜底（不用绑定表单那句「绑定失败」） |
 | `selectedBotId` / `selectedBotName` / `botRequestToken` / `charterRequestToken` | 816-832 | 选中的 Bot（与 repo 强绑定）+ 两个过期回包拦截器 |
-| `botErrorText(code)` / `charterErrorText(code)` | 1314/1335 | 按码映射；`charterErrorText` 把 `INVALID_PARAMS` 翻成「找不到这个 Bot」（D6） |
+| `botErrorText(code)` / `charterErrorText(code)` | 1375 / 1396 | 按码映射；`charterErrorText` 把 `INVALID_PARAMS` 翻成「找不到这个 Bot」（D6） |
 | `charterTitleText()` | 1402 | `Charter` / `Charter · <botName>` |
 | `resetBots(state, text)` | 1406 | 清列表 + 回 state；`botRequestToken += 1` 让在途回包作废 |
 | `applyBotSelection()` | 1417 | Bot 行 `data-selected` 的唯一打/清点（列表重建后恢复） |
@@ -122,9 +122,9 @@ S8 的新建 Bot 表单与 charter 面板的权限下拉（D8）：
 | `#bot-create-form` / `#bot-create-name` / `#bot-create-permission` | 681-684 | 表单（`hidden` 开关 + `[hidden]{display:none}` 显式规则）与四个选项的下拉 |
 | `#bot-create-submit` / `#bot-create-cancel` / `#bot-create-error` | 691-694 | 提交（飞行中 `disabled`）/ 取消 / `role=alert` 的错误行 |
 | `#charter-permission-row` / `#charter-permission` | 577 | charter 面板里的权限下拉；同样四个选项，`change` 即提交 |
-| `botCreateErrorText(code)` / `permissionErrorText(code)` | 1320/1329 | 面板**自己的**码→文案（`ALREADY_EXISTS` / `NOT_SUPPORTED` 不进全局表） |
+| `botCreateErrorText(code)` / `permissionErrorText(code)` | 1381 / 1390 | 面板**自己的**码→文案（`ALREADY_EXISTS` / `NOT_SUPPORTED` 不进全局表） |
 | `syncBotCreateButton()` | 1534 | 提交按钮的 `disabled` 只看「忙不忙 + 表单开没开」 |
-| `openBotCreate()` / `closeBotCreate(silent)` | 1477/1488 | 开：清空 + 权限回 L1 + 聚焦名字；关：清空 + **焦点回按钮**（`silent` 不抢焦点） |
+| `openBotCreate()` / `closeBotCreate(silent)` | 1538 / 1549 | 开：清空 + 权限回 L1 + 聚焦名字；关：清空 + **焦点回按钮**（`silent` 不抢焦点） |
 | `submitBotCreate()` | 1561 | 发 `bot.create`；成功 → 关表单 + `loadBots()`；失败 → 错误行 + 焦点回名字框 |
 | `renderCharterPermission(botId)` | 1611 | 下拉的值只来自 `botPermissions`（`bot.list` 的同一份事实） |
 | `submitPermissionChange()` | 1648 | 发 `bot.set_permission`；成功 → 更新徽标（`loadBots`）；失败 → **回滚下拉** + 错误行 |
@@ -458,8 +458,8 @@ node tools/acceptance/s4_branches.mjs
 | 元素/函数 | 行 | 做什么 |
 |---|---|---|
 | `<section id="audit">` | 698 | 审计面板（只读） |
-| `badge.dataset.unavailable` | 1399 / 1890-1891 | ① `renderBots` 里不可授予的级别标「（不可用）」；② `markPermissionUnavailable` 里 FALLBACK 路径同样标 |
-| `markPermissionUnavailable(botId)` | 1950 | **D6**：审计里的 `FALLBACK` 把该 Bot 徽标标「（不可用）」（判定在 1890，调用在 1893） |
+| `badge.dataset.unavailable` | 1460 / 1955-1956 | ① `renderBots` 里不可授予的级别标「（不可用）」；② `markPermissionUnavailable` 里 FALLBACK 路径同样标 |
+| `markPermissionUnavailable(botId)` | 1950 | **D6**：审计里的 `FALLBACK` 把该 Bot 徽标标「（不可用）」（判定在 1955，调用在 1993） |
 | `loadAudit(botId)` | 1972 | 发 `audit.list`，逐行 `textContent` 渲染（不用 `innerHTML`）；见 FALLBACK → 标不可用 |
 
 ### S17 · 上下文来源清单

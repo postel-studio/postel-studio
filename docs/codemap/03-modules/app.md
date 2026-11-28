@@ -31,7 +31,7 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 | `GET /` | 99 | 无 | HTML（每次渲染签发新 ticket） |
 | `GET /api/health` | 116 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
 | `GET /api/where` | 120 | 无 | `{host, port, wsPath, pid}` |
-| `WS /gateway/<sha16>` | 146（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
+| `WS /gateway/<sha16>` | 130（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
 
 **S3~S8 都没有加路由。** `repo.*` / `bot.*` / `worktree.*` 全走 WS，`/api/repos` 是 404
 （`test_bind.py::test_no_http_route_for_repositories` 守着）。
