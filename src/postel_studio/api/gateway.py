@@ -112,6 +112,7 @@ class Providers:
     bot_create: Callable[[dict[str, object]], dict[str, object]]
     bot_set_permission: Callable[[dict[str, object]], dict[str, object]]
     memory_charter_get: Callable[[dict[str, object]], dict[str, object]]
+    memory_context_preview: Callable[[dict[str, object]], dict[str, object]]  # S17
     worktree_acquire: Callable[[dict[str, object]], dict[str, object]]
     worktree_list: Callable[[dict[str, object]], list[dict[str, object]]]
     worktree_release: Callable[[dict[str, object]], dict[str, object]]
@@ -170,6 +171,8 @@ def dispatch(method: str, params: dict[str, object], providers: Providers) -> ob
         return providers.bot_set_permission(params)
     if method == "memory.charter.get":  # S6 / 07 §4.8：charter 正文 + 内容哈希版本
         return providers.memory_charter_get(params)
+    if method == "memory.context.preview":  # S17 / 07 §2.6：本次注入的只读来源清单
+        return providers.memory_context_preview(params)
     if method == "worktree.acquire":  # S7 / 07 §4.9：分配工作区（幂等，复用返回同一路径）
         return providers.worktree_acquire(params)
     if method == "worktree.list":  # S7 / 07 §4.9：这个仓库下本内核建的工作区（0..n）

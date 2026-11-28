@@ -452,3 +452,11 @@ node tools/acceptance/s4_branches.mjs
 | `badge.dataset.unavailable` | 1378 / 1833-1834 | ① `renderBots` 里不可授予的级别标「（不可用）」；② `markPermissionUnavailable` 里 FALLBACK 路径同样标 |
 | `markPermissionUnavailable(botId)` | 1828 | **D6**：审计里的 `FALLBACK` 把该 Bot 徽标标「（不可用）」（判定在 1854，调用在 1860） |
 | `loadAudit(botId)` | 1840 | 发 `audit.list`，逐行 `textContent` 渲染（不用 `innerHTML`）；见 FALLBACK → 标不可用 |
+
+### S17 · 上下文来源清单
+
+| 元素/函数 | 行 | 做什么 |
+|---|---|---|
+| `<section id="context">` | 658 | 注入清单面板（只读，来源 + 层级 + 字节数） |
+| `resetContext(state, text)` | 1849 | 断连 / 换 Bot 时清空上下文清单 |
+| `loadContext(botId)` | 1855 | 发 `memory.context.preview`，`textContent` 渲染；`truncated` 单列标红，`conflict` 警告 |

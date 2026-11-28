@@ -29,11 +29,12 @@ S8 把 M1 的一处临时形态清掉了：**`bot.list` 不再惰性播种**（�
 | `_fail(code, message)` | 76 | 抛 `frames.FrameError`（网关翻成 `ok:false` 帧） | 本模块 |
 | `charter_rev(content)` | 81 | D5：`int(sha256(content)[:8], 16)`，随内容变、无状态 | `_split`、`create`、`charter_get` |
 | `charter_summary(content)` | 86 | D5 的摘要五条（跳过标题/空行/注释 → 首段 → 去强调 → 截断 → 默认文案） | `_split` |
-| `BotService` | 108 | 四个帧方法的实现（构造时注入两个 store） | `app.create_app` → `gateway.Providers` |
+| `BotService` | 108 | 五个帧方法的实现（构造时注入两个 store） | `app.create_app` → `gateway.Providers` |
 | `BotService.list(params)` | 119 | `repoId` → Bot 数组；**纯读**，空仓库回 `[]`（S8 D7） | `bot.list` |
 | `BotService.create(params)` | 124 | 七步：repoId → 名字 → 权限 → agentKind → 重名 → 记忆空间 → 落行（D6） | `bot.create` |
 | `BotService.set_permission(params)` | 158 | `botId` + 权限 → 改库并回载荷（同值幂等） | `bot.set_permission` |
-| `BotService.charter_get(params)` | 169 | `botId` → `{content, rev}`（读文件，缺目录自愈） | `memory.charter.get` |
+| `BotService.charter_get(params)` | 170 | `botId` → `{content, rev}`（读文件，缺目录自愈） | `memory.charter.get` |
+| `BotService.context_preview(params)` | 181 | **S17**：`botId` → 只读来源清单（仓库实时读取 + `conflict` 标记，不抛错） | `memory.context.preview` |
 | `_require_repo` / `_require_bot` | 181/191 | 参数形状 + 存在性 → D6 的错误码 | 四个公开方法 |
 | `_require_name(params)` | 205 | 新名字的白名单（06 §2.2）；非 `str` 走同一句错误 | `create` |
 | `_permission(params, *, default)` | 212 | 入站权限 → `Permission`；缺省 / `L3` / 其它 三种拒绝各有各的码 | `create`、`set_permission` |

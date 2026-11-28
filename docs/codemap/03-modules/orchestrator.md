@@ -13,14 +13,14 @@
 | 符号 | 行 | 职责 |
 |---|---|---|
 | `EventHub` | 88 | 线程安全 pub/sub：`subscribe` / `replace` / `unsubscribe` / `publish`。工作线程经 `loop.call_soon_threadsafe` 投递（`asyncio.Queue` 本身不是线程安全的，D11） |
-| `Orchestrator` | 150 | 五个帧方法（`dispatch` / `status` / `latest` / `audit_list` / `cancel`）+ worker。构造时 `mark_interrupted()`（D7：重启记账） |
-| `dispatch` | 183 | 校验（prompt ≤ 32 KiB、baseRef 形状）→ `permission_covers(bot, L1)` → 活跃检查 → 建行 → 起线程（线程登记进 `_workers`）。`insert` 撞索引是 BUSY 的数据级后备（D5） |
+| `Orchestrator` | 150 | 五个帧方法（`dispatch` / `status` / `latest` / `audit_list` / `cancel`）+ worker。S17：`CONTEXT_CONFLICT` 常量 + 冲突终态化。构造时 `mark_interrupted()`（D7：重启记账） |
+| `dispatch` | 187 | 校验（prompt ≤ 32 KiB、baseRef 形状）→ `permission_covers(bot, L1)` → 活跃检查 → 建行 → 起线程（线程登记进 `_workers`）。`insert` 撞索引是 BUSY 的数据级后备（D5） |
 | `wait_idle(timeout)` | 226 | join 全部活着的 worker（测试收场与 S15 优雅停机共用；worker 自己在 finally 末尾把自己从登记表摘除） |
 | `status` | 240 | 按 id 取任务载荷 |
 | `latest` | 245 | **S15 D8**：某 Bot 最近一条任务（含终态），`task.latest` 帧入口；没有回 `None` |
 | `audit_list` | 255 | **S16**：只读权限审计（可选 `botId`） | `audit.list` 帧 |
 | `cancel` | 262 | queued 直接迁移；running 发会话取消并把迁移交给 worker（D10）；终态 → `INVALID_PARAMS` |
-| `_run` | 284 | 一任务一线程：取工作区 → 建租约 → `queued→running` → 会话 → prompt → D9 映射 → finally（回收会话、释放租约、摘除线程登记） |
+| `_run` | 288 | 一任务一线程：取工作区 → 建租约 → `queued→running` → **S17 上下文装配（冲突 → `failed`/`CONTEXT_CONFLICT`）** → 会话 → prompt → D9 映射 → finally（回收会话、释放租约、摘除线程登记） |
 
 ## 两条容易改坏的红线
 

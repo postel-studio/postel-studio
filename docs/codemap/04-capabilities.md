@@ -348,7 +348,7 @@
 | ~~S14~~ | **已完成**：派活→候选→批准一条命令真跑（真 Agent / 真内核 / 真 git） | `scripts/accept_m2.py`、`tests/test_accept_m2.py`；无 `src/` 改动 | 新增 M2 收口；沿用 U21 快照方案（S13 已收口） |
 | S15 | **规格已定（代码中）**：后端恢复在 S10 已落地；S15 补 UI `interrupted` 态 + 重跑按钮、真重启端到端测试；U10 收口、U1/U20 顺延 | `web/assets.py`、`api/server.py`、`tests/test_recovery.py`、`tools/acceptance/s15_recovery.mjs` | 后端零重写（预算纪律）；U20 顺延 S16 与权限门一并裁决 |
 | S16 | **规格已定（代码中）**：opencode v2 `permissions` 执行前真阻断（L0 只读 / L1 禁 push / L2 只许 origin）+ 审计；U20 顺延 S20 且不再顺延 | `domain/permission.py`、`agent/gate.py`、`orchestrator.py`、`tests/test_permission_gate.py` | 不靠 prompt 约束；不可阻断路径 fail-closed + UI/文档标注 |
-| S17 | 上下文可见 | 记忆注入 | |
+| S17 | 上下文可见 | 记忆注入：`memory/inject.py` 实时读 AGENTS.md/README.md/charter（不复制）+ 预览 `memory.context.preview` + 派活前冲突阻断 | `tests/test_injection.py` |
 | S18 | 空态/错误态 | 前端文案体系 | |
 | S19 | doctor | 自检命令 | `__init__.py` 加子命令 |
 | S20 | 发版 | 版本号同步 | 见 [entry.md 版本号两个来源](03-modules/entry.md) |
