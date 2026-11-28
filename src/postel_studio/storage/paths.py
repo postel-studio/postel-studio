@@ -24,6 +24,8 @@ from postel_studio.domain.models import bot_name_ok
 ENV_HOME: Final = "POSTEL_HOME"
 SERVER_FILE: Final = "server.json"
 LOCK_FILE: Final = "kernel.lock"
+# S16 D4：权限裁决审计（JSONL，一行一条）。只放 bot / 命令 / 判定，不放凭据或 prompt。
+AUDIT_FILE: Final = "audit.jsonl"
 # S3 起内核持有用户数据（绑定关系）。**只**放在状态根里，绝不写进用户仓库；
 # 文件名的事实源在这里（db.py 只是消费者），免得两处各拼一次路径。
 STATE_DB_FILE: Final = "state.db"
@@ -67,6 +69,44 @@ def state_db_file() -> Path:
 def lock_file() -> Path:
     """内核锁：只放决策需要的 pid / version，不放任何凭据。"""
     return state_root() / LOCK_FILE
+
+
+def audit_file() -> Path:
+    """`audit.jsonl`：权限门的执行前裁决与 Agent 工具调用记录（S16 D4）。**不创建**。"""
+    return state_root() / AUDIT_FILE
+
+
+def append_audit(record: dict[str, object]) -> None:
+    """原子追加一行 JSON（单 write + fsync，`0600`）。审计写失败必须让调用方 fail-closed。"""
+    root = ensure_state_root()
+    path = root / AUDIT_FILE
+    data = (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, FILE_MODE)
+    try:
+        _chmod(path, FILE_MODE)
+        written = os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if written != len(data):
+        raise OSError("审计记录没有完整写入")
+
+
+def read_audit(*, bot_id: str | None = None) -> list[dict[str, object]]:
+    """读审计行；坏行跳过（审计文件被人手改过也不能让面板崩）。"""
+    try:
+        lines = audit_file().read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    rows: list[dict[str, object]] = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and (bot_id is None or row.get("botId") == bot_id):
+            rows.append(row)
+    return rows
 
 
 def token_path() -> Path:

@@ -253,11 +253,23 @@ class AcpSessionError(Exception):
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    """S16 D4：一次工具调用的命令与终态（给本地审计用，不进网关事件）。"""
+
+    command: str
+    status: str
+
+
+@dataclass(frozen=True)
 class SessionOutcome:
-    """一次 prompt 的产出（D9 的原料）。`updates` 只作计数观测，内容**不外传**（S10 D12）。"""
+    """一次 prompt 的产出（D9 的原料）。`updates` 只作计数观测，内容**不外传**（S10 D12）。
+
+    S16：额外带本轮工具调用摘要给本地审计——这不是向页面转发流式输出。
+    """
 
     stop_reason: str
     updates: int
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 class Session:
@@ -302,6 +314,7 @@ class Session:
         self._next_id = 1
         self._session_id: str | None = None
         self.updates_seen = 0
+        self._tool_calls: list[ToolCall] = []
         try:
             handshake = self._request(
                 "initialize",
@@ -343,6 +356,7 @@ class Session:
         """
         if self._session_id is None:  # pragma: no cover - 构造失败就不可能有实例
             raise AcpSessionError("会话尚未建立")
+        self._tool_calls.clear()
         result = self._request(
             "session/prompt",
             {"sessionId": self._session_id, "prompt": [{"type": "text", "text": text}]},
@@ -355,7 +369,11 @@ class Session:
         if not isinstance(stop_reason, str) or not stop_reason:
             # fail-closed：没有 stopReason 的"成功"不可信（D9）。
             raise AcpProtocolError("prompt 应答缺 stopReason")
-        return SessionOutcome(stop_reason=stop_reason, updates=self.updates_seen)
+        return SessionOutcome(
+            stop_reason=stop_reason,
+            updates=self.updates_seen,
+            tool_calls=tuple(self._tool_calls),
+        )
 
     def cancel(self) -> None:
         """发 `session/cancel` **通知**（无 id，实测：挂起的 prompt 随即回
@@ -420,8 +438,19 @@ class Session:
                 message = _try_json(line)
                 if not isinstance(message, dict):
                     continue
-                if message.get("method") == "session/update":  # D12：计数后丢弃
+                if message.get("method") == "session/update":  # D12：不转发；仅本地计数/审计
                     self.updates_seen += 1
+                    note_params = message.get("params")
+                    update = note_params.get("update") if isinstance(note_params, dict) else None
+                    if (
+                        isinstance(update, dict)
+                        and update.get("sessionUpdate") == "tool_call_update"
+                    ):
+                        raw = update.get("rawInput")
+                        command = raw.get("command") if isinstance(raw, dict) else None
+                        status = update.get("status")
+                        if isinstance(command, str) and isinstance(status, str):
+                            self._tool_calls.append(ToolCall(command=command, status=status))
                     continue
                 if message.get("id") == request_id:
                     return message

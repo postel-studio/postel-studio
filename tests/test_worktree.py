@@ -787,6 +787,7 @@ def test_gateway_exposes_the_three_worktree_methods() -> None:
         task_dispatch=lambda params: params,  # S10
         task_status=lambda params: params,
         task_latest=lambda params: None,  # S15
+        audit_list=lambda params: [],  # S16
         task_cancel=lambda params: params,
         candidate_list=lambda params: [params],  # S11
         candidate_approve=lambda params: params,  # S13

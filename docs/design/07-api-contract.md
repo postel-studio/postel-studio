@@ -112,6 +112,13 @@
 | `task.latest` | `botId` | `task` 或 `null` | ✅ S15（D8：重连恢复中断态；只查最近一条，非全列表） |
 | `task.list` | `botId?, state?` | `task[]` | 未实现（`UNKNOWN_METHOD`） |
 
+### 2.6 权限审计（S16）
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `audit.list` | `botId?` | `audit[]` | 只读 `<状态根>/audit.jsonl`；每行 `{at, botId, permission, action, resource, effect, source}`，不含 key / prompt |
+
+
 ### 2.5 候选变更
 
 | 方法 | 参数 | 返回 |

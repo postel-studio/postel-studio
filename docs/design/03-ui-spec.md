@@ -79,6 +79,8 @@ Insights（v2）——11 个子页，含真实空态：
 | 变更收件箱 | **产品独有** | 不能被误解为 GitHub 的 Pull requests |
 | Bot 配置（身份 / 权限 / charter / 记忆 / 工作日志） | 产品独有 | 入口待定（见 §6 Q1） |
 
+**S16 权限审计面板**：Bots 区下方 `#audit` / `#audit-title` / `#audit-state` / `#audit-list`——选中 Bot 后发 `audit.list {botId}`，逐行 `textContent` 展示「时间 / action / resource → effect」；未知或不可阻断的级别在 Bot 徽标上加 `data-unavailable="true"` 并显示「（不可用）」。
+
 **空态必须保留真实文案**，例如 `No projects found`、`Code frequency` 的「无法生成此图」——空态若做成空白，会被误认为页面坏了。
 
 ## 4. 关键界面规格

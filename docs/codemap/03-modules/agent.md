@@ -15,6 +15,7 @@
 |---|---|
 | `agent/acp_client.py` | 协议：起进程、写请求、按行读、跳过噪声、按 deadline 收工、无条件回收；S10 加了会话级封装 |
 | `agent/registry.py` | 数据：内核认识哪几条通道、每条的命令数组是什么、文件在不在 |
+| `agent/gate.py` | **S16**：会话启动前把权限规则写进 opencode 配置 + 写审计；不读 Agent 类型/凭据 |
 
 ## 2. 符号表
 
@@ -36,15 +37,16 @@
 | `reap` | 146 | 关 stdin → terminate → wait(5) → kill → wait（D7） | `initialize` 的 `finally` |
 | `_read_matching` | 178 | 按行读，跳过非 JSON，按 deadline 收工；**S10 起支持 `timeout_s=None`（无限等）** | `_exchange`、`Session.prompt` |
 | `AcpSessionError` | 251 | **S10**：会话级协议错（`session/new` 失败、应答 id 对不上） | orchestrator 翻 `INTERNAL` |
-| `SessionOutcome` | 256 | **S10**：一轮 prompt 的产出（`stopReason`） | `Session.prompt` |
-| `Session` | 263 | **S10**：会话级封装（spawn + initialize + session/new；`prompt` / `cancel` / `close`） | `orchestrator._run`（经 `SessionFactory` 注入，测试换假会话） |
-| `Session.__init__(command, cwd)` | 272 | 构造即完成三步：spawn → `initialize` → `session/new`；任何一步失败就地回收进程 | `orchestrator._default_session` |
-| `Session.session_id` / `Session.cwd` | 327/333 | 只读属性（实测 `session/new` 返回 `{sessionId, configOptions}`） | 测试、日志 |
-| `Session.prompt(text, timeout_s=None)` | 337 | **阻塞到整轮结束**（实测 opencode 一轮 ~8.7s），返回 `SessionOutcome`。`timeout_s=None` = 无死线（D8：分钟级任务不设 prompt 死线） | `orchestrator._run` |
-| `Session.cancel()` | 360 | 发 `session/cancel` **通知**（不等应答）。挂起中的 prompt 以 `stopReason: "cancelled"` 回答（实测 ~0.3s） | `orchestrator.cancel` |
-| `Session.close()` | 373 | `stdin.close → reap`，幂等（`__exit__` 也调它） | `orchestrator._run` 的 `finally` |
-| `Session._send` | 384 | 写一行 JSON（带锁） | `_request`、`cancel` |
-| `Session._request` | 395 | 发请求 → `_read_matching` 按 id 收；**顺手丢弃 `session/update` 通知**（D12：只计数不转发） | `__init__`、`prompt` |
+| `ToolCall` | 256 | **S16**：工具调用的命令与终态（本地审计，不转发页面） | `Session.prompt` |
+| `SessionOutcome` | 264 | **S10**：一轮 prompt 的产出（`stopReason`） | `Session.prompt` |
+| `Session` | 275 | **S10**：会话级封装（spawn + initialize + session/new；`prompt` / `cancel` / `close`） | `orchestrator._run`（经 `SessionFactory` 注入，测试换假会话） |
+| `Session.__init__(command, cwd)` | 284 | 构造即完成三步：spawn → `initialize` → `session/new`；任何一步失败就地回收进程 | `orchestrator._default_session` |
+| `Session.session_id` / `Session.cwd` | 340/346 | 只读属性（实测 `session/new` 返回 `{sessionId, configOptions}`） | 测试、日志 |
+| `Session.prompt(text, timeout_s=None)` | 350 | **阻塞到整轮结束**（实测 opencode 一轮 ~8.7s），返回 `SessionOutcome`。`timeout_s=None` = 无死线（D8：分钟级任务不设 prompt 死线） | `orchestrator._run` |
+| `Session.cancel()` | 378 | 发 `session/cancel` **通知**（不等应答）。挂起中的 prompt 以 `stopReason: "cancelled"` 回答（实测 ~0.3s） | `orchestrator.cancel` |
+| `Session.close()` | 391 | `stdin.close → reap`，幂等（`__exit__` 也调它） | `orchestrator._run` 的 `finally` |
+| `Session._send` | 402 | 写一行 JSON（带锁） | `_request`、`cancel` |
+| `Session._request` | 413 | 发请求 → `_read_matching` 按 id 收；**顺手丢弃 `session/update` 通知**（D12：只计数不转发） | `__init__`、`prompt` |
 
 ### `agent/registry.py`（78 行）
 
@@ -122,3 +124,10 @@ token；转发等于把 02b §5 的节流问题提前拖进来。`_request` 丢�
 | `tests/test_dispatch.py` | S10：假会话下的取消两条路径（queued / running）、未知 stopReason fail-closed、cwd = 真实工作区、真集成（本机 opencode + 已配 deepseek 凭据则真跑；无 opencode / 无凭据才 skip） |
 | `tests/test_reverse_checks.py` | 注入 `S9 #1`（能力写死）/ `S9 #2`（不回收）必须让目标测试变红 |
 | `tools/acceptance/s9_agent.mjs` | 真浏览器：点检测 → 真版本与能力、命令不存在时的负例文案 |
+
+### S16 · `gate.py`
+
+| 符号 | 行 | 做什么 |
+|---|---|---|
+| `CONFIG_KEY` | 19 | `OPENCODE_CONFIG_CONTENT`——与 S14 凭据快照共用的注入口 |
+| `session_factory(permission, bot_id)` | 22 | 合并已有配置（保留 model）→ 写 gate 审计 → 返回带规则的 `SessionFactory`；不可识别 → fail-closed |

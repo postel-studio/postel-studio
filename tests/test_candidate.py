@@ -276,6 +276,7 @@ def test_candidate_diff_matches_git_shortstat(env: Env) -> None:
         task_dispatch=lambda p: p,
         task_status=lambda p: p,
         task_latest=lambda p: None,  # S15
+        audit_list=lambda p: [],  # S16
         task_cancel=lambda p: p,
         candidate_list=env.service.list,
         candidate_approve=env.service.approve,

@@ -540,6 +540,21 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_no_auto_rerun", file="test_recovery"),
         "S15 #1：任务事件回调自动调 rerunTask（推翻「只在显式点击时重跑」）",
     ),
+    # ---- S16：权限规则是安全约束，必须能证明测试真的守得住 ----
+    (
+        "postel_studio/domain/permission.py",
+        '_DENY_PUSH: Final[Rule] = ("shell", "git push *", "deny")',
+        '_DENY_PUSH: Final[Rule] = ("shell", "git push *", "allow")',
+        _target_test("test_rule_effect_is_last_match_wins", file="test_permission_gate"),
+        "S16 #1：L1/L2 的 git push 拒绝改成允许（越权放行）",
+    ),
+    (
+        "postel_studio/agent/gate.py",
+        '                "effect": "FALLBACK",',
+        '                "effect": "ALLOW",',
+        _target_test("test_unknown_permission_fails_closed", file="test_permission_gate"),
+        "S16 #2：无法识别的权限不再写 FALLBACK 审计（fail-closed 被抹掉）",
+    ),
 )
 
 

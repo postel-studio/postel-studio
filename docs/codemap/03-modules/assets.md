@@ -443,3 +443,11 @@ node tools/acceptance/s4_branches.mjs
 给禁用提示（D4：UX hint，不是安全边界；S16 才做服务端强制）。**没有「合并」按钮**。
 `#candidate[data-state]` 现在直接取 `reviewState`（local_only/…/rejected），
 不再是 S11/S12 的 `done`。订阅 `candidate.updated` 并刷新详情与收件箱。
+
+### S16 · 权限审计面板
+
+| 元素/函数 | 行 | 做什么 |
+|---|---|---|
+| `<section id="audit">` | 643 | 审计面板（只读） |
+| `badge.dataset.unavailable` | 1378 | 不可授予/不可阻断的权限级别在徽标上标「（不可用）」 |
+| `loadAudit(botId)` | 1826 | 发 `audit.list`，逐行 `textContent` 渲染（不用 `innerHTML`） |
