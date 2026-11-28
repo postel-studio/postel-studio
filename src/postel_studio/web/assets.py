@@ -263,6 +263,14 @@ INDEX_HTML: Final = """<!doctype html>
   .bot-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .bot-permission { display: inline-block; margin-right: 6px; padding: 0 6px; font-size: 11px;
     color: #8b95a7; border: 1px solid #39404f; border-radius: 999px; }
+  .bot-permission[data-unavailable="true"] { color: #ffb4ab;
+    border-color: rgb(248 81 73 / 55%); }
+  #audit { margin-top: 18px; }
+  #audit h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+  #audit-state { margin: 0; font-size: 12px; color: #8b95a7; }
+  #audit-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; }
+  #audit-list li { padding: 4px 0; border-top: 1px solid #1f2430; }
+  #audit-list li[data-effect="deny"] { color: #ffb4ab; }
   .bot-charter-summary { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
   #bots[data-state="idle"] #bot-list,
   #bots[data-state="idle"] #bot-empty,
@@ -631,6 +639,12 @@ INDEX_HTML: Final = """<!doctype html>
       <p id="bot-create-error" role="alert" hidden></p>
     </form>
   </section>
+  <!-- S16 D4/D6：权限门审计与不可用级别提示。只读，不提供改写入口。 -->
+  <section id="audit" data-state="idle" aria-live="polite">
+    <h2 id="audit-title">权限审计</h2>
+    <p id="audit-state">选择一个 Bot 查看它的权限裁决</p>
+    <ul id="audit-list"></ul>
+  </section>
   <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
        「还没有仓库」（S3 D1：空 与 没连上 必须可区分）。 -->
   <section id="repos" data-state="loading" aria-live="polite">
@@ -739,6 +753,8 @@ INDEX_HTML: Final = """<!doctype html>
   // S8：botId → permission。徽标与 charter 面板的下拉**同源**（都来自 bot.list），
   // 所以改权限成功后只需重拉一次列表，两处一起更新。
   var botPermissions = {};
+  var auditList = document.getElementById("audit-list");
+  var auditState = document.getElementById("audit-state");
   var botRequestToken = 0;        // 只认最后一次 bot.list 的回包（快速切仓库）
   var charterRequestToken = 0;    // 只认最后一次 charter 请求的回包
 
@@ -1357,6 +1373,11 @@ INDEX_HTML: Final = """<!doctype html>
       var badge = document.createElement("span");
       badge.className = "bot-permission";
       badge.textContent = String(bot.permission || "");
+      var granted = badge.textContent;
+      if (granted !== "L0" && granted !== "L1" && granted !== "L2" && granted !== "L2+") {
+        badge.dataset.unavailable = "true";
+        badge.textContent += "（不可用）";
+      }
       var summary = document.createElement("span");
       summary.className = "bot-charter-summary";
       summary.textContent = String(bot.charterSummary || "");
@@ -1799,6 +1820,47 @@ INDEX_HTML: Final = """<!doctype html>
     resetCandidate("idle", CANDIDATE_HINT);  // S11：换 Bot 就不跟上一个 Bot 的候选
     // S15：选 Bot 后也查一次（onopen 时可能还没选 Bot）——只有 interrupted 会覆盖 ready。
     restoreInterruptedTask();
+    loadAudit(botId);  // S16：选中 Bot 后读该 Bot 的权限裁决
+  }
+
+  // S16 D6：审计里出现 FALLBACK = 该 Bot 的权限在当前 Agent 上无法真正阻断 → 徽标标不可用。
+  // 用 data 驱动而不是静态文案：v1 Agent 被拒后，页面下一次读审计就会如实显示。
+  function markPermissionUnavailable(botId) {
+    var rows = botList.querySelectorAll("li[data-bot-id]");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.botId !== botId) { continue; }
+      var badge = rows[i].querySelector(".bot-permission");
+      if (badge && badge.dataset.unavailable !== "true") {
+        badge.dataset.unavailable = "true";
+        badge.textContent = badge.textContent + "（不可用）";
+      }
+    }
+  }
+
+  function loadAudit(botId) {
+    auditList.textContent = "";
+    auditState.textContent = "正在读取审计…";
+    request("audit.list", { botId: botId }, function (frame) {
+      if (!frame || frame.ok === false || !Array.isArray(frame.data)) {
+        auditState.textContent = "审计读取失败";
+        return;
+      }
+      auditList.textContent = "";
+      var hasFallback = false;
+      for (var i = 0; i < frame.data.length; i++) {
+        var row = frame.data[i] || {};
+        var li = document.createElement("li");
+        var effect = String(row.effect || "").toLowerCase();
+        if (effect === "fallback") { hasFallback = true; }
+        li.dataset.effect = effect;
+        li.textContent = String(row.at || "") + " " + String(row.action || "")
+          + " " + String(row.resource || "") + " → " + effect;
+        auditList.appendChild(li);
+      }
+      if (hasFallback) { markPermissionUnavailable(botId); }
+      auditState.textContent = frame.data.length === 0 ? "暂无审计记录"
+        : "共 " + frame.data.length + " 条";
+    });
   }
 
   // ---- 派活卡片（S10） ------------------------------------------------------

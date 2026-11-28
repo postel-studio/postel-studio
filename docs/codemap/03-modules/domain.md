@@ -17,6 +17,7 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 5 | 包标记 + 本层"无 IO"的声明 |
+| `permission.py` | 77 | S16：权限级别 → opencode 规则（纯函数，无法识别 → `None` fail-closed） |
 | `models.py` | 478 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8）/ `ulid` / `prompt_ok` / `Task` / `WorktreeLease` / 任务状态机（S10）/ 审核状态机（S13） |
 
 ## 符号表（`domain/models.py`）
@@ -43,6 +44,7 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | `bot_id(repo_id, name)` | 201 | 复合主键 `{repo_id}/{name}`——**唯一的拼接处**（06 §2.2） | `api/bots.py`、`api/worktrees.py`、测试 |
 | `permission_parse(value)` | 206 | 入站值 → `Permission`；不是那四个就 `None`（**不抛**）。`L3`/`L4` 也走 `None` | `permission_covers`、`api/bots.py:_permission` |
 | `permission_covers(held, needed)` | 222 | 阶梯包含关系（`L2` ⊨ `L1`）；任一端解析不出 → `False`（失败即收紧） | S16 的权限门、测试 |
+
 | `REF_NAME_MAX_LENGTH` | 244 | `200`：入站 ref 名的长度上限（S5 D3.1）——**S7 从 `api/repository.py` 搬来** | `ref_name_ok` |
 | `ref_name_ok(value)` | 249 | 入站 ref 名的六条形状（S5 D3.1，**纯判定不抛**）——**S7 搬来** | `api/repository._require_ref`、`api/worktrees._base_ref`、`orchestrator.dispatch`（S10 校验 `baseRef`） |
 | `PROMPT_MAX_BYTES` | 283 | **S10**：`32 * 1024`——prompt 的字节上限（02b §5） | `prompt_ok` |
@@ -60,6 +62,19 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | `review_transition_ok(current, target)` | 403 | **S13**：审核状态机纯判定（非法对 → `False`）；store 在 SQL 之前先问它 | `storage/db.py` |
 | `candidate_branch(bot_name, task_id)` | 421 | **S11**：候选分支名；ULID **随机尾部 8 位**（前缀同毫秒会撞） | `candidates.py` |
 | `Candidate` | 440 | **S11** frozen dataclass：`candidate_id` / `repo_id` / `task_id` / `bot_name` / `branch` / `base_sha` / `head_sha` / `review_state` / `reject_reason` / `created_at` | `storage/db.py`、`candidates.py`、`orchestrator.py` |
+
+### S16 · `permission.py`（纯翻译层）
+
+> 上表是 `models.py` 的四列表；本表是**另一个文件**，列数不同，故另起一节。
+
+| 符号 | 行 | 做什么 |
+|---|---|---|
+| `Rule` | 17 | `(action, resource, effect)` 规则元组 |
+| `_DENY_PUSH` / `_DENY_PUSH_BARE` / `_DENY_PUSH_C` / `_DENY_PUSH_OPTS` / `_DENY_PUSH_ABS` | 30/31/32/33/34 | 全部 push 形状（含绝对路径 + `-C`、路径变体） deny；**前导通配**允许任意二进制路径/包装器前缀 |
+| `_ALLOW_ORIGIN_PUSH` / `_ALLOW_ORIGIN_PUSH_C` | 37/38 | L2 的 origin 例外（同样前导通配，后匹配优先） |
+| `_DENY_ALL_PUSH` | 40 | 上面五条 deny 的聚合，供 L1/L2 复用 |
+| `rules_for(permission)` | 61 | 级别 → 有序规则；无法识别回 `None`（调用方 fail-closed） |
+| `_effect_of(rules, action, resource)` | 71 | 后匹配优先的判定（测试/审计用） |
 
 ## 关键决策与理由
 

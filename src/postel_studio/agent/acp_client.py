@@ -45,6 +45,29 @@ class AcpProtocolError(Exception):
     """应答不是合法的 `initialize` 结果。翻成 `INTERNAL`——说「没安装」是撒谎。"""
 
 
+class AcpPermissionsUnsupportedError(AcpProtocolError):
+    """Agent 版本不识别 v2 顶层 `permissions`（v1 用 `permission`/`bash`）。
+
+    S16 D6：会话**不启动**——`Session.__init__` 在 `session/new` 之前抛这个错，`gate`
+    接住后写 `FALLBACK` 审计；orchestrator 按 `AcpProtocolError` 翻成 `INTERNAL`。
+    """
+
+
+MIN_PERMISSIONS_MAJOR: Final = 2
+
+
+def supports_top_level_permissions(agent_version: str | None) -> bool:
+    """从 `agentInfo.version` 判断是否识别 v2 顶层 `permissions`（纯函数，fail-closed）。
+
+    实测 opencode v2.4.2 报 `"2.4.2"`；v1 报 `"1.x.x"`，只认 `permission` / `bash`。
+    版本缺失、非数字 major、major < 2 一律不支持——宁可不开会话，也不让规则静默落空。
+    """
+    if not agent_version:
+        return False
+    major = agent_version.lstrip("v").split(".", 1)[0]
+    return major.isdigit() and int(major) >= MIN_PERMISSIONS_MAJOR
+
+
 @dataclass(frozen=True)
 class Handshake:
     """一次成功握手的全部产出。**没有一项来自源码常量**（S9 D3）。"""
@@ -253,11 +276,23 @@ class AcpSessionError(Exception):
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    """S16 D4：一次工具调用的命令与终态（给本地审计用，不进网关事件）。"""
+
+    command: str
+    status: str
+
+
+@dataclass(frozen=True)
 class SessionOutcome:
-    """一次 prompt 的产出（D9 的原料）。`updates` 只作计数观测，内容**不外传**（S10 D12）。"""
+    """一次 prompt 的产出（D9 的原料）。`updates` 只作计数观测，内容**不外传**（S10 D12）。
+
+    S16：额外带本轮工具调用摘要给本地审计——这不是向页面转发流式输出。
+    """
 
     stop_reason: str
     updates: int
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 class Session:
@@ -277,6 +312,7 @@ class Session:
         timeout_s: float = DEFAULT_TIMEOUT_S,
         parent_env: Mapping[str, str] | None = None,
         client_version: str = "0",
+        require_permissions: bool = False,
     ) -> None:
         if isinstance(command, str):  # 与 initialize 同一条守卫：数组，不是字符串
             raise AcpUnavailableError("命令必须是数组，不能是字符串（05 §3.3）")
@@ -302,6 +338,7 @@ class Session:
         self._next_id = 1
         self._session_id: str | None = None
         self.updates_seen = 0
+        self._tool_calls: list[ToolCall] = []
         try:
             handshake = self._request(
                 "initialize",
@@ -312,7 +349,11 @@ class Session:
                 },
                 timeout_s,
             )
-            _parse(handshake)  # 校验结果形状（不存——能力检测是 agent.capabilities 的事）
+            info = _parse(handshake)  # 校验结果形状；agentInfo 现在还要参与 D6 探测
+            if require_permissions and not supports_top_level_permissions(info.agent_version):
+                raise AcpPermissionsUnsupportedError(
+                    f"Agent 版本 {info.agent_version!r} 不支持顶层 permissions；拒绝启动会话"
+                )
             result = self._request("session/new", {"cwd": cwd, "mcpServers": []}, timeout_s)
             payload = result.get("result")
             if not isinstance(payload, dict) or not isinstance(payload.get("sessionId"), str):
@@ -343,6 +384,7 @@ class Session:
         """
         if self._session_id is None:  # pragma: no cover - 构造失败就不可能有实例
             raise AcpSessionError("会话尚未建立")
+        self._tool_calls.clear()
         result = self._request(
             "session/prompt",
             {"sessionId": self._session_id, "prompt": [{"type": "text", "text": text}]},
@@ -355,7 +397,11 @@ class Session:
         if not isinstance(stop_reason, str) or not stop_reason:
             # fail-closed：没有 stopReason 的"成功"不可信（D9）。
             raise AcpProtocolError("prompt 应答缺 stopReason")
-        return SessionOutcome(stop_reason=stop_reason, updates=self.updates_seen)
+        return SessionOutcome(
+            stop_reason=stop_reason,
+            updates=self.updates_seen,
+            tool_calls=tuple(self._tool_calls),
+        )
 
     def cancel(self) -> None:
         """发 `session/cancel` **通知**（无 id，实测：挂起的 prompt 随即回
@@ -420,8 +466,19 @@ class Session:
                 message = _try_json(line)
                 if not isinstance(message, dict):
                     continue
-                if message.get("method") == "session/update":  # D12：计数后丢弃
+                if message.get("method") == "session/update":  # D12：不转发；仅本地计数/审计
                     self.updates_seen += 1
+                    note_params = message.get("params")
+                    update = note_params.get("update") if isinstance(note_params, dict) else None
+                    if (
+                        isinstance(update, dict)
+                        and update.get("sessionUpdate") == "tool_call_update"
+                    ):
+                        raw = update.get("rawInput")
+                        command = raw.get("command") if isinstance(raw, dict) else None
+                        status = update.get("status")
+                        if isinstance(command, str) and isinstance(status, str):
+                            self._tool_calls.append(ToolCall(command=command, status=status))
                     continue
                 if message.get("id") == request_id:
                     return message

@@ -16,14 +16,14 @@ WebSocket 网关：**认证 → 接受 → 分派 → 回帧**。
 | `SUBSCRIBE_METHOD` | 49 | **S10**：`"subscribe"`——连接级方法，**不进 `dispatch()`**（特判在 `handler` 里，D11） | `handler` |
 | `TicketRegistry` | 52 | 一次性 ticket 签发/消费 | `app.create_app` |
 | `ConnectionState` | 85 | 每连接的 `seq` 计数器（D4） | `handler` |
-| `Providers` | 94 | frozen dataclass，注入依赖（S3~S9 逐刀加的字段 + S10 的 `task_dispatch` / `task_status` / `task_cancel`，共 21 个注入字段（含 `health`）；S15 加 `task_latest`） | `app.create_app` |
+| `Providers` | 94 | frozen dataclass，注入依赖（S3~S9 逐刀加的字段 + S10 的 `task_dispatch` / `task_status` / `task_cancel`，共 22 个注入字段（含 `health`）；S15 加 `task_latest`，S16 加 `audit_list`） | `app.create_app` |
 | `EventHubLike` | 129 | **S10**：编排器 `EventHub` 的形状（Protocol）；网关不反向 import 编排器，T14 的同一纪律 | `install(..., hub=…)` |
-| `active_connection_count()` | 144 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
-| `dispatch(method, params, providers)` | 150 | 方法表（**21 个分支**（不含 `system.echo` 自检；含则为 22，可用 `grep -c '    if method == '` 核对）：S10 加了 `task.dispatch` / `task.status` / `task.cancel`，S15 加 `task.latest`） | `handler` |
-| `_topics_of(params)` | 199 | **S10**：解析 `subscribe` 的 `topics`（白名单 = `frames.KNOWN_TOPICS`，非空；不合法回 `None`） | `handler` 的 subscribe 分支 |
-| `install(app, path, tickets, providers, hub=None)` | 216 | 把 WS 路由挂到 app；**S10 加了 `hub` 参数**（缺省 `None` 时 `subscribe` 回 `UNKNOWN_METHOD`，S2~S9 行为不变） | `app.create_app` |
-| `handler` 内的 `pump()` | 250 | **S10**：每连接的事件泵 task——从队列取 evt、经 `send_lock` 发出 | `handler` |
-| `handler` 内的 `send_frame()` | 256 | **S10**：经 `send_lock` 发一帧（res 与 evt 串行化，两个协程并发写同一条 WS 不保证原子） | `handler` |
+| `active_connection_count()` | 145 | 活动连接数（**仅供测试观测**） | `test_gateway_inprocess.py` |
+| `dispatch(method, params, providers)` | 151 | 方法表（**22 个分支**（不含 `system.echo` 自检；含则为 23，可用 `grep -c '    if method == '` 核对）：S10 加了 `task.dispatch` / `task.status` / `task.cancel`，S15 加 `task.latest`，S16 加 `audit.list`） | `handler` |
+| `_topics_of(params)` | 202 | **S10**：解析 `subscribe` 的 `topics`（白名单 = `frames.KNOWN_TOPICS`，非空；不合法回 `None`） | `handler` 的 subscribe 分支 |
+| `install(app, path, tickets, providers, hub=None)` | 219 | 把 WS 路由挂到 app；**S10 加了 `hub` 参数**（缺省 `None` 时 `subscribe` 回 `UNKNOWN_METHOD`，S2~S9 行为不变） | `app.create_app` |
+| `handler` 内的 `pump()` | 253 | **S10**：每连接的事件泵 task——从队列取 evt、经 `send_lock` 发出 | `handler` |
+| `handler` 内的 `send_frame()` | 259 | **S10**：经 `send_lock` 发一帧（res 与 evt 串行化，两个协程并发写同一条 WS 不保证原子） | `handler` |
 | `_ACTIVE` / `_ACTIVE_LOCK` | 80-81 | 活动连接表（模块级） | 内部 |
 
 ## 关键决策与理由
@@ -125,10 +125,10 @@ finally:
 
 `system.health` 与 `system.echo` **共用同一个计数器**，不另造。
 
-### `dispatch()` 现在有 21 个分支（不含 `system.echo`；含则为 22），但每一行都是**转手**（S10/S15）
+### `dispatch()` 现在有 22 个分支（不含 `system.echo`；含则为 23），但每一行都是**转手**（S10/S15/S16）
 
 ```python
-# api/gateway.py:150-194（真实代码的形状，别把业务写进来）
+# api/gateway.py:151-199（真实代码的形状，别把业务写进来）
 if method == "system.echo":
     return params
 if method == "system.health":  # S2
@@ -149,6 +149,8 @@ if method in {"agent.list", "agent.capabilities"}:  # S9
     ...
 if method in {"task.dispatch", "task.status", "task.latest", "task.cancel"}:  # S10 / S15
     ...
+if method == "audit.list":  # S16
+    ...
 if method in {"candidate.list", "candidate.approve", "candidate.reject"}:  # S11 / S13
     ...
 raise frames.FrameError(frames.UNKNOWN_METHOD, ...)
@@ -157,7 +159,7 @@ raise frames.FrameError(frames.UNKNOWN_METHOD, ...)
 （真实代码里每组是**独立的 `if`**、各做一次 `providers.X(params)` 转手；这里压成组只为读得动。）
 
 `if` 链已经远超当初「6~8 个就换 dict」的阈值，但 S10 的裁决仍然是「本刀只加三行、
-不顺手重构」（预算纪律）：21 行**每行只做一次字段访问**，重构的收益是省十几行，
+不顺手重构」（预算纪律）：22 行**每行只做一次字段访问**，重构的收益是省十几行，
 风险是动到全部既有方法的回归面。留给真正需要方法元数据（权限表、参数 schema）的切片。
 
 ### `subscribe` 是连接级方法，不进 `dispatch()`（S10 D11）

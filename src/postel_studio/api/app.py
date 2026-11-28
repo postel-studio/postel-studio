@@ -147,6 +147,7 @@ def create_app(
             task_dispatch=orchestrator.dispatch,  # S10
             task_status=orchestrator.status,  # S10
             task_latest=orchestrator.latest,  # S15：重连恢复中断态
+            audit_list=orchestrator.audit_list,  # S16
             task_cancel=orchestrator.cancel,  # S10
             candidate_list=candidates.list,  # S11
             candidate_approve=candidates.approve,  # S13

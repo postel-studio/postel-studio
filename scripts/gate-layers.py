@@ -40,6 +40,14 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "postel_studio.gitops",
         "postel_studio.storage",
     ),
+    # S16：权限阶梯的纯翻译层，与 models.py 同为 L0，不许 IO / 上层。
+    "domain/permission.py": (
+        "postel_studio.api",
+        "postel_studio.web",
+        "postel_studio.gitops",
+        "postel_studio.storage",
+        "postel_studio.agent",
+    ),
     "gitops/repo.py": (
         "postel_studio.api",
         "postel_studio.web",
@@ -71,6 +79,8 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "postel_studio.domain",
         "postel_studio.gitops",
     ),
+    # S16：执行前裁决层（L1）——只读 L0 的 acp_client / storage / domain，不碰 api / web。
+    "agent/gate.py": ("postel_studio.api", "postel_studio.web"),
     # ---- L1：纯数据变换，不许 IO / 框架 ----
     "api/frames.py": (
         "postel_studio.api.app",

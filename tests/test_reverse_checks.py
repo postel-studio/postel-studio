@@ -540,6 +540,51 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_no_auto_rerun", file="test_recovery"),
         "S15 #1：任务事件回调自动调 rerunTask（推翻「只在显式点击时重跑」）",
     ),
+    # ---- S16：权限规则是安全约束，必须能证明测试真的守得住 ----
+    (
+        "postel_studio/domain/permission.py",
+        '_DENY_PUSH: Final[Rule] = ("shell", "*git push *", "deny")',
+        '_DENY_PUSH: Final[Rule] = ("shell", "*git push *", "allow")',
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #1：裸 git push 拒绝改成允许（越权放行）",
+    ),
+    (
+        "postel_studio/domain/permission.py",
+        '_DENY_PUSH_C: Final[Rule] = ("shell", "*git -C * push*", "deny")',
+        '_DENY_PUSH_C: Final[Rule] = ("shell", "*git -C * push*", "allow")',
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #3：git -C <repo> push 拒绝改成允许（审查实测的 fail-open 回放）",
+    ),
+    (
+        "postel_studio/domain/permission.py",
+        "    _DENY_PUSH_OPTS,\n    _DENY_PUSH_ABS,",
+        "    # injected: drop path variants",
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #4：丢掉 git 路径变体（-c/绝对路径）的拒绝规则",
+    ),
+    (
+        "postel_studio/agent/gate.py",
+        '                "effect": "FALLBACK",',
+        '                "effect": "ALLOW",',
+        _target_test("test_unknown_permission_fails_closed", file="test_permission_gate"),
+        "S16 #2：无法识别的权限不再写 FALLBACK 审计（fail-closed 被抹掉）",
+    ),
+    (
+        "postel_studio/agent/acp_client.py",
+        "    return major.isdigit() and int(major) >= MIN_PERMISSIONS_MAJOR",
+        "    return True  # injected: every Agent is assumed to support permissions",
+        _target_test(
+            "test_v1_agent_never_starts_session_and_audits_fallback", file="test_permission_gate"
+        ),
+        "S16 #5：v1 Agent 的 permissions 探测被取消（v1 拿到无守卫会话）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        "      if (hasFallback) { markPermissionUnavailable(botId); }",
+        "      /* injected: FALLBACK 不再标不可用 */",
+        _target_test("test_page_marks_unavailable_level", file="test_permission_gate"),
+        "S16 #6：FALLBACK 审计不再驱动页面「不可用」徽标",
+    ),
 )
 
 
@@ -669,6 +714,31 @@ COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], .
         ),
         _target_test("test_interrupted_cannot_become_succeeded", file="test_recovery"),
         "S15 #2（组合）：终态守卫拆掉 + interrupted→succeeded 放行 → 中断任务被伪装成成功",
+    ),
+    # ---- S16 #7（组合）：绝对路径 + -C 由两条前导通配共同兜住，单独拆一条测试仍绿 ----
+    # 回放 review round 2 的 fail-open：`git -C`/`git * push` 退回无前导匹配后，
+    # `/usr/bin/git -C <repo> push ...` 两种规则都不命中，`_DENY_PUSH_ABS` 的
+    # `*/git * push *` 也在同一注入里被拆掉，测试必须红。
+    (
+        (
+            (
+                "postel_studio/domain/permission.py",
+                '_DENY_PUSH_C: Final[Rule] = ("shell", "*git -C * push*", "deny")',
+                '_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "deny")',
+            ),
+            (
+                "postel_studio/domain/permission.py",
+                '_DENY_PUSH_OPTS: Final[Rule] = ("shell", "*git * push *", "deny")',
+                '_DENY_PUSH_OPTS: Final[Rule] = ("shell", "git * push *", "deny")',
+            ),
+            (
+                "postel_studio/domain/permission.py",
+                '_DENY_PUSH_ABS: Final[Rule] = ("shell", "*/git * push *", "deny")',
+                '_DENY_PUSH_ABS: Final[Rule] = ("shell", "no-such-command-nope", "deny")',
+            ),
+        ),
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #7（组合）：绝对路径 + -C 的三条前导通配退回旧形状 → 审查实测的 fail-open 复现",
     ),
 )
 

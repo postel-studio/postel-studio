@@ -20,6 +20,7 @@ import time
 from typing import Final, Protocol
 
 from postel_studio.agent import acp_client
+from postel_studio.agent import gate as permission_gate
 from postel_studio.agent import registry as agent_registry
 from postel_studio.api import frames
 from postel_studio.domain.models import (
@@ -34,6 +35,7 @@ from postel_studio.domain.models import (
     ref_name_ok,
     ulid,
 )
+from postel_studio.storage import paths as state_paths
 from postel_studio.storage.db import BotStore, LeaseStore, TaskStore
 
 logger = logging.getLogger(__name__)
@@ -170,6 +172,7 @@ class Orchestrator:
         self._candidates = candidates
         self._hub = hub
         self._factory: SessionFactory = session_factory or self._default_session
+        self._injected_factory = session_factory is not None  # S16：假会话不注入权限规则
         self._sessions: dict[str, acp_client.Session] = {}  # task_id → 活会话（cancel 用）
         self._sessions_lock = threading.Lock()
         self._workers: set[threading.Thread] = set()  # 活着的 worker（wait_idle / S15 收场用）
@@ -249,6 +252,13 @@ class Orchestrator:
         task = self._tasks.latest_for_bot(bot.bot_id)
         return None if task is None else self._payload(task)
 
+    def audit_list(self, params: dict[str, object]) -> list[dict[str, object]]:
+        """S16 D4：`audit.list`——只读审计行（可选 `botId` 过滤）；不读 key / prompt。"""
+        bot_id = params.get("botId")
+        if bot_id is not None and not isinstance(bot_id, str):
+            raise self._fail(INVALID_PARAMS, MSG_BOT_ID_INVALID)
+        return state_paths.read_audit(bot_id=bot_id)
+
     def cancel(self, params: dict[str, object]) -> dict[str, object]:
         """`task.cancel`（07 §2.2）。queued 直接迁移；running 发会话取消，迁移交给 worker
         （实测：prompt 应答在 ~0.3s 内带 `stopReason: "cancelled"` 回来）。终态 → `INVALID_PARAMS`。
@@ -305,7 +315,16 @@ class Orchestrator:
             self._publish(running)
             base_sha = self._candidates.snapshot_base(path)  # S11 D2：会话之前，复用也不串任务
             channel = self._channel_for(task.bot_id)
-            session = self._factory(channel.command, path)
+            bot = self._bots.get(task.bot_id)
+            if bot is None:
+                raise self._fail(INTERNAL, MSG_BOT_NOT_FOUND)
+            if self._injected_factory:
+                session = self._factory(channel.command, path)
+            else:
+                # S16 D1：执行前把权限规则写进会话配置；不可识别 → fail-closed。
+                session = permission_gate.session_factory(bot.permission, bot.bot_id)(
+                    channel.command, path
+                )
             with self._sessions_lock:
                 self._sessions[task.task_id] = session
                 requested = task.task_id in self._cancel_requested
@@ -313,6 +332,19 @@ class Orchestrator:
             if requested:  # cancel 在会话建好前到达（D10 的窗口收口）
                 session.cancel()
             outcome = session.prompt(task.prompt)
+            if not self._injected_factory:
+                for call in outcome.tool_calls:
+                    state_paths.append_audit(
+                        {
+                            "at": time.time(),
+                            "botId": task.bot_id,
+                            "permission": bot.permission,
+                            "action": "shell",
+                            "resource": call.command,
+                            "effect": "DENY" if call.status == "failed" else "ALLOW",
+                            "source": "agent",
+                        }
+                    )
             if outcome.stop_reason == "end_turn":
                 final = self._succeed_with_candidate(task, repo_id, path, base_sha)
             else:
