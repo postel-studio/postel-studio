@@ -21,8 +21,8 @@ S17 · 上下文注入的**只读**装配层：实时读取仓库里的 `AGENTS.
 | `_PERMISSION_LINE` | 32 | 结构化权限上限声明的正则；**先试 `L2+` 再试 `L2`**（spec 探针测过顺序坑） |
 | `ContextSource` | 39 | 一条来源：`path` / `level` / `bytes` / `text` / `truncated` / `injected_bytes` / `skipped` |
 | `InjectionPlan` | 65 | 一次注入的完整结果：`sources` / `total_bytes` / `omitted_bytes` / `conflict` / `effective_permission` / `prompt_text` |
-| `ContextSource.as_row` | 47 | 预览载荷里的一条来源（07 §2.6 字段） |
-| `InjectionPlan.as_row` | 73 | `memory.context.preview` 的返回体 |
+| `ContextSource.as_row` | 50 | 预览载荷里的一条来源（07 §2.6 字段） |
+| `InjectionPlan.as_row` | 75 | `memory.context.preview` 的返回体 |
 | `declared_permission(text)` | 85 | 纯函数：取最严格的结构化权限声明；无 / L3/L4 → `None` |
 | `_read_source` | 100 | 单文件只读（UTF-8 解码失败记 `skipped`） |
 | `_safe_source` | 113 | **05 §7**：符号链接 / 解析后越出 repo 根的来源不读内容，只记 `skipped`，绝不进 prompt |
