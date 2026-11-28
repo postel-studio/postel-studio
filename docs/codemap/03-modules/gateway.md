@@ -125,10 +125,10 @@ finally:
 
 `system.health` 与 `system.echo` **共用同一个计数器**，不另造。
 
-### `dispatch()` 现在有 22 个分支（不含 `system.echo`；含则为 23），但每一行都是**转手**（S10/S15/S16）
+### `dispatch()` 现在有 23 个分支（不含 `system.echo`；含则为 24），但每一行都是**转手**（S10/S15/S16）
 
 ```python
-# api/gateway.py:151-199（真实代码的形状，别把业务写进来）
+# api/gateway.py:152-202（真实代码的形状，别把业务写进来）
 if method == "system.echo":
     return params
 if method == "system.health":  # S2
@@ -159,7 +159,7 @@ raise frames.FrameError(frames.UNKNOWN_METHOD, ...)
 （真实代码里每组是**独立的 `if`**、各做一次 `providers.X(params)` 转手；这里压成组只为读得动。）
 
 `if` 链已经远超当初「6~8 个就换 dict」的阈值，但 S10 的裁决仍然是「本刀只加三行、
-不顺手重构」（预算纪律）：22 行**每行只做一次字段访问**，重构的收益是省十几行，
+不顺手重构」（预算纪律）：23 行**每行只做一次字段访问**，重构的收益是省十几行，
 风险是动到全部既有方法的回归面。留给真正需要方法元数据（权限表、参数 schema）的切片。
 
 ### `subscribe` 是连接级方法，不进 `dispatch()`（S10 D11）
