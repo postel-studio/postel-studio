@@ -22,8 +22,8 @@
 | `_COLUMNS` | 149 | 读路径的列清单（**只写一份**，四处 SELECT 共用） | `list` / `get` / `upsert` |
 | `state_db_path()` | 152 | `state.db` 的路径（不创建） | `RepoStore.path`、测试 |
 | `_connect(path)` | 157 | 打开连接 + `row_factory` + `foreign_keys=ON` + `journal_mode=WAL` | `open_state_db` |
-| `migrate(conn, *, path_for_chmod)` | 170 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600` | `open_state_db` |
-| `open_state_db(path=None)` | 185 | 建目录 → 打开 → 迁移；失败关连接再抛 | `RepoStore` |
+| `migrate(conn, *, path_for_chmod)` | 170 | 按 `PRAGMA user_version` 逐版升级，每版一个事务；顺手收紧 `0600`；**S17 幂等修复**：对象已存在但版本落后时推进版本继续（SIGKILL 落在 executescript 与版本写入之间的 flake） | `open_state_db` |
+| `open_state_db(path=None)` | 202 | 建目录 → 打开 → 迁移；失败关连接再抛 | `RepoStore` |
 | `RepoStore` | 201 | `repos` 表的读写门面（带锁） | `api/app.py`、`api/repository.py` |
 | `RepoStore.__init__(path=None)` | 209 | 打开库；`path=None` 表示用状态根 | `app.create_app` |
 | `RepoStore.path`（property） | 215 | 这份 store 打开的库文件路径（只读） | 测试 |

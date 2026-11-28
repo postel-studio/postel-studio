@@ -1018,7 +1018,24 @@ rejected），修正后 14/14。**通用**：验收脚本的 `✓` 也要反向�
 | U22 | **opencode 版本不识别顶层 `permissions`（v1 用 `permission`/`bash`）**：规则不生效 = 越权可能落空 | **已实现（S16 D6 + review must-fix 2）**：`Session.__init__` 在 `initialize` 之后、`session/new` **之前**用 `supports_top_level_permissions(agentInfo.version)` 探测（major≥2 才认，缺失/异常一律不认）；v1 抛 `AcpPermissionsUnsupportedError`（`AcpProtocolError` 子类，orchestrator 仍翻 `failed` + `INTERNAL`，不新增错误码），`gate` 接住写 `FALLBACK` 审计（`resource=agent-permissions-unsupported`），UI 的 `loadAudit` 见 FALLBACK 就把该 Bot 徽标标「（不可用）」。假 ACP `v1` 模式断言 `session/new` 从未发出；反向注入 S16 #5/#6 守住探测与徽标 | ✅ **已收口（fail-closed，不静默放行）** | — |
 | U21 | **真实 opencode 集成用例依赖外部免费额度**：`tests/test_dispatch.py::test_real_integration_creates_file_and_dirty_worktree` 用真 `opencode acp`（默认 `opencode/big-pickle`）。额度耗尽时 prompt **既不回终态帧也不报错**（日志 `AI_APICallError: Free usage limit reached`），任务永远停在 `running` → 180s 超时；另一形态是终态 `failed/INTERNAL`（维护者独立复跑 0/3）。默认免费模型账号级限额，换免费模型无效。 | **✅ 已收口（S13 收尾）**：测试注入 `session_factory`，用 `XDG_DATA_HOME` 指回本机真实 opencode 凭据库、`OPENCODE_CONFIG_CONTENT` 指定付费模型 `deepseek/deepseek-flash`（凭据只由 opencode 自己读，测试不碰 key），真跑真绿——3/3 独立复跑全 `passed`（2~3s）。无 opencode / 无 deepseek 凭据才 skip；两种失败形态（超时、`failed/INTERNAL`）都只在拿到明确限流日志证据时才跳过，泛化 `INTERNAL` 照常 fail。产品代码零改动（无 prompt 超时，S10 D8 不变） | ✅ **已收口（S13 收尾）**；若日后 deepseek 凭据失效，测试会明确 skip 而非假绿 | — |
 
+
+| U23 | **SIGKILL 落在 migration 的 `executescript` 与 `user_version` 写入之间 → 下一任连接撞 `table candidates already exists`**：PR #32 CI 的 `test_real_kernel_restart_interrupts_half_done_task` 确定性失败（本地全量偶发）。`executescript` 隐式 commit，`with conn` 保不住这一步原子性；表/列已建但版本还停在旧值。 | **已修（S17）**：`storage/db.py::migrate` 捕获「table already exists / duplicate column name / duplicate index」三类「对象已在」错误，若 `user_version >= version`（说明这一步其实做完了）就推进版本继续，其它错误照常抛；`tests/test_recovery.py::test_migration_is_idempotent_when_version_lags` 确定性复现（建库 → 版本退回 0 → 重开必须幂等成功），反向注入 S17 #4 守住 | ✅ **已收口（幂等迁移）** | — |
+
 ---
+
+### S17 ❌ `request()` 的回调是 `(err, data)`，不是 `(frame)`（已踩到）
+
+`assets.py` 的 `request(method, params, done)` 在 `onMessage` 里成功时调 `done(null, result.data)`、
+失败时 `done(code, null)`（07 §1.3：第一参数是错误码，不读 message）。
+S16 的 `loadAudit` 把回调写成 `function (frame) { frame.ok / frame.data … }`——**两个字段都取不到**，
+审计面板实际上永远显示「审计读取失败」。S17 的 `loadContext` 最初照抄了这个形状，真浏览器
+验收里 context 面板一直停在 `error`（`s17_context.mjs` 的第 2 步抓到），改成
+`function (err, data) { if (err || !data) … }` 后 6/6 CHECK 全绿。
+
+**别再踩**：写一个走 `request()` 的新面板，先去看 `onMessage` 的 `done(null, result.data)` 那一行，
+不要照抄 `loadAudit`。S16 的 `loadAudit` 是本刀之外的遗留 bug（本刀不顺手改，避免扩大 diff；
+下一个人读到这段请修它）。静态 DOM 契约测试只能守 id 与 `innerHTML` 零使用，**守不住回调形状**
+——真浏览器脚本才能抓到。
 
 ## 一条通用教训（如果只能记住一句）
 

@@ -356,3 +356,39 @@ def test_real_kernel_restart_interrupts_half_done_task(tmp_path: Path) -> None:
         assert isinstance(running_after, dict) and running_after.get("state") == "interrupted"
         assert isinstance(finished_after, dict) and finished_after.get("state") == "succeeded"
         assert finished_after.get("candidateId") == "cand-ok"
+
+
+def test_migration_is_idempotent_when_version_lags(tmp_path: Path) -> None:
+    """CI 复现的 `table candidates already exists` flake：版本落后但对象已建时必须幂等。
+
+    内核 SIGKILL 落在 migration 的 executescript（隐式 commit）与 user_version 写入之间，
+    会让下一任连接看到「表都在、版本号还是旧的」。按旧版本重跑整段 migration 就会撞
+    「already exists / duplicate column name」。S17 的幂等修复让这一种变成跳过重复劳动。
+    """
+    target = tmp_path / "lagging.db"
+    conn = open_state_db(target)  # 完整建库
+    conn.close()
+
+    # 模拟 SIGKILL 的落点：把 user_version 退回 0，但表/列全留着。
+    conn = open_state_db(target)
+    conn.execute("PRAGMA user_version=0")
+    conn.close()
+
+    error: BaseException | None = None
+    try:
+        reopened = open_state_db(target)  # 必须幂等成功
+    except BaseException as exc:  # 红在断言上，而不是未捕获异常（反向注入的纪律）
+        error = exc
+        reopened = None
+    idempotent_ok = error is None
+    assert idempotent_ok, "幂等迁移不该抛错（SIGKILL 后重开库必须成功）"
+    assert reopened is not None
+    try:
+        version = int(reopened.execute("PRAGMA user_version").fetchone()[0])
+        assert version == SCHEMA_VERSION
+        tables = {
+            row[0] for row in reopened.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert {"repos", "bots", "tasks", "candidates"} <= tables
+    finally:
+        reopened.close()
