@@ -165,7 +165,7 @@ function fail() {            // 唯一的「向下」出口：三态里只有已
 `setState()` 里统一 `content.classList.toggle("stale", state !== "connected")` ——
 **一个出口，不会只加不删**。
 
-### 重连流程（`assets.py:218`）
+### 重连流程（`assets.py:2422`）
 
 ```
 点按钮 → setState("reconnecting","重连中") → 等 RECONNECT_DELAY_MS

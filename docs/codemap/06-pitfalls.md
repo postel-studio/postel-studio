@@ -177,7 +177,7 @@ S2 审核时实测：变红 5~22ms、按钮出现、灰化生效、换端口时�
 **原因**：发帧时发现对端已没，uvicorn 抛的是 `uvicorn.protocols.utils.ClientDisconnected`；
 Starlette 的 `WebSocketDisconnect` 是**另一个**类型（实测 `issubclass` 为 `False`）。
 
-**已修**：`except (WebSocketDisconnect, ClientDisconnect)`（`gateway.py:115`）。
+**已修**：`except (WebSocketDisconnect, ClientDisconnect)`（`gateway.py:271`）。
 
 **别再踩**：**别把它当冗余删掉。**
 
@@ -509,7 +509,7 @@ c.execute(SQL, ("bbb", "/p", "https://u", "main", 2.0))
 **已修**：`#repos` 有四个 `data-state`（`loading` / `reconnecting` / `ready` / `disconnected`），
 **初始值就是 `loading`**；只有 `ready` 时才显示列表与空态，其它三种状态显示一句状态文案
 （「已断开：内核没有连着，仓库列表未知」）并隐藏 `#repo-list` 与 `#repo-empty`
-（`assets.py:217` 的 `setRepoState()`）。
+（`assets.py:889` 的 `setRepoState()`）。
 
 **别再踩**：
 - 空态（「还没有绑定仓库」）**只能**在"真的拿到了一个数组"之后出现。

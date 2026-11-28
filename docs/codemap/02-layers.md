@@ -177,7 +177,7 @@ graph TD
 | 位置 | 理由 | 是否伪善 |
 |---|---|---|
 | `__init__.py:33` | **懒加载**：CLI 的 `version`/`--help` 不想拖起 fastapi | 正当 |
-| `paths.py:164` | **避免重复定义版本号**：`__version__` 只在包根定义一次；模块级 import 会成环（包根 → server → app → ... → paths） | 正当 |
+| `paths.py:215` | **避免重复定义版本号**：`__version__` 只在包根定义一次；模块级 import 会成环（包根 → server → app → ... → paths） | 正当 |
 | ~~`gateway.py:88`~~ | ~~「避免 import 环」~~ S2 初版。**环是真的，但不该绕开**：用 `Providers` 注入消除 | **已修**（R3） |
 
 **判断标准**：函数内 import 只有在「为了性能/懒加载」或「为了单一事实源」时才正当。
@@ -190,7 +190,7 @@ graph TD
 作为 `Providers` 注入：
 
 ```python
-# app.py:78
+# app.py:128
 gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 ```
 
