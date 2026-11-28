@@ -1020,20 +1020,6 @@ rejected），修正后 14/14。**通用**：验收脚本的 `✓` 也要反向�
 
 ---
 
-### S17 ❌ `request()` 的回调是 `(err, data)`，不是 `(frame)`（已踩到）
-
-`assets.py` 的 `request(method, params, done)` 在 `onMessage` 里成功时调 `done(null, result.data)`、
-失败时 `done(code, null)`（07 §1.3：第一参数是错误码，不读 message）。
-S16 的 `loadAudit` 把回调写成 `function (frame) { frame.ok / frame.data … }`——**两个字段都取不到**，
-审计面板实际上永远显示「审计读取失败」。S17 的 `loadContext` 最初照抄了这个形状，真浏览器
-验收里 context 面板一直停在 `error`（`s17_context.mjs` 的第 2 步抓到），改成
-`function (err, data) { if (err || !data) … }` 后 6/6 CHECK 全绿。
-
-**别再踩**：写一个走 `request()` 的新面板，先去看 `onMessage` 的 `done(null, result.data)` 那一行，
-不要照抄 `loadAudit`。S16 的 `loadAudit` 是本刀之外的遗留 bug（本刀不顺手改，避免扩大 diff；
-下一个人读到这段请修它）。静态 DOM 契约测试只能守 id 与 `innerHTML` 零使用，**守不住回调形状**
-——真浏览器脚本才能抓到。
-
 ## 一条通用教训（如果只能记住一句）
 
 > **「让它看起来对」比「让它对」容易得多。**
