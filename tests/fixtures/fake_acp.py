@@ -12,7 +12,11 @@
 | `garbage` | 先打 banner / 非 JSON / 空行，再打合法响应 |
 | `silent` | 读到请求后永不应答，也不退出（喂超时路径） |
 | `no-version` | 回一个没有 `protocolVersion` 的 `result` |
+| `v1` | 回 v1 风格的版本 `1.9.9`（S16 D6：顶层 `permissions` 不被识别） |
 | `exit-early` | 读到请求后**一个字节都不写**就退出（喂「应答前关闭 stdout」路径） |
+
+S16 的 `v1` 模式还会把收到的每个方法名追加到 `--logfile=PATH`；测试据此断言
+`session/new` **从未被调用**（会话真的没启动，而不只是任务标成 failed）。
 """
 
 from __future__ import annotations
@@ -44,6 +48,16 @@ NO_VERSION: dict[str, object] = {
     "result": {"agentCapabilities": {}, "agentInfo": {"name": "Fake Agent"}},
 }
 
+V1_RESPONSE: dict[str, object] = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "protocolVersion": 1,
+        "agentCapabilities": {"loadSession": True},
+        "agentInfo": {"name": "Fake Agent", "version": "1.9.9"},
+    },
+}
+
 
 def _flag(name: str, argv: list[str]) -> str | None:
     prefix = f"--{name}="
@@ -57,12 +71,36 @@ def main(argv: list[str]) -> int:
     mode = argv[1] if len(argv) > 1 else "ok"
     pidfile = _flag("pidfile", argv[2:])
     envfile = _flag("envfile", argv[2:])
+    logfile = _flag("logfile", argv[2:])
     if pidfile:
         with open(pidfile, "w", encoding="utf-8") as handle:
             handle.write(str(os.getpid()))
     if envfile:
         with open(envfile, "w", encoding="utf-8") as handle:
             json.dump(dict(os.environ), handle)
+
+    # v1 模式：逐行记录请求的方法名，让测试能证明 session/new 根本没发出来。
+    if mode == "v1":
+        first = json.loads(sys.stdin.readline())
+        with open(str(logfile), "w", encoding="utf-8") as handle:
+            handle.write(str(first.get("method")) + "\n")
+        response = dict(V1_RESPONSE)
+        response["id"] = first.get("id")
+        print(json.dumps(response), flush=True)
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            with open(str(logfile), "a", encoding="utf-8") as handle:
+                handle.write(str(request.get("method")) + "\n")
+            reply = dict(response)
+            reply["id"] = request.get("id")
+            print(json.dumps(reply), flush=True)
+        return 0
 
     # 读一行请求（不解析：这个脚本只关心"什么时候回"）。
     sys.stdin.readline()

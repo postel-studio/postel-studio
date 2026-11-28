@@ -28,18 +28,23 @@ def session_factory(
     一项——这样凭据仍由 opencode 自己的 db 读取，规则从不在源码里硬编码。
     """
     rules = rules_for(permission)
-    if rules is None:  # D6：无法阻断 → 不启动会话
+
+    def fallback(reason: str) -> None:
+        """D6：任何无法真正阻断的路径都留一条 FALLBACK 审计，再拒绝会话。"""
         paths.append_audit(
             {
                 "at": time.time(),
                 "botId": bot_id,
                 "permission": str(permission),
                 "action": "*",
-                "resource": "*",
+                "resource": reason,
                 "effect": "FALLBACK",
                 "source": "gate",
             }
         )
+
+    if rules is None:  # D6：无法阻断 → 不启动会话
+        fallback("unknown-permission")
         raise ValueError(f"无法识别的权限级别 {permission!r}：按只读 fail-closed 处理")
 
     payload = os.environ.get(CONFIG_KEY, "")
@@ -70,6 +75,11 @@ def session_factory(
     env[CONFIG_KEY] = json.dumps(config, ensure_ascii=False, sort_keys=True)
 
     def factory(command: Sequence[str], cwd: str) -> acp_client.Session:
-        return acp_client.Session(command, cwd, parent_env=env)
+        try:
+            # D6：握手后、session/new 之前探测版本；v1 静默忽略 permissions → 不开会话。
+            return acp_client.Session(command, cwd, parent_env=env, require_permissions=True)
+        except acp_client.AcpPermissionsUnsupportedError:
+            fallback("agent-permissions-unsupported")
+            raise
 
     return factory

@@ -1,6 +1,6 @@
 # 03 · assets — `src/postel_studio/web/assets.py`
 
-> 层 L4 · 2104 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
+> 层 L4 · 2466 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
 > ⚠️ **本模块是 Code Map 里覆盖最薄的一块**：JS 的 DOM 行为没有自动化测试。见 §测试。
 
 ## 职责
@@ -449,5 +449,6 @@ node tools/acceptance/s4_branches.mjs
 | 元素/函数 | 行 | 做什么 |
 |---|---|---|
 | `<section id="audit">` | 643 | 审计面板（只读） |
-| `badge.dataset.unavailable` | 1378 | 不可授予/不可阻断的权限级别在徽标上标「（不可用）」 |
-| `loadAudit(botId)` | 1826 | 发 `audit.list`，逐行 `textContent` 渲染（不用 `innerHTML`） |
+| `badge.dataset.unavailable` | 1392 | 不可授予/不可阻断的权限级别在徽标上标「（不可用）」 |
+| `markPermissionUnavailable(botId)` | 1828 | **D6**：审计里的 `FALLBACK` 把该 Bot 徽标标「（不可用）」 |
+| `loadAudit(botId)` | 1840 | 发 `audit.list`，逐行 `textContent` 渲染（不用 `innerHTML`）；见 FALLBACK → 标不可用 |

@@ -45,6 +45,29 @@ class AcpProtocolError(Exception):
     """应答不是合法的 `initialize` 结果。翻成 `INTERNAL`——说「没安装」是撒谎。"""
 
 
+class AcpPermissionsUnsupportedError(AcpProtocolError):
+    """Agent 版本不识别 v2 顶层 `permissions`（v1 用 `permission`/`bash`）。
+
+    S16 D6：会话**不启动**——`Session.__init__` 在 `session/new` 之前抛这个错，`gate`
+    接住后写 `FALLBACK` 审计；orchestrator 按 `AcpProtocolError` 翻成 `INTERNAL`。
+    """
+
+
+MIN_PERMISSIONS_MAJOR: Final = 2
+
+
+def supports_top_level_permissions(agent_version: str | None) -> bool:
+    """从 `agentInfo.version` 判断是否识别 v2 顶层 `permissions`（纯函数，fail-closed）。
+
+    实测 opencode v2.4.2 报 `"2.4.2"`；v1 报 `"1.x.x"`，只认 `permission` / `bash`。
+    版本缺失、非数字 major、major < 2 一律不支持——宁可不开会话，也不让规则静默落空。
+    """
+    if not agent_version:
+        return False
+    major = agent_version.lstrip("v").split(".", 1)[0]
+    return major.isdigit() and int(major) >= MIN_PERMISSIONS_MAJOR
+
+
 @dataclass(frozen=True)
 class Handshake:
     """一次成功握手的全部产出。**没有一项来自源码常量**（S9 D3）。"""
@@ -289,6 +312,7 @@ class Session:
         timeout_s: float = DEFAULT_TIMEOUT_S,
         parent_env: Mapping[str, str] | None = None,
         client_version: str = "0",
+        require_permissions: bool = False,
     ) -> None:
         if isinstance(command, str):  # 与 initialize 同一条守卫：数组，不是字符串
             raise AcpUnavailableError("命令必须是数组，不能是字符串（05 §3.3）")
@@ -325,7 +349,11 @@ class Session:
                 },
                 timeout_s,
             )
-            _parse(handshake)  # 校验结果形状（不存——能力检测是 agent.capabilities 的事）
+            info = _parse(handshake)  # 校验结果形状；agentInfo 现在还要参与 D6 探测
+            if require_permissions and not supports_top_level_permissions(info.agent_version):
+                raise AcpPermissionsUnsupportedError(
+                    f"Agent 版本 {info.agent_version!r} 不支持顶层 permissions；拒绝启动会话"
+                )
             result = self._request("session/new", {"cwd": cwd, "mcpServers": []}, timeout_s)
             payload = result.get("result")
             if not isinstance(payload, dict) or not isinstance(payload.get("sessionId"), str):

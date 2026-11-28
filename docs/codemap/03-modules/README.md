@@ -11,10 +11,10 @@
 | L0 | [domain](domain.md) | `src/postel_studio/domain/models.py` | 478 | `Repo` / `Bot` / `Task` 实体、origin 归一化、`repo_id`、权限阶梯、任务状态机与 ULID（S8/S10）（**无 IO**） |
 | L0 | [gitops](gitops.md) | `src/postel_studio/gitops/repo.py` | 500 | git **只读**探测（子进程，含 S4 分支列表 + S5 diff） |
 | L0 | [gitops](gitops.md) | `src/postel_studio/gitops/worktrees.py` | 269 | git **写**操作（S7）：`worktree add` / `remove` / `prune`——写面只有这一处 |
-| L0 | [agent](agent.md) | `src/postel_studio/agent/acp_client.py` | 456 | ACP over stdio（S9 握手 + S10 会话）：`initialize` / `session/new` / `prompt` / `cancel`、跳过噪声行、无条件回收 |
+| L0 | [agent](agent.md) | `src/postel_studio/agent/acp_client.py` | 484 | ACP over stdio（S9 握手 + S10 会话）：`initialize` / `session/new` / `prompt` / `cancel`、跳过噪声行、无条件回收 |
 | L0 | [agent](agent.md) | `src/postel_studio/agent/registry.py` | 78 | 通道登记（S9）：`acp-stdio` 一条，命令是字面数组 + 进程级覆盖 |
-| L0 | [domain](domain.md) | `src/postel_studio/domain/permission.py` | 49 | S16：权限级别 → opencode 工具规则（纯函数，fail-closed） |
-| L1 | [agent](agent.md) | `src/postel_studio/agent/gate.py` | 75 | S16：会话启动前注入权限规则 + 写审计；不读 Agent 类型/凭据 |
+| L0 | [domain](domain.md) | `src/postel_studio/domain/permission.py` | 73 | S16：权限级别 → opencode 工具规则（纯函数，fail-closed） |
+| L1 | [agent](agent.md) | `src/postel_studio/agent/gate.py` | 85 | S16：会话启动前注入权限规则 + 写审计；不读 Agent 类型/凭据 |
 | L0 | [storage-db](storage-db.md) | `src/postel_studio/storage/db.py` | 863 | `state.db`、schema 迁移（v6）、`RepoStore` / `BotStore` / `TaskStore` / `LeaseStore` / `CandidateStore` |
 | L2 | [server](server.md) | `src/postel_studio/api/server.py` | 261 | 进程生命周期、信号、日志 |
 | L3 | [app](app.md) | `src/postel_studio/api/app.py` | 158 | 路由表（3 个 HTTP 路由 + 网关挂载）+ 构造 store/service/编排器并注入 |
@@ -26,7 +26,7 @@
 | L3 | [candidates](candidates.md) | `src/postel_studio/candidates.py` | 205 | 候选固化（commit/分支/落库）与 `candidate.list`（S11，**不 import 同层 handler**） |
 | L3 | [orchestrator](orchestrator.md) | `src/postel_studio/orchestrator.py` | 492 | `task.dispatch` / `status` / `latest` / `cancel` 的编排：worker 线程一任务一线程、`EventHub` 事件桥（S10，**不 import 同层 handler**） |
 | L1 | [frames](frames.md) | `src/postel_studio/api/frames.py` | 126 | 帧编解码 + topic 白名单，纯函数 |
-| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 2449 | 页面 HTML + 内联 JS（S3 仓库区 + S4 分支 + S5 差异 + S6 Bots/charter + S7 工作区 + S8 新建表单 + S9 Agent 卡片 + S10 派活卡片 + S11 候选详情卡） |
+| L4 | [assets](assets.md) | `src/postel_studio/web/assets.py` | 2466 | 页面 HTML + 内联 JS（S3 仓库区 + S4 分支 + S5 差异 + S6 Bots/charter + S7 工作区 + S8 新建表单 + S9 Agent 卡片 + S10 派活卡片 + S11 候选详情卡） |
 
 **必须有但我还没单列的**（内容已在别处）：
 

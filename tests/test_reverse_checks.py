@@ -545,8 +545,22 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         "postel_studio/domain/permission.py",
         '_DENY_PUSH: Final[Rule] = ("shell", "git push *", "deny")',
         '_DENY_PUSH: Final[Rule] = ("shell", "git push *", "allow")',
-        _target_test("test_rule_effect_is_last_match_wins", file="test_permission_gate"),
-        "S16 #1：L1/L2 的 git push 拒绝改成允许（越权放行）",
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #1：裸 git push 拒绝改成允许（越权放行）",
+    ),
+    (
+        "postel_studio/domain/permission.py",
+        '_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "deny")',
+        '_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "allow")',
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #3：git -C <repo> push 拒绝改成允许（审查实测的 fail-open 回放）",
+    ),
+    (
+        "postel_studio/domain/permission.py",
+        "    _DENY_PUSH_OPTS,\n    _DENY_PUSH_ABS,",
+        "    # injected: drop path variants",
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #4：丢掉 git 路径变体（-c/绝对路径）的拒绝规则",
     ),
     (
         "postel_studio/agent/gate.py",
@@ -554,6 +568,22 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         '                "effect": "ALLOW",',
         _target_test("test_unknown_permission_fails_closed", file="test_permission_gate"),
         "S16 #2：无法识别的权限不再写 FALLBACK 审计（fail-closed 被抹掉）",
+    ),
+    (
+        "postel_studio/agent/acp_client.py",
+        "    return major.isdigit() and int(major) >= MIN_PERMISSIONS_MAJOR",
+        "    return True  # injected: every Agent is assumed to support permissions",
+        _target_test(
+            "test_v1_agent_never_starts_session_and_audits_fallback", file="test_permission_gate"
+        ),
+        "S16 #5：v1 Agent 的 permissions 探测被取消（v1 拿到无守卫会话）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        "      if (hasFallback) { markPermissionUnavailable(botId); }",
+        "      /* injected: FALLBACK 不再标不可用 */",
+        _target_test("test_page_marks_unavailable_level", file="test_permission_gate"),
+        "S16 #6：FALLBACK 审计不再驱动页面「不可用」徽标",
     ),
 )
 

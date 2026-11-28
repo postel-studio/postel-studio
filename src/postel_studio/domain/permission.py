@@ -19,13 +19,37 @@ type Rule = tuple[str, str, str]  # (action, resource, effect)
 _DENY_EDIT_ALL: Final[Rule] = ("edit", "*", "deny")
 _DENY_SHELL_ALL: Final[Rule] = ("shell", "*", "deny")
 _ALLOW_EDIT_ALL: Final[Rule] = ("edit", "*", "allow")
+
+# S16 must-fix 1：opencode 的 shell resource 是 scanner 产出的命令字符串，字面
+# `git push *` 匹配不到 `git -C <repo> push`（实测：旧规则下哨兵出现、bare remote 收到
+# ref —— fail-open）。这里把 spec §3 枚举的每种 push 形状都钉成 deny；scanner 对无法
+# 安全解析的命令（如 `eval`）在**存在任何 shell deny 规则**时直接拒绝，所以未识别的
+# push 语法同样 fail-closed（opencode 文档「Scanner」一节）。
 _DENY_PUSH: Final[Rule] = ("shell", "git push *", "deny")
+_DENY_PUSH_BARE: Final[Rule] = ("shell", "git push", "deny")
+_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "deny")
+_DENY_PUSH_OPTS: Final[Rule] = ("shell", "git * push *", "deny")
+_DENY_PUSH_ABS: Final[Rule] = ("shell", "*/git push *", "deny")
 _ALLOW_ORIGIN_PUSH: Final[Rule] = ("shell", "git push origin *", "allow")
+_ALLOW_ORIGIN_PUSH_C: Final[Rule] = ("shell", "git -C * push origin *", "allow")
+
+_DENY_ALL_PUSH: Final[tuple[Rule, ...]] = (
+    _DENY_PUSH,
+    _DENY_PUSH_BARE,
+    _DENY_PUSH_C,
+    _DENY_PUSH_OPTS,
+    _DENY_PUSH_ABS,
+)
 
 _RULES: Final[dict[Permission, tuple[Rule, ...]]] = {
     Permission.L0: (_DENY_EDIT_ALL, _DENY_SHELL_ALL),
-    Permission.L1: (_ALLOW_EDIT_ALL, _DENY_PUSH),
-    Permission.L2: (_ALLOW_EDIT_ALL, _DENY_PUSH, _ALLOW_ORIGIN_PUSH),
+    Permission.L1: (_ALLOW_EDIT_ALL, *_DENY_ALL_PUSH),
+    Permission.L2: (
+        _ALLOW_EDIT_ALL,
+        *_DENY_ALL_PUSH,
+        _ALLOW_ORIGIN_PUSH,
+        _ALLOW_ORIGIN_PUSH_C,
+    ),
     Permission.L2_PLUS: (_ALLOW_EDIT_ALL,),
 }
 

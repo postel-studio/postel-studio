@@ -14,12 +14,12 @@ Bot 的记忆空间（`bots/<repo_id>/<name>/`）与 charter 模板。
 
 | 符号 | 行 | 做什么 | 谁在用 |
 |---|---|---|---|
-| `ENV_HOME` / `SERVER_FILE` / `LOCK_FILE` / `AUDIT_FILE` | 24-27 | 常量名 | |
+| `ENV_HOME` / `SERVER_FILE` / `LOCK_FILE` / `AUDIT_FILE` | 24/25/26/28 | 常量名（27 是注释；AUDIT_FILE 在注释之后） | |
 | `DIR_MODE` `0o700` / `FILE_MODE` `0o600` | 33-34 | 权限 | 全部写操作 |
 | `_chmod(path, mode)` | 37 | POSIX 才收紧；Windows 跳过 | 内部 |
 | `state_root()` | 43 | 返回状态根（**不创建**） | `app.py`、`server.py`、测试 |
 | `ensure_state_root()` | 51 | 创建 + 收紧 0700 | `server.serve()` |
-| `server_file()` / `lock_file()` / `audit_file()` / `token_path()` | 59/69/74/155 | 三个路径 | 内部与 server |
+| `server_file()` / `lock_file()` / `audit_file()` / `token_path()` | 59/69/74/112 | 四个路径 | 内部与 server |
 | `append_audit(record)` / `read_audit(bot_id=None)` | 79/95 | **S16**：JSONL 追加/读取（0600，坏行跳过） | `gate`、页面 |
 | `atomic_write(path, data)` | 117 | mkstemp + fsync + replace | 内部 |
 | `write_server_info` / `read_server_info` / `remove_server_info` | 135/141/150 | server.json CRUD | server、测试 |

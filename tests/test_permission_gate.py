@@ -10,6 +10,7 @@ import json
 import shutil
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,12 +18,16 @@ import pytest
 from postel_studio.agent import acp_client, gate
 from postel_studio.domain.permission import _effect_of, rules_for
 from postel_studio.storage import paths
+from postel_studio.web import assets as _assets_module
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ASSETS = REPO_ROOT / "src" / "postel_studio" / "web" / "assets.py"
+# 从**实际加载的模块**取路径（S15 的教训）：反向注入用 PYTHONPATH 前置副本，
+# 硬编码 REPO_ROOT/src 会让注入改不到测试读的文件，得到假绿。
+ASSETS = Path(_assets_module.__file__)
 REAL_DB = Path("/home/postel/.local/share/opencode/opencode.db")
 BOT_ID = "0123456789ab/builder"
 MODEL = "deepseek/deepseek-flash"
+FAKE_ACP = Path(__file__).parent / "fixtures" / "fake_acp.py"
 
 
 def _agent_available() -> bool:
@@ -101,9 +106,14 @@ def _rules(permission: str) -> dict[str, object]:
 
 def test_rules_for_all_levels_and_fail_closed() -> None:
     assert rules_for("L0") == (("edit", "*", "deny"), ("shell", "*", "deny"))
-    assert rules_for("L1") == (("edit", "*", "allow"), ("shell", "git push *", "deny"))
+    l1 = rules_for("L1") or ()
+    assert l1[0] == ("edit", "*", "allow")
+    assert ("shell", "git push *", "deny") in l1
     l2 = rules_for("L2") or ()
-    assert l2[-1] == ("shell", "git push origin *", "allow")
+    assert l2[-2:] == (
+        ("shell", "git push origin *", "allow"),
+        ("shell", "git -C * push origin *", "allow"),
+    )
     assert rules_for("L2+") == (("edit", "*", "allow"),)
     for bad in (None, "L3", "L4", "l1", 42, ""):
         assert rules_for(bad) is None
@@ -117,6 +127,40 @@ def test_rule_effect_is_last_match_wins() -> None:
     assert _effect_of(rules_for("L0") or (), "shell", "pwd") == "deny"
 
 
+def test_all_push_shapes_are_denied() -> None:
+    """must-fix 1：`git -C` / 路径变体 / 复合命令都不得从 deny 里漏出去。
+
+    这些形状来自真实探针（旧规则下 `git -C <repo> push ...` 让哨兵出现、bare remote
+    收到 ref）——纯函数先把每一条钉死，真执行用例再证明执行前阻断。
+    """
+    l1 = rules_for("L1") or ()
+    shapes = (
+        "git push origin main",
+        "git push /tmp/other.git main",
+        "git -C /tmp/repo push origin main",
+        "git -C /tmp/repo push /tmp/other.git main",
+        "git -C /tmp/repo push",
+        "/usr/bin/git push origin main",
+        "git -c core.foo=1 push origin main",
+    )
+    for shape in shapes:
+        assert _effect_of(l1, "shell", shape) == "deny", shape
+        assert _effect_of(l1, "shell", shape + " && touch sentinel.txt") == "deny", shape
+    l2 = rules_for("L2") or ()
+    assert _effect_of(l2, "shell", "git -C /tmp/repo push origin main") == "allow"
+    assert _effect_of(l2, "shell", "git -C /tmp/repo push /tmp/other.git main") == "deny"
+    assert _effect_of(l2, "shell", "/usr/bin/git push origin main") == "deny"
+
+
+def test_supports_top_level_permissions() -> None:
+    """D6：版本探测是纯函数，v1 与未知/缺失版本必须 fail-closed。"""
+    assert acp_client.supports_top_level_permissions("2.4.2")
+    assert acp_client.supports_top_level_permissions("v3.0.0")
+    assert acp_client.supports_top_level_permissions("2.x")  # 只按 major 判
+    for bad in ("1.9.9", "0.1", "", None, "dev"):
+        assert not acp_client.supports_top_level_permissions(bad), bad
+
+
 def test_unknown_permission_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POSTEL_HOME", str(tmp_path))
     with pytest.raises(ValueError, match="fail-closed"):
@@ -124,6 +168,37 @@ def test_unknown_permission_fails_closed(tmp_path: Path, monkeypatch: pytest.Mon
     rows = paths.read_audit(bot_id=BOT_ID)
     assert rows and rows[-1]["effect"] == "FALLBACK"
     assert rows[-1]["source"] == "gate"
+    assert rows[-1]["resource"] == "unknown-permission"
+
+
+def test_v1_agent_never_starts_session_and_audits_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D6 must-fix 2：v1 Agent 不识别 permissions → 不建 session + FALLBACK 审计。
+
+    用假 ACP 报 `1.9.9`：它把收到的每个方法写进 logfile。断言 logfile 只有
+    `initialize`（`session/new` 从未发出），且 gate 写了 FALLBACK 行；异常类型让
+    orchestrator 按既有 `AcpProtocolError` → `INTERNAL` 终态化，不新增错误码。
+    """
+    monkeypatch.setenv("POSTEL_HOME", str(tmp_path))
+    logfile = tmp_path / "methods.log"
+    command = [
+        sys.executable,
+        str(FAKE_ACP),
+        "v1",
+        f"--logfile={logfile}",
+    ]
+    factory = gate.session_factory("L1", BOT_ID)
+    with pytest.raises(acp_client.AcpPermissionsUnsupportedError):
+        factory(command, str(tmp_path))
+
+    methods = logfile.read_text(encoding="utf-8").split()
+    assert "initialize" in methods
+    assert "session/new" not in methods, "v1 Agent 上绝不许建会话"
+    rows = paths.read_audit(bot_id=BOT_ID)
+    assert any(
+        r["effect"] == "FALLBACK" and r["resource"] == "agent-permissions-unsupported" for r in rows
+    ), rows
 
 
 # ---- 真执行：哨兵文件证明"执行前"---------------------------------------------------
@@ -179,6 +254,57 @@ def test_l1_edit_allowed_push_blocked(tmp_path: Path, monkeypatch: pytest.Monkey
     )
     assert pushed.stop_reason == "end_turn"
     assert not (repo / "sentinel.txt").exists(), "L1 不得 push（且命令未执行）"
+
+
+@needs_agent
+def test_l1_git_c_push_blocked_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """must-fix 1：审查实测的 `git -C <repo> push` 绕过，必须真执行证明已封死。"""
+    _env(tmp_path, monkeypatch, _rules("L1"))
+    repo = _make_repo(tmp_path / "home")
+    bare = tmp_path / "home" / "remote.git"
+    session = gate.session_factory("L1", BOT_ID)(["opencode", "acp"], str(repo))
+    outcome = _prompt(
+        session,
+        f"只使用 shell 工具执行这一条命令：git -C {repo} push origin main && touch sentinel.txt。"
+        "不要用 write/edit 工具创建文件。",
+    )
+    assert outcome.stop_reason == "end_turn"
+    assert not (repo / "sentinel.txt").exists(), "L1 的 git -C push 必须被拦在执行前"
+    refs = subprocess.run(
+        ["git", "--git-dir", str(bare), "for-each-ref", "--format=%(refname)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert refs == "", f"远端不该收到任何 ref：{refs!r}"
+
+
+@needs_agent
+def test_l2_git_c_foreign_push_blocked_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """must-fix 1：L2 对 `git -C <repo> push <foreign>` 也必须是 fail-closed。"""
+    _env(tmp_path, monkeypatch, _rules("L2"))
+    repo = _make_repo(tmp_path / "home")
+    foreign = tmp_path / "home" / "foreign.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(foreign)], check=True, capture_output=True)
+    session = gate.session_factory("L2", BOT_ID)(["opencode", "acp"], str(repo))
+    outcome = _prompt(
+        session,
+        f"只使用 shell 工具执行这一条命令：git -C {repo} push {foreign} main"
+        " && touch sentinel.txt。不要用 write/edit 工具创建文件。",
+    )
+    assert outcome.stop_reason == "end_turn"
+    assert not (repo / "sentinel.txt").exists()
+    refs = subprocess.run(
+        ["git", "--git-dir", str(foreign), "for-each-ref", "--format=%(refname)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert refs == "", f"外部仓库不该收到任何 ref：{refs!r}"
 
 
 @needs_agent
@@ -245,6 +371,9 @@ def test_page_marks_unavailable_level() -> None:
     assert 'granted !== "L2+"' in source
     assert 'badge.dataset.unavailable = "true"' in source
     assert "（不可用）" in source
+    # D6：FALLBACK 审计行要真正驱动徽标不可用（不是只有静态权限值分支）
+    assert 'effect === "fallback"' in source
+    assert "if (hasFallback) { markPermissionUnavailable(botId); }" in source
 
 
 def test_permission_badge_contract() -> None:

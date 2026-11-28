@@ -17,7 +17,7 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 文件 | 行数 | 内容 |
 |---|---|---|
 | `__init__.py` | 5 | 包标记 + 本层"无 IO"的声明 |
-| `permission.py` | 49 | S16：权限级别 → opencode 规则（纯函数，无法识别 → `None` fail-closed） |
+| `permission.py` | 73 | S16：权限级别 → opencode 规则（纯函数，无法识别 → `None` fail-closed） |
 | `models.py` | 478 | `Repo` / `Bot` / `normalize_origin` / `repo_id*` / `origin_hash` / `bot_name_ok` / `bot_id` / `ref_name_ok`（S7）/ `Permission`（S8）/ `ulid` / `prompt_ok` / `Task` / `WorktreeLease` / 任务状态机（S10）/ 审核状态机（S13） |
 
 ## 符号表（`domain/models.py`）
@@ -50,9 +50,9 @@ S3 把它单独成层而不是塞进 `api/repository.py` 的原因：id 的算�
 | 符号 | 行 | 做什么 |
 |---|---|---|
 | `Rule` | 17 | `(action, resource, effect)` 规则元组 |
-| `_DENY_PUSH` / `_ALLOW_ORIGIN_PUSH` | 22/23 | L1/L2 的 push 拒绝与 L2 的 origin 例外 |
-| `rules_for(permission)` | 33 | 级别 → 有序规则；无法识别回 `None`（调用方 fail-closed） |
-| `_effect_of(rules, action, resource)` | 43 | 后匹配优先的判定（测试/审计用） |
+| `_DENY_PUSH` / `_DENY_ALL_PUSH` / `_ALLOW_ORIGIN_PUSH*` | 24/35-41/29-30 | 全部 push 形状（含 `git -C`、路径变体）拒绝 + L2 的 origin 例外 |
+| `rules_for(permission)` | 57 | 级别 → 有序规则；无法识别回 `None`（调用方 fail-closed） |
+| `_effect_of(rules, action, resource)` | 67 | 后匹配优先的判定（测试/审计用） |
 | `REF_NAME_MAX_LENGTH` | 244 | `200`：入站 ref 名的长度上限（S5 D3.1）——**S7 从 `api/repository.py` 搬来** | `ref_name_ok` |
 | `ref_name_ok(value)` | 249 | 入站 ref 名的六条形状（S5 D3.1，**纯判定不抛**）——**S7 搬来** | `api/repository._require_ref`、`api/worktrees._base_ref`、`orchestrator.dispatch`（S10 校验 `baseRef`） |
 | `PROMPT_MAX_BYTES` | 283 | **S10**：`32 * 1024`——prompt 的字节上限（02b §5） | `prompt_ok` |

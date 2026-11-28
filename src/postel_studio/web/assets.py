@@ -1823,6 +1823,20 @@ INDEX_HTML: Final = """<!doctype html>
     loadAudit(botId);  // S16：选中 Bot 后读该 Bot 的权限裁决
   }
 
+  // S16 D6：审计里出现 FALLBACK = 该 Bot 的权限在当前 Agent 上无法真正阻断 → 徽标标不可用。
+  // 用 data 驱动而不是静态文案：v1 Agent 被拒后，页面下一次读审计就会如实显示。
+  function markPermissionUnavailable(botId) {
+    var rows = botList.querySelectorAll("li[data-bot-id]");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.botId !== botId) { continue; }
+      var badge = rows[i].querySelector(".bot-permission");
+      if (badge && badge.dataset.unavailable !== "true") {
+        badge.dataset.unavailable = "true";
+        badge.textContent = badge.textContent + "（不可用）";
+      }
+    }
+  }
+
   function loadAudit(botId) {
     auditList.textContent = "";
     auditState.textContent = "正在读取审计…";
@@ -1832,15 +1846,18 @@ INDEX_HTML: Final = """<!doctype html>
         return;
       }
       auditList.textContent = "";
+      var hasFallback = false;
       for (var i = 0; i < frame.data.length; i++) {
         var row = frame.data[i] || {};
         var li = document.createElement("li");
         var effect = String(row.effect || "").toLowerCase();
+        if (effect === "fallback") { hasFallback = true; }
         li.dataset.effect = effect;
         li.textContent = String(row.at || "") + " " + String(row.action || "")
           + " " + String(row.resource || "") + " → " + effect;
         auditList.appendChild(li);
       }
+      if (hasFallback) { markPermissionUnavailable(botId); }
       auditState.textContent = frame.data.length === 0 ? "暂无审计记录"
         : "共 " + frame.data.length + " 条";
     });
