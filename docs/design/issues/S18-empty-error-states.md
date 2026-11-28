@@ -81,13 +81,14 @@ UNKNOWN_CODE_TEXT = "操作失败：内核返回了未登记的错误码，请�
 
 | 面板 | 节点 | 文案 | 出现条件 |
 |---|---|---|---|
-| 候选 | `#candidate-empty` | 还没有候选变更：派活成功后，Bot 的改动会出现在这里。 | `#candidate[data-state=ready]` 且无候选 |
-| 审计 | `#audit-empty` | 这个 Bot 还没有权限裁决记录。 | `#audit[data-state=ready]` 且 0 条 |
-| 上下文 | `#context-empty` | 本次没有需要注入的上下文。 | `#context[data-state=ready]` 且 0 项 |
+| 候选 | `#candidate-empty` | 还没有候选变更：派活成功后，Bot 的改动会出现在这里。 | `#candidate[data-state=empty]` |
+| 审计 | `#audit-empty` | 这个 Bot 还没有权限裁决记录。 | `#audit[data-state=empty]` |
+| 上下文 | `#context-empty` | 本次没有需要注入的上下文。 | `#context[data-state=empty]` |
 
 既有的 `#repo-empty` / `#branch-empty` / `#bot-empty` / `#inbox-empty` / `#workspace-empty`
-沿用原判据。纪律同 S3 D1：**idle（还没选仓库/Bot）不显示空态**，显示"选择一个…"，
-否则「没选」会被说成「没有」。
+沿用原判据。`empty` 是本刀给三个新面板用的**显式状态**（沿用 S12 收件箱的先例），
+与 `ready`（有数据）/ `idle`（没选）互斥。纪律同 S3 D1：**idle（还没选仓库/Bot）
+不显示空态**，显示"选择一个…"，否则「没选」会被说成「没有」。
 
 ### D6 内核不可达 = 断线的一种，但有专属文案
 
@@ -163,15 +164,9 @@ S20（M3 验收）**：S18 是纯展示层的一刀，改 `gitops` 的读取方�
 uv run python -c "from postel_studio.api import errors; print(len(errors.ERROR_TEXT))"
 # 期望：19
 
-# 2) 源码里在用的错误码全部有文案（无输出 = 通过）
-uv run python - <<'PY'
-import pathlib, re
-from postel_studio.api import errors
-used = {m for p in pathlib.Path("src/postel_studio").rglob("*.py")
-        for m in re.findall(r'"([A-Z][A-Z_]{3,})"', p.read_text())}
-print(sorted(used - set(errors.ERROR_TEXT)))
-PY
-# 期望：[]（探针本身只打印差集，判定仍由 tests/test_states.py 做）
+# 2) 07 表 ↔ 码表 ↔ 源码「当码用」的常量，三向对账
+uv run pytest -q tests/test_states.py -k "documented_code or undocumented_code_is_used"
+# 期望：3 passed（宽口径 grep 会把 GIT_DIR / TOKEN 这类非错误码也算进来，故判定用测试）
 
 # 3) 页面里不再有第二份映射（在 assets.py 里 grep 该行，期望 0）
 grep -c '"NOT_A_REPO": "不是 git 仓库"' src/postel_studio/web/assets.py

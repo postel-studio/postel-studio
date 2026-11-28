@@ -1,6 +1,6 @@
 # 03 · assets — `src/postel_studio/web/assets.py`
 
-> 层 L4 · 2523 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
+> 层 L4 · 2624 行 · 上游：[模块索引](README.md) · 相关：[03-ui-spec §2/§4.4](../../design/03-ui-spec.md) · [06-pitfalls T8/T9/T27](../06-pitfalls.md)
 > ⚠️ **本模块是 Code Map 里覆盖最薄的一块**：JS 的 DOM 行为没有自动化测试。见 §测试。
 
 ## 职责
@@ -20,18 +20,22 @@ S6 起左栏还有「Bots」区、主区还有只读的「Charter」面板（D8 
 `memory.charter.get` → 全文 `<pre>` + 记忆目录绝对路径。**charter 是用户可编辑文本 = 不可信**：
 只进 `textContent`，同样零 `innerHTML`。
 
+S18 起每个面板都有**明确的空态**（候选/审计/上下文是新增的三个），错误文案只有一份
+（`api/errors.py` 注入）；断线分「连不上」与「连上后掉线」两种说法；L0 Bot 的派活按钮
+旁边给出原因；整页颜色收进 `:root` 变量，浅色/暗色两套 token 由 `prefers-color-scheme`
+切换（对比度由 `tools/acceptance/s18_states.mjs` 实测）。
+
 ## 符号表
 
 | 符号 | 行 | 做什么 |
 |---|---|---|
 | `HEARTBEAT_INTERVAL_MS` | 43 | `1000`，心跳间隔 |
 | `RECONNECT_DELAY_MS` | 44 | `500`，点重连到发起的延迟 |
-| `REQUIRED_PARAMS` | 47 | 全部占位符元组（9 个；S4/S5 都没加新占位符） |
-| `ERROR_TEXT` | 61 | 07 §1.3 错误码 → 用户可读中文（S3 左栏 + S4 分支面板 + S5 差异面板共用；S4 补 `REPO_NOT_BOUND`，S5 补 `BAD_REF` / `NOT_SUPPORTED`） |
-| `ERROR_TEXT_FALLBACK` | 84 | 表外的码走这句通用文案（**只给绑定表单**；分支/差异面板各有自己那句） |
-| `INDEX_HTML` | 86 | 页面本体 |
-| `error_text_json()` | 2486 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
-| `render_index(...)` | 2495 | 填占位符 |
+| `REQUIRED_PARAMS` | 53 | 全部占位符元组（10 个；S18 加 `%%UNKNOWN_CODE_TEXT%%`） |
+| `ERROR_TEXT_FALLBACK` | 69 | **绑定表单专用**的兜底（「绑定失败」）；全局码表已搬到 `api/errors.py`（S18 D1） |
+| `INDEX_HTML` | 71 | 页面本体（CSS 变量 + 八个面板 + 内联 JS） |
+| `error_text_json(error_text)` | 2584 | 把注入的码表序列化成 JS 对象字面量（顺带把 `</` 转义，防 `</script>`） |
+| `render_index(...)` | 2593 | 填占位符（**新增必填参数** `error_text` / `unknown_code_text`，由 `api/app.py` 注入） |
 
 页面内的 DOM / JS（S3 左栏仓库区）：
 
@@ -40,11 +44,16 @@ S6 起左栏还有「Bots」区、主区还有只读的「Charter」面板（D8 
 | `<section id="repos" data-state="loading">` | 665 | 仓库区；**初始 `loading`** 而不是 ready（D1） |
 | `#bind-form` / `#bind-path` / `#bind-button` | 667-670 | 输入框 + 「绑定」按钮（真 `<form>`，回车也能提交） |
 | `#repos-error` / `#repo-state` / `#repo-list` / `#repo-empty` | 672-675 | 错误 / 连接状态 / 列表 / 空态 |
-| `setState(state, text)` | 878 | 状态灯 + `#content.stale` + 转给 `setRepoState` |
+| `#status-hint` | 520 | **S18 D6**：断线原因（「内核不可达」/「连接断了」），连上即清 |
+| `setState(state, text, hint)` | 936 | 状态灯 + `#content.stale` + 断线原因 + 转给 `setRepoState` |
 | `setRepoState(state, text)` | 889 | 连接状态 → `#repos` 的 `data-state`（**一次改属性，显隐全交给 CSS**）；非 connected 时把分支/差异面板重置回 idle |
 | `errorText(code)` | 932 | 错误码 → 文案（**不看 message**；绑定表单用） |
 | `renderRepos(list)` | 940 | 一行 = 名称 + 「默认分支 X」；`li` 可选中（`tabindex` / `role=button` / `data-selected`），重建后恢复选中标记；同时把 `defaultBranch` 存进 `repoDefaultBranches` 供差异面板用 |
-| `loadRepos()` | 1026 | 连上后发 `repo.list` |
+| `loadRepos()` | 1087 | 连上后发 `repo.list` |
+| `#candidate-empty` / `#audit-empty` / `#context-empty` | 634 / 701 / 708 | **S18 D5**：三个面板的空态（只在 `empty` 态出现；idle 说"没选"） |
+| `resetAudit(state, text)` / `loadAudit(botId)` | 1965 / 1972 | **S18 D5/D9**：审计的 empty 态；回调修回 `(err, data)` |
+| `updateTaskPermissionNote()` | 2003 | **S18 D7**：L0 Bot 派活被拦时同屏给原因（文案取 `ERROR_TEXT.PERMISSION_DENIED`） |
+| `UNREACHABLE_TEXT` / `fail(reason)` | 2387 / 2391 | **S18 D6**：连接尝试失败 → 「已断开 · 内核不可达」+ 下一步提示 |
 | `submitBind()` | 2265 | 发 `repo.bind`，成功/失败各自收口 |
 | `request(method, params, done)` | 2313 | 带回调的帧请求（回调拿 `data` 或**错误码**） |
 

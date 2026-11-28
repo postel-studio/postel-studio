@@ -1,6 +1,6 @@
 # 03 · frames — `src/postel_studio/api/frames.py`
 
-> 层 L1 · 126 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol §2.2](../../design/02b-protocol.md)
+> 层 L1 · 137 行 · 上游：[模块索引](README.md) · 协议：[02b-protocol §2.2](../../design/02b-protocol.md)
 
 ## 职责
 
@@ -25,7 +25,7 @@
 | `ReqFrame` | 48 | frozen dataclass：`id` / `method` / `params` |
 | `decode_incoming(text)` | 56 | `str → ReqFrame`，失败抛 `FrameError` |
 | `encode_response(id, seq=, data)` | 102 | 成功帧 |
-| `encode_error(id, code, message)` | 111 | 失败帧 |
+| `encode_error(id, code, message)` | 113 | 失败帧；`message` 先过 `errors.message_safe`（S18 D4） |
 | `encode_event(topic, seq=, data)` | 120 | 推送帧（**S10 起有真实调用方**：网关的 pump task） |
 | `KNOWN_TOPICS` | 39 | 订阅白名单：`("task.updated", "candidate.proposed")`（S10/S11）；`subscribe` 的入参校验与 `_topics_of` 都读它 |
 

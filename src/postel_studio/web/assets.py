@@ -30,12 +30,18 @@ S4 起主区出现「分支」面板（D6 的 DOM 契约）：点左栏仓库行
 - 断连回 `idle` 并**清空列表**（不许留旧数据装新鲜）；重连且仍有选中仓库时自动重取。
 - 分支面板的错误兜底**不用** `ERROR_TEXT_FALLBACK`（那是绑定场景的「绑定失败」），
   面板自己给「读取分支列表失败」；`ERROR_TEXT` 复用，按错误码映射。
+
+S18 起错误文案不再有第二份：表在 `api/errors.py`，由 `render_index(error_text=...)` 注入
+（分层门禁不许 web 反向 import api）。页面这一侧只负责"按码取文案"；每个面板的空态、
+「内核不可达」提示、L0 派活的原因都走同一份表（D3/D5/D6/D7）。颜色全部收进 `:root`
+变量，浅色与暗色两套 token 由 `prefers-color-scheme` 切换（D8）。
 """
 
 from __future__ import annotations
 
 import html
 import json
+from collections.abc import Mapping
 from typing import Final
 
 # 前端行为参数：测试断言 `HEARTBEAT_INTERVAL_MS + RECONNECT_DELAY_MS < 3000`。
@@ -54,33 +60,12 @@ REQUIRED_PARAMS: Final = (
     "%%RECONNECT_DELAY_MS%%",
     "%%ERROR_TEXT%%",
     "%%ERROR_TEXT_FALLBACK%%",
+    "%%UNKNOWN_CODE_TEXT%%",
 )
 
-# 07 §1.3 的错误码 → 用户可读文案。**按码映射，不读 `message`**（07 §1.3：文案可改，码不能改）。
-# 每个码有一句人话；表外的码走通用文案，不把服务端原文贴到页面上。
-ERROR_TEXT: Final = {
-    "NOT_A_REPO": "不是 git 仓库",
-    "BAD_CWD": "请输入绝对路径（不能是相对路径或 ~ 开头的路径）",
-    "INVALID_PARAMS": "路径参数不合法",
-    "ADAPTER_UNAVAILABLE": "内核找不到 git 命令",
-    "INTERNAL": "内核处理失败，请查看启动它的终端",
-    # S4：repo.branches 会回这个码（repoId 查不到 / 绑定的路径已不是仓库）。
-    # S3 的绑定表单用不到它，但码表是全局的，别让分支面板走到「绑定失败」兜底。
-    "REPO_NOT_BOUND": "仓库未绑定或已不存在",
-    # S5：repo.diff 会回这两个码（07 §1.3 既有码；不新增）。
-    "BAD_REF": "分支或提交不存在",
-    "NOT_SUPPORTED": "仓库含非 UTF-8 的名称，第一版不支持",
-    # S7：worktree.acquire / release 会回这两个码。
-    # - BAD_BASE_REF 是 07 §1.3 里本来就有的码（"worktree 基础分支无效"），本刀第一次用到；
-    # - WORKTREE_CONFLICT 是本刀**新增**的码（三处触发语义相同：需要人先处理目录里的内容）。
-    "BAD_BASE_REF": "基础分支不存在或不是提交",
-    "WORKTREE_CONFLICT": "工作区目录被占用，或里面有未提交的改动",
-    # S10：task.dispatch 会回这两个码（07 §1.3 既有码，本刀第一次用到）。
-    "BUSY": "这个 Bot 已有任务在跑，等它结束再派",
-    "PERMISSION_DENIED": "这个 Bot 是 L0（只读），先在 Charter 里把权限改到 L1 以上",
-    # S17：07 §1.3 已登记的码，本刀第一次用到（矛盾要人工解决，不静默取一方）。
-    "CONTEXT_CONFLICT": "上下文规范冲突，请先解决仓库与 charter 的权限声明差异",
-}
+# 07 §1.3 的错误码 → 用户可读文案由 `api/errors.py` 唯一持有，`render_index(error_text=...)`
+# 注入（S18 D1）。`ERROR_TEXT_FALLBACK` 是**绑定表单自己的**兜底，不是全局兜底
+# （S3/S4/S5 的页面断言引用它，别改值）。
 ERROR_TEXT_FALLBACK: Final = "绑定失败"
 
 INDEX_HTML: Final = """<!doctype html>
@@ -93,48 +78,71 @@ INDEX_HTML: Final = """<!doctype html>
 <meta name="postel-handshake" content="%%HANDSHAKE_TICKET%%">
 <title>Postel Studio · 连接状态</title>
 <style>
+  /* S18 D8：两套语义 token。页面里**不再**出现硬编码的主题色（边框/文字/底色都取变量），
+     浅色由 prefers-color-scheme 覆盖；两套的对比度由 tools/acceptance/s18_states.mjs 实测。 */
+  :root {
+    --bg: #0f1115; --panel: #151922; --text: #e6e9ef; --muted: #8b95a7;
+    --muted-2: #aab2c0; --line: #262b36; --line-strong: #39404f;
+    --line-hover: #58627a; --field: #1f2430; --field-alt: #1a1f2a;
+    --link: #58a6ff; --ok: #3fb950; --warn: #d29922;
+    --danger: #f85149; --danger-text: #ffb4ab;
+    --shadow: rgb(0 0 0 / 45%);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff; --panel: #f6f8fa; --text: #1f2328; --muted: #59636e;
+      --muted-2: #4b5563; --line: #d1d9e0; --line-strong: #b7c0c9; --line-hover: #8892a0;
+      --field: #f6f8fa; --field-alt: #eef1f4; --link: #0969da; --ok: #1a7f37;
+      --warn: #9a6700; --danger: #cf222e; --danger-text: #a40e26;
+      --shadow: rgb(31 35 40 / 16%);
+    }
+  }
+
   body { margin: 0; min-height: 100vh; display: grid; place-items: center;
-    background: #0f1115; color: #e6e9ef;
+    background: var(--bg); color: var(--text);
     font: 16px/1.7 -apple-system, "Noto Sans CJK SC", "PingFang SC", sans-serif; }
-  main { padding: 40px; border: 1px solid #262b36; border-radius: 14px;
-    background: #151922; box-shadow: 0 10px 40px rgb(0 0 0 / 45%); }
+  main { padding: 40px; border: 1px solid var(--line); border-radius: 14px;
+    background: var(--panel); box-shadow: 0 10px 40px var(--shadow); }
   h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: .5px; }
   header { display: flex; align-items: center; gap: 12px; margin: 0 0 20px; }
   #status { margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
-    font-size: 14px; color: #8b95a7; }
+    font-size: 14px; color: var(--muted); }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
-    background: #3fb950; box-shadow: 0 0 10px #3fb950; }
+    background: var(--ok); box-shadow: 0 0 10px var(--ok); }
   /* 状态灯：已连接绿 / 已断开红 / 重连中黄；颜色与文案由 JS 同时改 */
-  #status[data-state="connected"] .dot { background: #3fb950; box-shadow: 0 0 10px #3fb950; }
-  #status[data-state="disconnected"] .dot { background: #f85149; box-shadow: 0 0 10px #f85149; }
-  #status[data-state="reconnecting"] .dot { background: #d29922; box-shadow: 0 0 10px #d29922; }
+  #status[data-state="connected"] .dot { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+  #status[data-state="disconnected"] .dot { background: var(--danger);
+      box-shadow: 0 0 10px var(--danger); }
+  #status[data-state="reconnecting"] .dot { background: var(--warn);
+      box-shadow: 0 0 10px var(--warn); }
   #reconnect { display: none; margin-left: 4px; padding: 2px 10px; font: inherit;
-    font-size: 13px; color: #e6e9ef; background: #1f2430; border: 1px solid #39404f;
+    font-size: 13px; color: var(--text); background: var(--field);
+      border: 1px solid var(--line-strong);
     border-radius: 6px; cursor: pointer; }
-  #reconnect:hover { border-color: #58627a; }
+  #reconnect:hover { border-color: var(--line-hover); }
   #reconnect:disabled { opacity: .5; cursor: progress; }
   dl { display: grid; grid-template-columns: auto auto; gap: 6px 18px; margin: 0; }
-  dt { color: #8b95a7; }
+  dt { color: var(--muted); }
   dd { margin: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace;
     transition: opacity .2s; }
   /* 断连期间已加载的数据是过期的：灰化 + 右上角角标，不假装仍是最新 */
   #content { position: relative; transition: opacity .2s; }
   #content.stale { opacity: .45; }
   #content.stale::after { content: "数据已过期"; position: absolute; top: -14px; right: 0;
-    padding: 1px 8px; font-size: 12px; color: #0f1115; background: #d29922;
+    padding: 1px 8px; font-size: 12px; color: #1f2328; background: var(--warn);
     border-radius: 999px; }
   /* 左栏仓库区（03-ui-spec §2）。判定一律走 `data-state`：**不用 JS 逐个开关 display**
      （06-pitfalls T8：`style.display = ""` 会回退到 CSS 的 `none`）。 */
-  #repos { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #repos { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
   #repos h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .08em;
-    color: #8b95a7; text-transform: uppercase; }
+    color: var(--muted); text-transform: uppercase; }
   #bind-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-  #bind-path { min-width: 0; padding: 6px 9px; font: inherit; font-size: 13px; color: #e6e9ef;
-    background: #0f1115; border: 1px solid #39404f; border-radius: 6px; }
-  #bind-path:focus { outline: none; border-color: #58627a; }
+  #bind-path { min-width: 0; padding: 6px 9px; font: inherit; font-size: 13px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line-strong); border-radius: 6px; }
+  #bind-path:focus { outline: none; border-color: var(--line-hover); }
   #bind-path:disabled { opacity: .45; cursor: not-allowed; }
-  #bind-button { padding: 6px 12px; font: inherit; font-size: 13px; color: #0f1115;
-    background: #3fb950; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+  #bind-button { padding: 6px 12px; font: inherit; font-size: 13px; color: #1f2328;
+    background: var(--ok); border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
   #bind-button:disabled { opacity: .45; cursor: progress; }
   #repos[data-state="disconnected"] #bind-form,
   #repos[data-state="loading"] #bind-form { pointer-events: none; }
@@ -143,23 +151,25 @@ INDEX_HTML: Final = """<!doctype html>
   #repos[data-state="loading"] #bind-path,
   #repos[data-state="loading"] #bind-button { opacity: .45; }
   #repos-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px;
-    color: #ffb4ab; background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
+    color: var(--danger-text); background: rgb(248 81 73 / 12%);
+      border: 1px solid rgb(248 81 73 / 45%);
     border-radius: 6px; }
   /* 列表与状态栏各管一件事：data-state 决定谁在场，`display` 在 CSS 里写死 */
   #repo-list { list-style: none; margin: 12px 0 0; padding: 0; }
-  #repo-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid #1f2430;
+  #repo-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid var(--field);
     cursor: pointer; }
   #repo-list li:first-child { border-top: none; }
-  #repo-list li:hover { background: #1a1f2a; }
+  #repo-list li:hover { background: var(--field-alt); }
   /* S4：仓库行是可操作的按钮（D6），必须能看出"选中了"与"焦点在"。
      选中态只认 data-selected 属性（DOM 契约），样式挂在这个属性上。 */
-  #repo-list li[data-selected="true"] { background: #1a1f2a; box-shadow: inset 2px 0 #3fb950; }
-  #repo-list li[data-selected="true"] .repo-name { color: #3fb950; }
-  #repo-list li:focus-visible { outline: 1px solid #58627a; outline-offset: 2px; }
+  #repo-list li[data-selected="true"] { background: var(--field-alt);
+      box-shadow: inset 2px 0 var(--ok); }
+  #repo-list li[data-selected="true"] .repo-name { color: var(--ok); }
+  #repo-list li:focus-visible { outline: 1px solid var(--line-hover); outline-offset: 2px; }
   .repo-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-  .repo-meta { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
-  #repo-empty { margin: 12px 0 0; font-size: 13px; color: #8b95a7; }
-  #repo-state { margin: 12px 0 0; font-size: 13px; color: #d29922; }
+  .repo-meta { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
+  #repo-empty { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+  #repo-state { margin: 12px 0 0; font-size: 13px; color: var(--warn); }
   #repos[data-state="disconnected"] #repo-state,
   #repos[data-state="loading"] #repo-state { display: block; }
   #repos[data-state="disconnected"] #repo-list,
@@ -170,27 +180,28 @@ INDEX_HTML: Final = """<!doctype html>
   /* 空列表是"连接着且真的没有仓库"才能说的话：`#repo-empty` 只在 ready 且无行时由 JS 打开 */
   #repos[data-state="disconnected"] #repos-error,
   #repos[data-state="disconnected"] #note-repos { display: none; }
-  #note-repos { margin: 10px 0 0; font-size: 12px; color: #8b95a7; }
+  #note-repos { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
   /* 主区分支面板（S4 D6）。与 #repos 同一套机制：JS 只改 data-state / hidden，
      显隐规则全部在这里（06-pitfalls T8：不要逐个 style.display）。 */
-  #branches { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #branches { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
   #branches h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .08em;
-    color: #8b95a7; text-transform: uppercase; }
-  #branches-state { margin: 6px 0 0; font-size: 13px; color: #8b95a7; }
+    color: var(--muted); text-transform: uppercase; }
+  #branches-state { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
   #branches-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px;
-    color: #ffb4ab; background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
+    color: var(--danger-text); background: rgb(248 81 73 / 12%);
+      border: 1px solid rgb(248 81 73 / 45%);
     border-radius: 6px; }
   #branch-list { list-style: none; margin: 12px 0 0; padding: 0; }
   #branch-list li { display: flex; align-items: baseline; gap: 10px; padding: 7px 0;
-    font-size: 14px; border-top: 1px solid #1f2430; }
+    font-size: 14px; border-top: 1px solid var(--field); }
   #branch-list li:first-child { border-top: none; }
   .branch-name { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .branch-sha { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
-    color: #8b95a7; }
-  .branch-upstream { font-size: 12px; color: #8b95a7; }
-  .branch-current { margin-left: auto; padding: 1px 8px; font-size: 12px; color: #0f1115;
-    background: #3fb950; border-radius: 999px; }
-  #branch-empty { margin: 12px 0 0; font-size: 13px; color: #8b95a7; }
+    color: var(--muted); }
+  .branch-upstream { font-size: 12px; color: var(--muted); }
+  .branch-current { margin-left: auto; padding: 1px 8px; font-size: 12px; color: #1f2328;
+    background: var(--ok); border-radius: 999px; }
+  #branch-empty { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
   /* 状态 → 可见性。idle / loading 只显示 #branches-state；error 只显示 #branches-error；
      ready 才允许 #branch-list 与（空仓库时的）#branch-empty 出现（D6）。 */
   #branches[data-state="idle"] #branch-list,
@@ -205,33 +216,34 @@ INDEX_HTML: Final = """<!doctype html>
   #branches[data-state="error"] #branch-empty { display: none; }
   /* 主区差异面板（S5 D9）。与 #branches 同一套机制：JS 只改 data-state 与 hidden，
      显隐规则全部在这里（06-pitfalls T8：不要逐个 style.display）。 */
-  #diff { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #diff { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
   #diff h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .08em;
-    color: #8b95a7; text-transform: uppercase; }
+    color: var(--muted); text-transform: uppercase; }
   #diff-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   #diff-base, #diff-head { min-width: 0; flex: 1 1 12ch; padding: 6px 9px; font: inherit;
-    font-size: 13px; color: #e6e9ef; background: #0f1115; border: 1px solid #39404f;
+    font-size: 13px; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line-strong);
     border-radius: 6px; }
-  #diff-base:focus, #diff-head:focus { outline: none; border-color: #58627a; }
-  #diff-compare { padding: 6px 12px; font: inherit; font-size: 13px; color: #0f1115;
-    background: #3fb950; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+  #diff-base:focus, #diff-head:focus { outline: none; border-color: var(--line-hover); }
+  #diff-compare { padding: 6px 12px; font: inherit; font-size: 13px; color: #1f2328;
+    background: var(--ok); border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
   #diff-compare:disabled { opacity: .45; cursor: progress; }
-  .diff-arrow { font-size: 13px; color: #8b95a7; }
-  #diff-state { margin: 10px 0 0; font-size: 13px; color: #8b95a7; }
-  #diff-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+  .diff-arrow { font-size: 13px; color: var(--muted); }
+  #diff-state { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+  #diff-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: var(--danger-text);
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
     border-radius: 6px; }
-  #diff-truncated { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #0f1115;
-    background: #d29922; border-radius: 6px; }
+  #diff-truncated { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #1f2328;
+    background: var(--warn); border-radius: 6px; }
   #diff-stat { margin: 10px 0 0; font-size: 13px;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   /* 不设固定宽度、不假设中文宽度（D9）：等宽字体 + 可换行 + 自身滚动。 */
   #diff-patch { margin: 10px 0 0; max-height: 60vh; overflow: auto; white-space: pre-wrap;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; }
-  .diff-add { color: #3fb950; }
-  .diff-del { color: #f85149; }
-  .diff-hunk { color: #58a6ff; }
-  .diff-meta { color: #8b949e; }
+  .diff-add { color: var(--ok); }
+  .diff-del { color: var(--danger); }
+  .diff-hunk { color: var(--link); }
+  .diff-meta { color: var(--muted-2); }
   .diff-ctx { color: inherit; }
   /* 状态 → 可见性：idle / loading 只显示状态文案；error 只显示错误；ready 显示统计与 patch。
      hidden 属性管「空 patch / 未截断 / 无错误」这几个单元素条件（D9 的表）。 */
@@ -249,38 +261,41 @@ INDEX_HTML: Final = """<!doctype html>
   /* 左栏 Bots 区与主区 charter 面板（S6 D8）。与 #branches/#diff 同一套机制：显隐只由
      `data-state` 与 hidden 属性决定，JS 不碰 style.display（T8）。charter 全文用 pre-wrap，
      不设固定宽度、不假设中文宽度（等宽 + 自身滚动）。 */
-  #bots, #charter { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #bots, #charter { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
   #bots h2, #charter h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600;
-    letter-spacing: .08em; color: #8b95a7; text-transform: uppercase; }
-  #bots-state, #charter-state, #bot-empty { margin: 8px 0 0; font-size: 13px; color: #8b95a7; }
+    letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+  #bots-state, #charter-state, #bot-empty { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
   #bots-error, #charter-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px;
-    color: #ffb4ab; background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%);
+    color: var(--danger-text); background: rgb(248 81 73 / 12%);
+      border: 1px solid rgb(248 81 73 / 45%);
     border-radius: 6px; }
   #bot-list { list-style: none; margin: 12px 0 0; padding: 0; }
-  #bot-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid #1f2430; cursor: pointer; }
+  #bot-list li { padding: 7px 0; font-size: 14px; border-top: 1px solid var(--field);
+      cursor: pointer; }
   #bot-list li:first-child { border-top: none; }
-  #bot-list li:hover { background: #1a1f2a; }
-  #bot-list li[data-selected="true"] { background: #1a1f2a; box-shadow: inset 2px 0 #3fb950; }
-  #bot-list li:focus-visible { outline: 1px solid #58627a; outline-offset: 2px; }
+  #bot-list li:hover { background: var(--field-alt); }
+  #bot-list li[data-selected="true"] { background: var(--field-alt);
+      box-shadow: inset 2px 0 var(--ok); }
+  #bot-list li:focus-visible { outline: 1px solid var(--line-hover); outline-offset: 2px; }
   .bot-name { display: block; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .bot-permission { display: inline-block; margin-right: 6px; padding: 0 6px; font-size: 11px;
-    color: #8b95a7; border: 1px solid #39404f; border-radius: 999px; }
-  .bot-permission[data-unavailable="true"] { color: #ffb4ab;
+    color: var(--muted); border: 1px solid var(--line-strong); border-radius: 999px; }
+  .bot-permission[data-unavailable="true"] { color: var(--danger-text);
     border-color: rgb(248 81 73 / 55%); }
   #audit { margin-top: 18px; }
   #audit h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
-  #audit-state { margin: 0; font-size: 12px; color: #8b95a7; }
+  #audit-state { margin: 0; font-size: 12px; color: var(--muted); }
   #audit-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; }
-  #audit-list li { padding: 4px 0; border-top: 1px solid #1f2430; }
-  #audit-list li[data-effect="deny"] { color: #ffb4ab; }
+  #audit-list li { padding: 4px 0; border-top: 1px solid var(--field); }
+  #audit-list li[data-effect="deny"] { color: var(--danger-text); }
   /* S17：上下文来源清单（与审计面板同构；truncated 的来源单独着色） */
   #context { margin-top: 18px; }
   #context h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
-  #context-state { margin: 0; font-size: 12px; color: #8b95a7; }
+  #context-state { margin: 0; font-size: 12px; color: var(--muted); }
   #context-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; }
-  #context-list li { padding: 4px 0; border-top: 1px solid #1f2430; }
-  #context-list li[data-truncated="true"] { color: #ffb4ab; }
-  .bot-charter-summary { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
+  #context-list li { padding: 4px 0; border-top: 1px solid var(--field); }
+  #context-list li[data-truncated="true"] { color: var(--danger-text); }
+  .bot-charter-summary { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
   #bots[data-state="idle"] #bot-list,
   #bots[data-state="idle"] #bot-empty,
   #bots[data-state="idle"] #bot-new,
@@ -295,28 +310,30 @@ INDEX_HTML: Final = """<!doctype html>
   /* S8 D8：新建 Bot。按钮只在 ready 出现（没选仓库 / 读取中 / 出错时不装作能建）；表单开关只看
      `hidden`——`display: grid` 会盖掉 UA 的 `[hidden]`，所以这条 `[hidden]` 规则是**必须的**。 */
   #bot-new { margin-top: 12px; padding: 6px 12px; font: inherit; font-size: 13px;
-    color: #e6e9ef; background: #1a1f2a; border: 1px solid #39404f; border-radius: 6px;
+    color: var(--text); background: var(--field-alt); border: 1px solid var(--line-strong);
+      border-radius: 6px;
     cursor: pointer; }
-  #bot-new:hover { border-color: #58627a; }
-  #bot-new:focus-visible { outline: 1px solid #58627a; outline-offset: 2px; }
+  #bot-new:hover { border-color: var(--line-hover); }
+  #bot-new:focus-visible { outline: 1px solid var(--line-hover); outline-offset: 2px; }
   #bot-create-form { margin: 10px 0 0; display: grid; gap: 8px; }
   #bot-create-form[hidden] { display: none; }
   #bot-create-name, #bot-create-permission, #charter-permission {
-    min-width: 0; padding: 6px 8px; font: inherit; font-size: 13px; color: #e6e9ef;
-    background: #0f1115; border: 1px solid #39404f; border-radius: 6px; }
+    min-width: 0; padding: 6px 8px; font: inherit; font-size: 13px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line-strong); border-radius: 6px; }
   #bot-create-name:focus, #bot-create-permission:focus, #charter-permission:focus {
-    outline: none; border-color: #58627a; }
+    outline: none; border-color: var(--line-hover); }
   #bot-create-actions { display: flex; gap: 8px; }
   #bot-create-submit, #bot-create-cancel { padding: 6px 12px; font: inherit; font-size: 13px;
     border-radius: 6px; cursor: pointer; }
-  #bot-create-submit { color: #0f1115; background: #3fb950; border: 1px solid #3fb950; }
+  #bot-create-submit { color: #1f2328; background: var(--ok); border: 1px solid var(--ok); }
   #bot-create-submit:disabled { opacity: .45; cursor: progress; }
-  #bot-create-cancel { color: #e6e9ef; background: transparent; border: 1px solid #39404f; }
-  #bot-create-error { margin: 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+  #bot-create-cancel { color: var(--text); background: transparent;
+      border: 1px solid var(--line-strong); }
+  #bot-create-error { margin: 0; padding: 7px 10px; font-size: 13px; color: var(--danger-text);
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
-  #charter-permission-row { margin: 8px 0 0; font-size: 13px; color: #8b95a7; }
+  #charter-permission-row { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
   #charter-permission { margin-left: 8px; }
-  #charter-memory { margin: 8px 0 0; font-size: 13px; color: #8b95a7;
+  #charter-memory { margin: 8px 0 0; font-size: 13px; color: var(--muted);
     font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
   #charter-content { margin: 10px 0 0; max-height: 60vh; overflow: auto;
     white-space: pre-wrap; font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -334,20 +351,23 @@ INDEX_HTML: Final = """<!doctype html>
   #charter[data-state="error"] #charter-content { display: none; }
   /* 工作区卡片（S7 D9）。显隐只由 `#workspace[data-state=…]` 与 `hidden` 决定（T8：不碰
      style.display）；路径 / 分支 / Bot 名都是用户数据，只进 textContent。 */
-  #workspace { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #workspace { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
   #workspace h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600;
-    letter-spacing: .08em; color: #8b95a7; text-transform: uppercase; }
+    letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
   #workspace-form { display: flex; gap: 8px; margin: 10px 0 0; }
   #workspace-base { flex: 1; min-width: 0; padding: 6px 8px; font: inherit; font-size: 13px;
-    color: #e6e9ef; background: #0f1115; border: 1px solid #39404f; border-radius: 6px; }
+    color: var(--text); background: var(--bg); border: 1px solid var(--line-strong);
+      border-radius: 6px; }
   #workspace-acquire, #workspace-release { padding: 6px 12px; font: inherit; font-size: 13px;
-    color: #e6e9ef; background: #1f2430; border: 1px solid #39404f; border-radius: 6px;
+    color: var(--text); background: var(--field); border: 1px solid var(--line-strong);
+      border-radius: 6px;
     cursor: pointer; }
-  #workspace-acquire:hover, #workspace-release:hover { border-color: #58627a; }
+  #workspace-acquire:hover, #workspace-release:hover { border-color: var(--line-hover); }
   #workspace-acquire:disabled, #workspace-release:disabled { opacity: .5; cursor: progress; }
   #workspace-release { margin: 10px 0 0; }
-  #workspace-state, #workspace-empty { margin: 8px 0 0; font-size: 13px; color: #8b95a7; }
-  #workspace-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+  #workspace-state, #workspace-empty { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+  #workspace-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px;
+      color: var(--danger-text);
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
   #workspace-bot, #workspace-path, #workspace-branch { margin: 6px 0 0; font-size: 13px;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
@@ -367,21 +387,22 @@ INDEX_HTML: Final = """<!doctype html>
      的第一版缺陷）。没有工作区时 `#workspace-details` 靠 `hidden` 属性隐藏，与这里无关。 */
   /* Agent 通道卡片（S9 D9）。四态只由 `#agent[data-state=…]` 与 `hidden` 决定（T8：不碰
      style.display）；版本号与能力名都是 Agent 自己报的，只进 textContent。 */
-  #agent { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid #262b36; }
+  #agent { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
   #agent h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600;
-    letter-spacing: .08em; color: #8b95a7; text-transform: uppercase; }
-  #agent-state { margin: 8px 0 8px; font-size: 13px; color: #8b95a7; }
-  #agent-detect { padding: 6px 12px; font: inherit; font-size: 13px; color: #e6e9ef;
-    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
-  #agent-detect:hover { border-color: #58627a; }
+    letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+  #agent-state { margin: 8px 0 8px; font-size: 13px; color: var(--muted); }
+  #agent-detect { padding: 6px 12px; font: inherit; font-size: 13px; color: var(--text);
+    background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px;
+      cursor: pointer; }
+  #agent-detect:hover { border-color: var(--line-hover); }
   #agent-detect:disabled { opacity: .5; cursor: progress; }
-  #agent-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+  #agent-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: var(--danger-text);
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
   #agent-detail { margin: 10px 0 0; }
   #agent-kind, #agent-version, #agent-protocol, #agent-elapsed { margin: 4px 0 0;
     font-size: 13px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
     word-break: break-all; }
-  #agent-flags-title { margin: 10px 0 0; font-size: 13px; color: #8b95a7; }
+  #agent-flags-title { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
   #agent-flags { margin: 4px 0 0; padding-left: 20px; font-size: 13px;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   #agent-flags li { margin: 2px 0; }
@@ -395,15 +416,16 @@ INDEX_HTML: Final = """<!doctype html>
      失败的，并直接再派一次。 */
   #task-form { display: flex; gap: 8px; margin-top: 8px; }
   #task-prompt { flex: 1; padding: 7px 10px; font-size: 14px; color: inherit;
-    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; }
+    background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; }
   #task-dispatch, #task-cancel, #task-rerun { padding: 7px 14px; font-size: 14px; color: inherit;
-    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
-  #task-dispatch:hover, #task-cancel:hover, #task-rerun:hover { border-color: #58627a; }
+    background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px;
+      cursor: pointer; }
+  #task-dispatch:hover, #task-cancel:hover, #task-rerun:hover { border-color: var(--line-hover); }
   #task-dispatch:disabled { opacity: .5; cursor: progress; }
-  #task-cancel { border-color: rgb(248 81 73 / 55%); color: #ffb4ab; }
+  #task-cancel { border-color: rgb(248 81 73 / 55%); color: var(--danger-text); }
   /* S15：重跑按钮只在 interrupted 态出现（显隐由 data-state 决定，JS 不碰 style.display）。 */
-  #task-rerun { border-color: rgb(210 153 34 / 55%); color: #e3b341; }
-  #task-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+  #task-rerun { border-color: rgb(210 153 34 / 55%); color: var(--warn); }
+  #task-error { margin: 10px 0 0; padding: 7px 10px; font-size: 13px; color: var(--danger-text);
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
   #task-details { margin: 10px 0 0; }
   #task-id, #task-status-line { margin: 4px 0 0; font-size: 13px;
@@ -422,26 +444,28 @@ INDEX_HTML: Final = """<!doctype html>
   #candidate-detail { margin-top: 8px; }
   #candidate-branch, #candidate-stat { margin: 4px 0 0; font-size: 13px;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
-  #candidate-error { margin: 8px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+  #candidate-error { margin: 8px 0 0; padding: 7px 10px; font-size: 13px; color: var(--danger-text);
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
   #candidate-open { margin-top: 8px; padding: 7px 14px; font-size: 14px; color: inherit;
-    background: #1f2430; border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
+    background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px;
+      cursor: pointer; }
   #candidate[data-state="idle"] #candidate-detail,
   #candidate[data-state="idle"] #candidate-error,
   #candidate[data-state="loading"] #candidate-detail { display: none; }
   /* 审核按钮（S13）：终态隐藏操作区；无「合并」按钮（L4 永不开放）。 */
-  #candidate-actions { margin-top: 10px; padding-top: 8px; border-top: 1px solid #39404f; }
+  #candidate-actions { margin-top: 10px; padding-top: 8px;
+      border-top: 1px solid var(--line-strong); }
   #candidate[data-state="approved"] #candidate-actions,
   #candidate[data-state="rejected"] #candidate-actions { display: none; }
   #candidate-approve, #candidate-reject, #candidate-open { margin: 8px 8px 0 0;
-    padding: 7px 14px; font-size: 14px; color: inherit; background: #1f2430;
-    border: 1px solid #39404f; border-radius: 6px; cursor: pointer; }
+    padding: 7px 14px; font-size: 14px; color: inherit; background: var(--field);
+    border: 1px solid var(--line-strong); border-radius: 6px; cursor: pointer; }
   #candidate-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
   #candidate-reason { display: block; width: 100%; box-sizing: border-box; margin-top: 8px;
-    padding: 6px 8px; color: inherit; background: #1f2430;
-    border: 1px solid #39404f; border-radius: 6px; }
-  #candidate-reason-note { margin: 4px 0 0; font-size: 12px; color: #aab2c0; }
-  #candidate-reject-reason { margin: 6px 0 0; font-size: 13px; color: #ffb4ab; }
+    padding: 6px 8px; color: inherit; background: var(--field);
+    border: 1px solid var(--line-strong); border-radius: 6px; }
+  #candidate-reason-note { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); }
+  #candidate-reject-reason { margin: 6px 0 0; font-size: 13px; color: var(--danger-text); }
   /* 变更收件箱（S12）：入口在左栏仓库条目下，列表在主区。状态机只有 CSS 决定显隐。 */
   #inbox[data-state="idle"] #inbox-body,
   #inbox[data-state="idle"] #inbox-error,
@@ -452,19 +476,34 @@ INDEX_HTML: Final = """<!doctype html>
   #inbox[data-state="idle"] #inbox-filter,
   #inbox[data-state="empty"] #inbox-list { display: none; }
   #inbox-list { margin: 8px 0 0; padding: 0; list-style: none; }
-  #inbox-list li { margin: 0 0 6px; padding: 8px 10px; border: 1px solid #39404f;
+  #inbox-list li { margin: 0 0 6px; padding: 8px 10px; border: 1px solid var(--line-strong);
     border-radius: 6px; cursor: pointer; }
-  #inbox-list li:hover, #inbox-list li:focus { background: #1f2430; outline: none; }
+  #inbox-list li:hover, #inbox-list li:focus { background: var(--field); outline: none; }
   .inbox-title { font-size: 14px; }
-  .inbox-meta { display: block; margin-top: 3px; font-size: 12px; color: #aab2c0; }
+  .inbox-meta { display: block; margin-top: 3px; font-size: 12px; color: var(--muted-2); }
   .inbox-state { margin-left: 8px; padding: 1px 6px; font-size: 11px;
-    border: 1px solid #39404f; border-radius: 9px; }
+    border: 1px solid var(--line-strong); border-radius: 9px; }
   #inbox-filter { margin-left: 10px; padding: 4px 8px; font-size: 13px;
-    color: inherit; background: #1f2430; border: 1px solid #39404f; border-radius: 6px; }
-  #inbox-error { margin: 8px 0 0; padding: 7px 10px; font-size: 13px; color: #ffb4ab;
+    color: inherit; background: var(--field); border: 1px solid var(--line-strong);
+      border-radius: 6px; }
+  #inbox-error { margin: 8px 0 0; padding: 7px 10px; font-size: 13px; color: var(--danger-text);
     background: rgb(248 81 73 / 12%); border: 1px solid rgb(248 81 73 / 45%); border-radius: 6px; }
-  .repo-inbox-link { margin-left: 8px; font-size: 11px; color: #58a6ff; cursor: pointer; }
+  .repo-inbox-link { margin-left: 8px; font-size: 11px; color: var(--link); cursor: pointer; }
   .repo-inbox-link:hover, .repo-inbox-link:focus { text-decoration: underline; outline: none; }
+  /* S18 D5/D6/D7：空态与「为什么不能用」的提示。显隐仍由 data-state / hidden 决定，
+     这里只管样式；颜色取 token，浅色下同样可读。 */
+  #candidate-empty, #audit-empty, #context-empty {
+    margin: 8px 0 0; font-size: 13px; color: var(--muted);
+  }
+  /* 空态与"有数据"互斥：empty 时不显示详情/列表，loading/error 时不显示空态（T8）。 */
+  #candidate[data-state="empty"] #candidate-detail,
+  #candidate[data-state="empty"] #candidate-error { display: none; }
+  #audit[data-state="loading"] #audit-empty,
+  #audit[data-state="error"] #audit-empty,
+  #context[data-state="loading"] #context-empty,
+  #context[data-state="error"] #context-empty { display: none; }
+  #status-hint { margin: -6px 0 16px; font-size: 13px; color: var(--warn); }
+  #task-permission-note { margin: 6px 0 0; font-size: 13px; color: var(--warn); }
 </style>
 </head>
 <body>
@@ -476,7 +515,9 @@ INDEX_HTML: Final = """<!doctype html>
       <button id="reconnect" type="button">重连</button>
     </span>
   </header>
-  <p id="note" style="display:none; margin:-8px 0 18px; font-size:13px; color:#d29922;"></p>
+  <p id="note" style="display:none; margin:-8px 0 18px; font-size:13px; color:var(--warn);"></p>
+  <!-- S18 D6：断线原因。文案由 JS 按「连接尝试失败 / 连上后掉线」分别填。 -->
+  <p id="status-hint" role="status" hidden></p>
   <div id="content">
     <dl>
       <dt>version</dt><dd>%%VERSION%%</dd>
@@ -570,12 +611,15 @@ INDEX_HTML: Final = """<!doctype html>
     <form id="task-form" autocomplete="off">
       <input id="task-prompt" type="text" spellcheck="false" maxlength="512"
              placeholder="给这个 Bot 的一句话指令，如：创建一个 hello.txt" aria-label="派活指令">
-      <button id="task-dispatch" type="submit" disabled>派活</button>
+      <button id="task-dispatch" type="submit" disabled
+            aria-describedby="task-permission-note">派活</button>
     </form>
     <button id="task-cancel" type="button" hidden>取消任务</button>
     <!-- S15：内核重启过、任务被打断时由用户显式点「重跑」；页面绝不自作主张重派。 -->
     <button id="task-rerun" type="button" hidden>重跑这个任务</button>
     <p id="task-error" role="alert" hidden></p>
+    <!-- S18 D7：L0 不是静默禁用——同屏给原因，文案与 ERROR_TEXT 同源（JS 取表）。 -->
+    <p id="task-permission-note" hidden></p>
     <div id="task-details" hidden>
       <p id="task-id"></p>
       <p id="task-status-line"></p>
@@ -586,6 +630,8 @@ INDEX_HTML: Final = """<!doctype html>
   <section id="candidate" data-state="idle" aria-live="polite">
     <h2 id="candidate-title">候选变更</h2>
     <p id="candidate-state">还没有候选</p>
+    <!-- S18 D5：只有 ready 且真的 0 条候选时才出现（idle 说「没选」，不说「没有」）。 -->
+    <p id="candidate-empty" hidden>还没有候选变更：派活成功后，Bot 的改动会出现在这里。</p>
     <div id="candidate-detail">
       <p id="candidate-branch"></p>
       <p id="candidate-stat"></p>
@@ -652,12 +698,14 @@ INDEX_HTML: Final = """<!doctype html>
   <section id="audit" data-state="idle" aria-live="polite">
     <h2 id="audit-title">权限审计</h2>
     <p id="audit-state">选择一个 Bot 查看它的权限裁决</p>
+    <p id="audit-empty" hidden>这个 Bot 还没有权限裁决记录。</p>
     <ul id="audit-list"></ul>
   </section>
   <!-- S17 D8：本次会注入哪些上下文（只读清单，来源 + 层级 + 字节数）。 -->
   <section id="context" data-state="idle" aria-live="polite">
     <h2 id="context-title">本次注入的上下文</h2>
     <p id="context-state">选择一个 Bot 查看本次会注入的上下文</p>
+    <p id="context-empty" hidden>本次没有需要注入的上下文。</p>
     <ul id="context-list"></ul>
   </section>
   <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
@@ -684,7 +732,8 @@ INDEX_HTML: Final = """<!doctype html>
   var CONNECT_TIMEOUT_MS = 2000;                         // 握手超时，也算失败
   // 错误码 → 可读中文（07 §1.3；由 render_index 从 ERROR_TEXT 注入，只含静态文案）
   var ERROR_TEXT = %%ERROR_TEXT%%;
-  var ERROR_TEXT_FALLBACK = "%%ERROR_TEXT_FALLBACK%%";  // 静态常量，不来自服务端
+  var ERROR_TEXT_FALLBACK = "%%ERROR_TEXT_FALLBACK%%";  // 静态常量，不来自服务端（绑定表单专用）
+  var UNKNOWN_CODE_TEXT = "%%UNKNOWN_CODE_TEXT%%";      // S18 D3：表外码的统一兜底
 
   var metaPath = document.querySelector('meta[name="postel-ws-path"]');
   var metaTicket = document.querySelector('meta[name="postel-handshake"]');
@@ -710,6 +759,8 @@ INDEX_HTML: Final = """<!doctype html>
   var repoState = document.getElementById("repo-state");
   var repoList = document.getElementById("repo-list");
   var repoEmpty = document.getElementById("repo-empty");
+  // S18 D6：断线原因（连接尝试失败 vs 连上后掉线）
+  var statusHint = document.getElementById("status-hint");
 
   // 分支面板元素（S4 D6）
   var branchesEl = document.getElementById("branches");
@@ -768,12 +819,15 @@ INDEX_HTML: Final = """<!doctype html>
   // S8：botId → permission。徽标与 charter 面板的下拉**同源**（都来自 bot.list），
   // 所以改权限成功后只需重拉一次列表，两处一起更新。
   var botPermissions = {};
+  var auditEl = document.getElementById("audit");
   var auditList = document.getElementById("audit-list");
   var auditState = document.getElementById("audit-state");
+  var auditEmpty = document.getElementById("audit-empty");
   // S17：上下文清单（只读；与 audit 面板同构，改动只走 data-state / textContent）
   var contextEl = document.getElementById("context");
   var contextList = document.getElementById("context-list");
   var contextState = document.getElementById("context-state");
+  var contextEmpty = document.getElementById("context-empty");
   var botRequestToken = 0;        // 只认最后一次 bot.list 的回包（快速切仓库）
   var charterRequestToken = 0;    // 只认最后一次 charter 请求的回包
 
@@ -831,6 +885,7 @@ INDEX_HTML: Final = """<!doctype html>
   var taskForm = document.getElementById("task-form");
   var taskPrompt = document.getElementById("task-prompt");
   var taskDispatch = document.getElementById("task-dispatch");
+  var taskPermissionNote = document.getElementById("task-permission-note");
   var taskCancel = document.getElementById("task-cancel");
   var taskRerun = document.getElementById("task-rerun");  // S15：显式重跑（绝不自动派）
   var lastTaskPrompt = "";  // S15：被中断任务的原 prompt，重跑时填回输入框供用户确认/修改
@@ -841,6 +896,7 @@ INDEX_HTML: Final = """<!doctype html>
   // 候选详情卡（S11）。用户数据（分支/stat）一律 textContent。
   var candidateEl = document.getElementById("candidate");
   var candidateState = document.getElementById("candidate-state");
+  var candidateEmpty = document.getElementById("candidate-empty");  // S18 D5
   var candidateBranch = document.getElementById("candidate-branch");
   var candidateStat = document.getElementById("candidate-stat");
   var candidateError = document.getElementById("candidate-error");
@@ -875,9 +931,13 @@ INDEX_HTML: Final = """<!doctype html>
     interrupted: "被打断（内核重启过，确认后可重跑）"
   };
 
-  function setState(state, text) {
+  // S18 D6：`hint` 是「为什么断了 / 下一步做什么」。连上或重连中必须清掉，
+  // 否则上一次的「内核不可达」会留在屏幕上给一次成功的连接陪跑。
+  function setState(state, text, hint) {
     statusEl.dataset.state = state;
     statusText.textContent = text;
+    if (hint) { statusHint.textContent = hint; statusHint.hidden = false; }
+    else { statusHint.textContent = ""; statusHint.hidden = true; }
     button.style.display = state === "disconnected" ? "inline-block" : "none";
     button.disabled = false;
     content.classList.toggle("stale", state !== "connected");
@@ -922,6 +982,7 @@ INDEX_HTML: Final = """<!doctype html>
     // S10：派活卡片同一纪律。任务属于上一次连接——内核重启后它的 worker 已经不在了，
     // 留着「运行中」的灯就是撒谎； taskId 也一并清（evt 只认连接内产生的任务）。
     resetTask("idle", state === "disconnected" ? "已断开：任务状态未知" : TASK_HINT);
+    resetAudit("idle", state === "disconnected" ? "已断开：审计未知" : "正在连接内核…");
     resetCandidate("idle", CANDIDATE_HINT);   // S11：候选也属于上一次连接
     resetInbox("idle", INBOX_HINT);           // S12：收件箱也属于上一次连接
     resetContext("idle", state === "disconnected"
@@ -929,7 +990,7 @@ INDEX_HTML: Final = """<!doctype html>
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
-  function errorText(code) { return ERROR_TEXT[code] || ERROR_TEXT_FALLBACK; }
+  function errorText(code) { return ERROR_TEXT[code] || UNKNOWN_CODE_TEXT; }
 
   function showRepoError(text) { reposError.textContent = text; reposError.hidden = false; }
   function clearRepoError() { reposError.textContent = ""; reposError.hidden = true; }
@@ -1604,6 +1665,7 @@ INDEX_HTML: Final = """<!doctype html>
       }
       botPermissions[botId] = String((data || {}).permission || wanted);
       charterPermission.value = botPermissions[botId];
+      updateTaskPermissionNote();
       loadBots();   // 左栏徽标由 bot.list 渲染：一处事实源，两处一起更新
     });
   }
@@ -1849,6 +1911,7 @@ INDEX_HTML: Final = """<!doctype html>
   function resetContext(state, text) {
     contextEl.dataset.state = state;
     contextState.textContent = text;
+    contextEmpty.hidden = state !== "empty";
     contextList.textContent = "";
   }
 
@@ -1862,6 +1925,8 @@ INDEX_HTML: Final = """<!doctype html>
       }
       var sources = Array.isArray(data.sources) ? data.sources : [];
       contextList.textContent = "";
+      if (sources.length === 0) { resetContext("empty", ""); return; }
+      contextEmpty.hidden = true;
       for (var i = 0; i < sources.length; i++) {
         var row = sources[i] || {};
         var li = document.createElement("li");
@@ -1894,18 +1959,29 @@ INDEX_HTML: Final = """<!doctype html>
     }
   }
 
-  function loadAudit(botId) {
+  // S18 D5：审计面板的显隐只有两种"有内容"态：ready（有记录）/ empty（0 条）。
+  // 注意 `request` 的回调形状是 `(err, data)`——S16 曾把它写成 `(frame)`，
+  // 于是 `!frame` 永远为真、面板永远显示「审计读取失败」（D9）。
+  function resetAudit(state, text) {
+    auditEl.dataset.state = state;
+    auditState.textContent = text;
+    auditEmpty.hidden = state !== "empty";
     auditList.textContent = "";
-    auditState.textContent = "正在读取审计…";
-    request("audit.list", { botId: botId }, function (frame) {
-      if (!frame || frame.ok === false || !Array.isArray(frame.data)) {
-        auditState.textContent = "审计读取失败";
+  }
+
+  function loadAudit(botId) {
+    resetAudit("loading", "正在读取审计…");
+    request("audit.list", { botId: botId }, function (err, data) {
+      if (err) {
+        resetAudit("error", "审计读取失败（" + errorText(err) + "）");
         return;
       }
-      auditList.textContent = "";
+      var rows = Array.isArray(data) ? data : [];
+      resetAudit(rows.length === 0 ? "empty" : "ready",
+        rows.length === 0 ? "" : "共 " + rows.length + " 条");
       var hasFallback = false;
-      for (var i = 0; i < frame.data.length; i++) {
-        var row = frame.data[i] || {};
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i] || {};
         var li = document.createElement("li");
         var effect = String(row.effect || "").toLowerCase();
         if (effect === "fallback") { hasFallback = true; }
@@ -1915,14 +1991,23 @@ INDEX_HTML: Final = """<!doctype html>
         auditList.appendChild(li);
       }
       if (hasFallback) { markPermissionUnavailable(botId); }
-      auditState.textContent = frame.data.length === 0 ? "暂无审计记录"
-        : "共 " + frame.data.length + " 条";
     });
   }
 
   // ---- 派活卡片（S10） ------------------------------------------------------
   // 状态灯五种：idle（没选 Bot）/ ready（选了 Bot，没在跟任务）/ running / done / error。
   // 显示什么由 data-state 决定；这里只改属性与文本（T8：别逐个 style.display）。
+
+  // S18 D7：L0 不是静默禁用——同屏告诉用户"为什么不能派、去哪改"。
+  // 文案直接取 `ERROR_TEXT.PERMISSION_DENIED`（api/errors.py 注入），不复制第二份。
+  function updateTaskPermissionNote() {
+    var permission = selectedBotId ? String(botPermissions[selectedBotId] || "") : "";
+    var blocked = permission === "L0";
+    taskPermissionNote.textContent = blocked ? String(ERROR_TEXT.PERMISSION_DENIED || "") : "";
+    taskPermissionNote.hidden = !blocked;
+    if (blocked) { taskDispatch.disabled = true; }
+    return blocked;
+  }
 
   function resetTask(state, text) {
     taskBusy = false;
@@ -1937,6 +2022,7 @@ INDEX_HTML: Final = """<!doctype html>
     taskPrompt.value = "";
     lastTaskPrompt = "";
     taskDispatch.disabled = !selectedBotId;
+    if (selectedBotId) { updateTaskPermissionNote(); } else { taskPermissionNote.hidden = true; }
     taskCancel.hidden = true;
     taskRerun.hidden = true;
   }
@@ -2128,6 +2214,7 @@ INDEX_HTML: Final = """<!doctype html>
     currentCandidate = null;
     candidateEl.dataset.state = state;
     candidateState.textContent = text;
+    candidateEmpty.hidden = state !== "empty";
     candidateError.textContent = "";
     candidateError.hidden = true;
     candidateBranch.textContent = "";
@@ -2205,8 +2292,9 @@ INDEX_HTML: Final = """<!doctype html>
   function loadCandidate(taskId) {
     if (!selectedRepoId || !taskId) { return; }
     request("candidate.list", { repoId: selectedRepoId, taskId: taskId }, function (err, data) {
-      if (err) { showCandidateError("读取候选失败（" + err + "）"); return; }
-      if (Array.isArray(data) && data.length > 0) { trackCandidate(data[0]); }
+      if (err) { showCandidateError("读取候选失败（" + errorText(err) + "）"); return; }
+      if (Array.isArray(data) && data.length > 0) { trackCandidate(data[0]); return; }
+      resetCandidate("empty", "");   // S18 D5：这个仓库/任务真的没有候选
     });
   }
 
@@ -2215,7 +2303,8 @@ INDEX_HTML: Final = """<!doctype html>
     if (!selectedRepoId) { return; }
     request("candidate.list", { repoId: selectedRepoId }, function (err, data) {
       if (err) { return; }  // 列表页的空态/错误由 S12 管，这里静默留 idle
-      if (Array.isArray(data) && data.length > 0) { trackCandidate(data[0]); }
+      if (Array.isArray(data) && data.length > 0) { trackCandidate(data[0]); return; }
+      resetCandidate("empty", "");   // S18 D5：选中的仓库确实还没有候选
     });
   }
 
@@ -2293,12 +2382,19 @@ INDEX_HTML: Final = """<!doctype html>
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
   }
 
-  function fail() {          // 唯一的「向下」出口：三态里只有已断开是终态
+  // S18 D6：两种断法文案不同。`unreachable` = 连不上（握手超时 / 端口变了 / 内核没起），
+  // 其余 = 连上之后掉的。都保留「已断开」字样（S2/S3 的既有断言按它匹配）。
+  var UNREACHABLE_TEXT = "已断开 · 内核不可达";
+  var UNREACHABLE_HINT = "内核不可达：确认内核进程还在，然后点「重连」。";
+  var DROPPED_HINT = "连接断了：内核可能已退出，点「重连」再试。";
+
+  function fail(reason) {    // 唯一的「向下」出口：三态里只有已断开是终态
     clearTimers();
     socket = null;
     pending = {};            // 断连后没人会回这些包了，别让回调永远挂着
     bindPending = false;
-    setState("disconnected", "已断开");
+    if (reason === "unreachable") { setState("disconnected", UNREACHABLE_TEXT, UNREACHABLE_HINT); }
+    else { setState("disconnected", "已断开", DROPPED_HINT); }
   }
 
   function send(method, params) {
@@ -2401,9 +2497,11 @@ INDEX_HTML: Final = """<!doctype html>
     var url = "ws://" + location.host + metaPath.content + "?ticket=" + encodeURIComponent(ticket);
     var ws;
     try { ws = new WebSocket(url); }
-    catch (e) { fail(); return; }
+    catch (e) { fail("unreachable"); return; }
     socket = ws;
-    connectTimer = setTimeout(function () { if (socket === ws && ws.readyState === 0) { fail(); } },
+    connectTimer = setTimeout(function () {
+      if (socket === ws && ws.readyState === 0) { fail("unreachable"); }
+    },
                               CONNECT_TIMEOUT_MS);
     ws.onopen = function () {
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
@@ -2427,7 +2525,7 @@ INDEX_HTML: Final = """<!doctype html>
     setTimeout(function () {
       freshTicket().then(connect).catch(function () {
         // 不重载页面：端口变了的话重载也还是旧地址，只会骗人。
-        fail();
+        fail("unreachable");
         setNote("内核已换端口或未启动，请从启动它的终端重新打开地址");
       });
     }, RECONNECT_DELAY_MS);
@@ -2483,13 +2581,13 @@ INDEX_HTML: Final = """<!doctype html>
 """
 
 
-def error_text_json() -> str:
-    """把 `ERROR_TEXT` 序列化成 **JS 字面量**（`json.dumps` 的输出就是合法 JS 对象）。
+def error_text_json(error_text: Mapping[str, str]) -> str:
+    r"""把错误码表序列化成 **JS 字面量**（`json.dumps` 的输出就是合法 JS 对象）。
 
-    走占位符而不是把文案硬写在 JS 里：错误码与文案的对照只有一处（Python 侧可被测试读到），
-    页面不必在两种语言里各维护一份映射。`ensure_ascii=False` 让中文在源码里可读。
+    表由 `api/errors.py` 唯一持有、`app.py` 注入（S18 D1）；`ensure_ascii=False` 让中文
+    在源码里可读，`</` 转义成 `<\/` 是防 `</script>` 提前闭合的零成本保险。
     """
-    return json.dumps(ERROR_TEXT, ensure_ascii=False)
+    return json.dumps(error_text, ensure_ascii=False).replace("</", "<\\/")
 
 
 def render_index(
@@ -2498,6 +2596,8 @@ def render_index(
     state_root: str,
     handshake_ticket: str,
     ws_path: str,
+    error_text: Mapping[str, str],
+    unknown_code_text: str,
 ) -> str:
     """填占位符。除两个数值外都 `html.escape`，避免路径里的 `&` / `<>` 破坏页面。
 
@@ -2512,9 +2612,10 @@ def render_index(
         "%%WS_PATH%%": html.escape(ws_path),
         "%%HEARTBEAT_INTERVAL_MS%%": str(HEARTBEAT_INTERVAL_MS),
         "%%RECONNECT_DELAY_MS%%": str(RECONNECT_DELAY_MS),
-        "%%ERROR_TEXT%%": error_text_json(),
+        "%%ERROR_TEXT%%": error_text_json(error_text),
         # 静态文案（本模块常量），不来自服务端；仍按「外部输入一律转义」的习惯转义
         "%%ERROR_TEXT_FALLBACK%%": html.escape(ERROR_TEXT_FALLBACK),
+        "%%UNKNOWN_CODE_TEXT%%": html.escape(unknown_code_text),
     }
     assert set(values) == set(REQUIRED_PARAMS), "占位符清单与替换表不一致"
     page = INDEX_HTML

@@ -349,7 +349,7 @@
 | S15 | **规格已定（代码中）**：后端恢复在 S10 已落地；S15 补 UI `interrupted` 态 + 重跑按钮、真重启端到端测试；U10 收口、U1/U20 顺延 | `web/assets.py`、`api/server.py`、`tests/test_recovery.py`、`tools/acceptance/s15_recovery.mjs` | 后端零重写（预算纪律）；U20 顺延 S16 与权限门一并裁决 |
 | S16 | **规格已定（代码中）**：opencode v2 `permissions` 执行前真阻断（L0 只读 / L1 禁 push / L2 只许 origin）+ 审计；U20 顺延 S20 且不再顺延 | `domain/permission.py`、`agent/gate.py`、`orchestrator.py`、`tests/test_permission_gate.py` | 不靠 prompt 约束；不可阻断路径 fail-closed + UI/文档标注 |
 | S17 | 上下文可见 | 记忆注入：`memory/inject.py` 实时读 AGENTS.md/README.md/charter（不复制）+ 预览 `memory.context.preview` + 派活前冲突阻断 | `tests/test_injection.py` |
-| S18 | 空态/错误态 | 前端文案体系 | |
+| ~~S18~~ | **已完成**：八个面板各有空态；错误码 → 文案单源（`api/errors.py`）+ 帧 message 脱敏；断线分「内核不可达 / 连接断了」；L0 派活同屏给原因；浅/暗两套 token | `api/errors.py`、`web/assets.py`、`tests/test_states.py`、`tools/acceptance/s18_states.mjs` | 补登记 `FRAME_TOO_LARGE`；顺手修 S16 的 `loadAudit` 回调形状；U16 豁免到期改 S20 |
 | S19 | doctor | 自检命令 | `__init__.py` 加子命令 |
 | S20 | 发版 | 版本号同步 | 见 [entry.md 版本号两个来源](03-modules/entry.md) |
 

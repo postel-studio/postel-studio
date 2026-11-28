@@ -208,6 +208,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | `gitops/repo.py` | `api` / `web` / `storage` / `domain` |
 | `agent/acp_client.py`、`agent/registry.py`（S9，L0） | `api` / `web` / `storage` / `domain` / `gitops` |
 | `api/frames.py`（L1，纯数据变换） | 上面全部 + `fastapi` / `starlette` / `uvicorn` / `websockets` / `subprocess` / `sqlite3` |
+| `api/errors.py`（S18，L1） | 任何上层（`app` / `gateway` / handler / `web` / `storage` / `gitops` / `domain`）与框架——页面靠 `render_index` 注入拿表 |
 | `api/server.py`（L2） | `repository` / `web` / `storage.db` |
 | `api/app.py` | `api/server.py`（反向会成环） |
 | `api/gateway.py` | `api/app.py`（T14：能力靠 `Providers` 注入）/ `api/server.py` / `repository` / `web` / `storage` / `gitops` / `domain` |

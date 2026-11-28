@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from postel_studio import __version__
-from postel_studio.api import gateway
+from postel_studio.api import errors, gateway
 from postel_studio.api.agents import AgentsService
 from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
@@ -103,6 +103,8 @@ def create_app(
             state_root=root,
             handshake_ticket=tickets.issue(),
             ws_path=ws_path,
+            error_text=errors.ERROR_TEXT,
+            unknown_code_text=errors.UNKNOWN_CODE_TEXT,
         )
         return HTMLResponse(
             page, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}

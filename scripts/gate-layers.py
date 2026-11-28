@@ -96,6 +96,26 @@ LAYERS: dict[str, tuple[str, ...]] = {
     # S16：执行前裁决层（L1）——只读 L0 的 acp_client / storage / domain，不碰 api / web。
     "agent/gate.py": ("postel_studio.api", "postel_studio.web"),
     # ---- L1：纯数据变换，不许 IO / 框架 ----
+    # S18：错误码 → 文案的**唯一**来源 + `message` 脱敏。纯数据 + 正则，不许碰任何上层
+    # （页面通过 render_index 注入拿表；web 直接 import api 会被门禁拦下）。
+    "api/errors.py": (
+        "postel_studio.api.app",
+        "postel_studio.api.gateway",
+        "postel_studio.api.server",
+        "postel_studio.api.repository",
+        "postel_studio.api.bots",
+        "postel_studio.api.worktrees",
+        "postel_studio.api.agents",
+        "postel_studio.orchestrator",
+        "postel_studio.candidates",
+        "postel_studio.web",
+        "postel_studio.storage",
+        "postel_studio.gitops",
+        "postel_studio.domain",
+        "fastapi",
+        "starlette",
+        "uvicorn",
+    ),
     "api/frames.py": (
         "postel_studio.api.app",
         "postel_studio.api.gateway",

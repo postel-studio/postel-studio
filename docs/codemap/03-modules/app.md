@@ -1,6 +1,6 @@
 # 03 · app — `src/postel_studio/api/app.py`
 
-> 层 L3 · 139 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
+> 层 L3 · 161 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
 
 ## 职责
 
