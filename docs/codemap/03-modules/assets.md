@@ -112,7 +112,7 @@ S6 的 Bots 区与 charter 面板（D8）：
 | `resetCharter(state, text)` | 1593 | 清记忆目录/全文/错误 + 回 state（切仓库、断连） |
 | `loadCharter(botId, botName)` | 1615 | 发 `memory.charter.get`；全文与路径只进 `textContent`（D8/D9） |
 | `selectBot(botId, botName)` | 1895 | 选中 Bot → 取 charter |
-| `setRepoState` / `renderRepos` / `selectRepo` | 889/940/2241 | S6 钩子：断连重置两个面板、仓库列表重建后重取 `bot.list`、切仓库清 charter |
+| `setRepoState` / `renderRepos` / `selectRepo` | 949 / 1001 / 2330 | S6 钩子：断连重置两个面板、仓库列表重建后重取 `bot.list`、切仓库清 charter |
 
 S8 的新建 Bot 表单与 charter 面板的权限下拉（D8）：
 
