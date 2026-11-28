@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 import websockets
 
-from postel_studio.api import frames
+from postel_studio.api import errors, frames
 from postel_studio.api.repository import RepositoryService
 from postel_studio.gitops import repo as gitops
 from postel_studio.storage import db as state_db
@@ -509,6 +509,8 @@ def _page() -> str:
         state_root="/tmp/state",
         handshake_ticket="t" * 64,
         ws_path="/gateway/x",
+        error_text=errors.ERROR_TEXT,
+        unknown_code_text=errors.UNKNOWN_CODE_TEXT,
     )
 
 

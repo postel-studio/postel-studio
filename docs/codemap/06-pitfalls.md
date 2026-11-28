@@ -1010,7 +1010,7 @@ rejected），修正后 14/14。**通用**：验收脚本的 `✓` 也要反向�
 | U13 | **worktree 的 origin / 默认分支会答"链接工作区自己的事"**：`origin_url` 得 `None`（S3.5 起 `repo_id` **永远**是路径哈希，与 origin 无关，所以 id 本身不再有这个问题；`origin_hash` 则是 `None`）、`default_branch` 答该 worktree 的分支名而不是主仓库的 | S3 未修（S7 才引入 worktree）。三条事实与推荐做法见 [03/gitops §worktree](03-modules/gitops.md)。测试只断言"能绑、id 12 位"，**不断言 `main`** | ✅ **已裁决（S7）：明确豁免** | **实测（git 2.53）**：`git -C <linked worktree> config --get remote.origin.url` **答得出** origin（共享配置），所以第一条不复现；第二条成立（HEAD 答工作区自己的分支，这是对的）。S7 的工作区卡片只显示**它自己的**分支，不显示 origin / 默认分支，所以本刀不依赖它。到期改 S19（doctor 可以如实报告"这个路径是一个 linked worktree"），不解决的后果：把 worktree 当独立仓库绑定时，左栏的"默认分支"显示的是那条工作区分支名。 |
 | U14 | **移动仓库后重绑会产生第二行，旧行指向已不存在的路径**（S3.5 D1 的**副作用**，不是实现 bug）：绑定 `/repo-a` → `mv /repo-a /repo-b` → 绑 `/repo-b`，`repo.list` 出两行，旧行 `path` 已不存在。根因：`repo_id` 从「origin 哈希」改成「路径哈希」后，`upsert` 的规则 2（"没有 path 行、但 `repo_id` 已存在 → UPDATE 那行的 path"）几乎不可达——`repo_id = hash(path)` 意味着"id 存在但 path 不存在"只可能是 v1 遗留的 URL 哈希行。S3 时代 id 来自 origin，移动后 origin 不变，规则 2 把 path 更新掉，仍是一行 | **未修（下一刀的事，本刀只记录）**。影响：左栏出现一条打不开的坏记录；S4 起对它查分支报 `REPO_NOT_BOUND`（「仓库路径已不存在」，D5 的裁决）。**建议修法**：现在有 `origin_hash` 了，可在"路径与 id 都没命中"时用 `origin_hash` 找一行 `path` 已不存在的记录，`UPDATE` 它的 `path`（**保留 `repo_id`**——id 是身份，不因路径变而变，符合 D1 的精神）。**注意**：这会把 `origin_hash` 从"只用于去重提示"升格成匹配键，与 D2「不参与主键/外键」有张力；且 `origin_hash` 为 `NULL` 的老行匹配不到、两行同 `origin_hash` 时选哪行也要定。要不要做、做成什么样，由 S4 前的裁决定。见 [08 §7](../design/08-repo-id-stability.md) | ✅ **已裁决（S7）：明确豁免，到期 S19** | 修它要把 `origin_hash` 从"只用于识别"升格成**匹配键**，还要定两条尚不存在的规则（`NULL` 老行怎么办、两行同 hash 选哪行）——那是数据模型层的一刀，且 04 §6 禁止一个 PR 混两条用户路径。**后果照旧**：移动仓库后左栏留一条打不开的记录、`~/.postel/worktrees/<旧 id>/` 变成孤儿目录（06 §5：永不自动删除，S19 的 doctor 报告）。S7 本身不依赖身份跨移动存活：工作区按用户**实际点到的**那一行（repo_id）建。 |
 | U15 | **非 UTF-8 refname 会让 `repo.branches` 与 `repo.bind` 抛未捕获的 `UnicodeDecodeError`**（S3 就有的脆性，S4 未修）。触发：`git branch $'bad-\xff'` 之后——① 查分支：`for-each-ref` 的输出含非法 UTF-8 字节 → `run_git(text=True)` 严格解码抛 `UnicodeDecodeError`；它不在 `GIT_ERRORS`（只有 `GitUnavailableError` / `GitTimeoutError`）里，网关 `except Exception` 回 `INTERNAL`（**内核不崩、连接还能继续用 `system.health`**）；② 把 HEAD 切到该分支再 `repo.bind`：`default_branch()` 的 `symbolic-ref` 同样解码失败 → `bind` 回 `INTERNAL`（用户只看到「内部错误」）。根因：`subprocess.run(text=True)` 的严格 UTF-8 解码 + 异常清单不含解码错。影响：这类仓库看不到分支、绑不上，但不丢数据、不崩内核。**为什么现在不顺手修**：`errors="surrogateescape"` 会让载荷里带 lone surrogate，WS 发帧时编码会炸；`errors="replace"` 会让分支名显示成 `�`，且 S5 的 `repo.diff(base=…)` 把 mangled 名字回传给 git 会变成 `BAD_REF`（甚至指向别的 ref）。**建议**：先裁决「ref 名怎么过边界」（例如只接受 UTF-8 合法 ref 名并回稳定码，或 L0 隔离成永不回传的表示），在 S5（引入 ref 参数）之前定。本刀只记录 + 在 `run_git` docstring 指路。**→ ✅ 结案（S5）**：按 D3.2 的裁决修 —— `run_git` 增加 `decode_errors`（缺省 `strict`），严格模式解码失败抛新异常 `GitOutputUndecodableError`（加进 `GIT_ERRORS`）；`api/repository.py` 把 `repo.branches` / `repo.bind` / `repo.diff` 三条路径一律翻成 `NOT_SUPPORTED` +「仓库含非 UTF-8 的名称，第一版不支持」，不再回 `INTERNAL`。实测触发：`git branch $'bad-\xff'` 之后 `for-each-ref` 原始输出是 `b'bad-\xff\nmain\n'`（严格解码在 position 4 抛 `UnicodeDecodeError`）；JSON 的 lone surrogate 经 `surrogateescape` 会变成真字节、`rev-parse --verify` 真的能解析成功——所以入站也挡（D3.1）。回归：`tests/test_diff.py` D10 第 19/20 行 + 反向注入 D12 #3。 | ✅ **已修（S5）** | — | ref 名回传 git 会变 `BAD_REF`，甚至指向别的 ref——比报错更糟 |
-| U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **S18（空态/错误态与大仓库体检）前** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）；届时裁决：流式读 + 字节上限，或明确豁免并写进 05 安全红线 |
+| U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **⚠️ 明确豁免（S18 裁决），到期改 S20（M3 验收）** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）。**S18 的理由**：本刀是纯展示层，改 `gitops` 的读取方式要动子进程读取与背压，与「空态/错误态」不是同一条用户路径（04 §6）；5s 超时已封住时间上界。**后果照旧**：几百 MB 的 diff 会先整份进内存再切 100k；S20 必须裁决流式读或硬字节上限。已写进 [05-security §3.3](../design/05-security.md) |
 | U17 | **`bot.list` 惰性播种 + `charter_rev` 未维护**（S6 的两处临时形态）。① 惰性播种：`bot.list` 是读方法，却会在该 repo **一个 Bot 都没有**时落一行（S6 D2 的权宜：M1 没有创建入口，而 S6 之前绑定的老仓库只有惰性播种才能自动补上）；② `bots.charter_rev` 列 v3 就建了，但**只在创建时写一次**（D5：charter 正文的事实源是 `charter.md`，载荷里的 `charterRev` 现场按内容算；改 charter 的写路径是 S22 的 `charter.set`）。 | **① ✅ 已结案（S8 D7）**：`_seed` 与 `PRESET_BOT_NAME` 删除，`bot.list` 变成纯读，空仓库回 `[]`（`test_bot_list_returns_created_bots_and_repeats_identically` / `test_list_on_a_repo_with_no_bots_writes_nothing`）。**② 仍未修**（`charter_rev` 允许过期）。 | ① 已到期并完成；② 到期 **S22**（`memory.charter.set`） | ① 无——代价已消失。② 有人去读那一列会读到过期值：**今天没有任何读路径**，S22 必须改成由 `charter.set` 维护它，或者直接删掉这一列。 |
 | U18 | **`bot.agentKind` 仍不可写**：S8 的 `_refuse_agent_kind` 拒绝一切非 null 值，理由是「S9 之前没有任何通道被验证过」。S9 验证了 `acp-stdio`，但**没有**开这个字段——因为它没有「选通道」的 UI，接受页面产生不了的值等于接口先于用户路径（S9 D13）。 | ✅ **已收口（S10 D3）**：派活的通道选择裁决为**缺省第一条已登记通道**（`orchestrator._channel_for`：`bot.agentKind` 优先、缺省 `acp-stdio`；库里存了未登记的 kind 按坏数据报 `INVALID_PARAMS`，不静默回退）。`bot.create` 对非 null `agentKind` **仍拒绝**——页面依然产生不了这个值，但派活不再依赖它 | ✅ **已收口（S10）** | — |
 | U19 | **握手在事件循环里同步执行**：`api/gateway.py:312` 在 async WS handler 里直接调同步的 `dispatch()`；`agent.capabilities` 最坏把**所有** WS/HTTP 请求（含 `system.health`）冻结 30s + 两次 5s reap grace。S9 之前 `worktree add` 已有同样形状，但 S9 让它变成一次普通按钮点击就能触发。 | **部分收口（S10）**：派活这条**分钟级**路径已移出事件循环——`task.dispatch` 只做毫秒级校验与建行，慢活全部在 worker 线程（`orchestrator._run`），ACP 会话在 `acp_client.Session` 里阻塞等（worker 不在事件循环里，实测一轮 8.7s 不影响其它请求）。**但 `dispatch()` 本身仍是同步调用**：`agent.capabilities` / `worktree.acquire` 的 30s 最坏情况还在事件循环里，属既有架构，本刀不顺手改（预算纪律）——升级为独立项 U20 | **U19 主体已收口（S10）；残余进 U20（到期 S15 前，重启恢复会重构 dispatch 形状）** | 派活不再冻结页面；握手/建工作区的长操作仍可能卡别的请求几十秒 |
@@ -1033,9 +1033,23 @@ S16 的 `loadAudit` 把回调写成 `function (frame) { frame.ok / frame.data �
 `function (err, data) { if (err || !data) … }` 后 6/6 CHECK 全绿。
 
 **别再踩**：写一个走 `request()` 的新面板，先去看 `onMessage` 的 `done(null, result.data)` 那一行，
-不要照抄 `loadAudit`。S16 的 `loadAudit` 是本刀之外的遗留 bug（本刀不顺手改，避免扩大 diff；
-下一个人读到这段请修它）。静态 DOM 契约测试只能守 id 与 `innerHTML` 零使用，**守不住回调形状**
+不要照抄 `loadAudit`。S16 的 `loadAudit` 是本刀之外的遗留 bug（当时不顺手改，避免扩大 diff）；**S18 已修**，
+并加了反向注入（S18 #5）与浏览器 CHECK。静态 DOM 契约测试只能守 id 与 `innerHTML` 零使用，**守不住回调形状**
 ——真浏览器脚本才能抓到。
+
+### S18 ❌ 页面脚本引用了没声明的元素变量 → 整页 `ReferenceError`，pytest 全绿
+
+给候选面板加空态时，`resetCandidate()` 里写了 `candidateEmpty.hidden = …`，但忘了在顶部
+`var candidateEmpty = document.getElementById("candidate-empty");`。后果不是"空态不显示"：
+`resetCandidate` 在**页面初始化路径**上被调用，顶层抛 `ReferenceError`，后面的
+`connect(ticket)` 根本没执行——状态灯永远停在「重连中」，浏览器验收第 1 步就超时。
+
+pytest 这边一条都不红（静态文本断言都有、`node --check` 也过：语法没错，错在运行时）。
+**修法**：`tests/test_states.py::test_every_element_id_looked_up_exists_in_the_page` 把
+`getElementById("x")` 的 id 集合与 HTML 的 `id="x"` 集合对账，漏声明当场红。
+
+**别再踩**：往页面加一个元素，顺序永远是「HTML 节点 → `var x = getElementById` → 用它」；
+只写第三步的话，最快的报警器是 `node tools/acceptance/*.mjs`，不是 pytest。
 
 ## 一条通用教训（如果只能记住一句）
 

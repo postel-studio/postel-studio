@@ -18,6 +18,8 @@ import logging
 from dataclasses import dataclass
 from typing import Final
 
+from postel_studio.api import errors
+
 logger = logging.getLogger(__name__)
 
 # 单帧上限（02b §5 / 05 §3.1）。按 UTF-8 字节数算，不是字符数。
@@ -109,9 +111,18 @@ def encode_response(request_id: str, *, seq: int, data: object) -> str:
 
 
 def encode_error(request_id: str, code: str, message: str) -> str:
-    """失败响应。`code` 稳定，`message` 可改（07 §1.3）。"""
+    """失败响应。`code` 稳定，`message` 可改（07 §1.3）。
+
+    `message` 在编码前统一脱敏（S18 D4）：绝对路径 / 堆栈 / 凭据片段不进帧。页面本来就
+    只按码映射，但帧还会进 devtools 与用户贴的截图——服务端这道不许省。
+    """
     return json.dumps(
-        {"type": RES, "id": request_id, "ok": False, "error": {"code": code, "message": message}},
+        {
+            "type": RES,
+            "id": request_id,
+            "ok": False,
+            "error": {"code": code, "message": errors.message_safe(message)},
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     )

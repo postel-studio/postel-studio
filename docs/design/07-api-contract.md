@@ -32,6 +32,7 @@
 | 码 | HTTP 类比 | 含义 | 是否可重试 |
 |---|---|---|---|
 | `INVALID_PARAMS` | 400 | 参数缺失、类型错、越界 | 修正后可 |
+| `FRAME_TOO_LARGE` | 413 | 单帧超过 1 MiB（S18 补登记：`frames.py` 自 S2 起就在用，此前漏在表外） | 否 |
 | `UNKNOWN_METHOD` | 404 | 方法不存在 | 否 |
 | `NOT_A_REPO` | 400 | 路径不是 git 仓库 | 否 |
 | `REPO_NOT_BOUND` | 404 | repoId 不存在 | 否 |

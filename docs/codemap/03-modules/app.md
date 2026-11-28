@@ -1,6 +1,6 @@
 # 03 · app — `src/postel_studio/api/app.py`
 
-> 层 L3 · 139 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
+> 层 L3 · 161 行 · 上游：[模块索引](README.md) · 相关：[repository](repository.md) · [storage-db](storage-db.md)
 
 ## 职责
 
@@ -22,16 +22,16 @@ S3 起这里还负责**构造并注入**业务能力：`RepoStore` + `Repository
 | （局部）`bot_store = BotStore()` / `bots = BotService(bot_store, store)` | 69-70 | S6：`bot.list` / `memory.charter.get` 的实现（charter 在状态根的文件里）。S7 起这一个 `BotStore` 同时给 `WorktreeService` 用；S8 的 `bot.create` / `bot.set_permission` 也在同一个 service 上 | `gateway.Providers` |
 | （局部）`worktrees = WorktreeService(store, bot_store)` | 72 | S7：`worktree.acquire` / `list` / `release` 的实现（**不落库**，事实源是 git） | `gateway.Providers` |
 | （局部）`close_stores()` | 86 | **S15/U10**：`app.state.close_stores`——先 `orchestrator.wait_idle()` 再逐个关闭 5 个 store；`server._run` 的 `finally` 调用（lifespan=off，不能用 on_event） | `server._run` |
-| `gateway.Providers(…)`（21 个注入字段，S15 加 `task_latest`） | 132-154 | 注入给网关（**唯一**构造点；S8 加了 `bot_create` / `bot_set_permission` 两个） | `gateway.install` |
+| `gateway.Providers(…)`（21 个注入字段，S15 加 `task_latest`） | 134-157 | 注入给网关（**唯一**构造点；S8 加了 `bot_create` / `bot_set_permission` 两个） | `gateway.install` |
 
 ### 三个路由
 
 | 路由 | 行 | 认证 | 返回 |
 |---|---|---|---|
 | `GET /` | 99 | 无 | HTML（每次渲染签发新 ticket） |
-| `GET /api/health` | 114 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
-| `GET /api/where` | 118 | 无 | `{host, port, wsPath, pid}` |
-| `WS /gateway/<sha16>` | 146（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
+| `GET /api/health` | 116 | 无 | `{status, version, apiVersion, stateRoot, pid}` |
+| `GET /api/where` | 120 | 无 | `{host, port, wsPath, pid}` |
+| `WS /gateway/<sha16>` | 130（由 `gateway.install` 挂） | ticket | 帧（`system.*` / `repo.*`） |
 
 **S3~S8 都没有加路由。** `repo.*` / `bot.*` / `worktree.*` 全走 WS，`/api/repos` 是 404
 （`test_bind.py::test_no_http_route_for_repositories` 守着）。
@@ -60,10 +60,10 @@ S1 时页面是**常量**，只构造一次，避免每请求拼接。S2 起必�
 ### S3：store 与 gitops 在 `create_app` 里构造、经 `Providers` 注入
 
 ```python
-# api/app.py:54-56 —— 状态根下的库 + 业务对象
+# api/app.py:64-65 —— 状态根下的库 + 业务对象
 store = RepoStore()
 repositories = RepositoryService(store)
-# api/app.py:95-100 —— 注入给网关（唯一构造 Providers 的地方）
+# api/app.py:130-134 —— 注入给网关（唯一构造 Providers 的地方）
 gateway.install(
     app,
     ws_path,
