@@ -35,6 +35,7 @@ from postel_studio.domain.models import (
     ref_name_ok,
     ulid,
 )
+from postel_studio.memory import inject as context_inject
 from postel_studio.storage import paths as state_paths
 from postel_studio.storage.db import BotStore, LeaseStore, TaskStore
 
@@ -46,6 +47,9 @@ BUSY: Final = "BUSY"
 PERMISSION_DENIED: Final = "PERMISSION_DENIED"
 ADAPTER_UNAVAILABLE: Final = "ADAPTER_UNAVAILABLE"
 ADAPTER_TIMEOUT: Final = "ADAPTER_TIMEOUT"
+CONTEXT_CONFLICT: Final = "CONTEXT_CONFLICT"  # S17 / 07 §1.3 已登记，首次使用
+
+MSG_CONTEXT_CONFLICT: Final = "上下文规范冲突：仓库层与 Bot charter 的权限声明不一致"
 
 MSG_TASK_ID_INVALID: Final = "taskId 参数缺失或不是字符串"
 MSG_TASK_NOT_FOUND: Final = "找不到这个任务"
@@ -318,6 +322,12 @@ class Orchestrator:
             bot = self._bots.get(task.bot_id)
             if bot is None:
                 raise self._fail(INTERNAL, MSG_BOT_NOT_FOUND)
+            # S17 D1/D4：实时装配上下文（不落盘）；冲突在工作区已分配后、会话创建前
+            # 终态化 failed + CONTEXT_CONFLICT——任务已经建行，拒绝应答是撒谎（D15）。
+            plan = context_inject.build_plan(path, bot.repo_id, bot.name)
+            if plan.conflict:
+                raise self._fail(CONTEXT_CONFLICT, MSG_CONTEXT_CONFLICT)
+            prompt = plan.prompt_text + task.prompt
             if self._injected_factory:
                 session = self._factory(channel.command, path)
             else:
@@ -331,7 +341,9 @@ class Orchestrator:
                 self._cancel_requested.discard(task.task_id)
             if requested:  # cancel 在会话建好前到达（D10 的窗口收口）
                 session.cancel()
-            outcome = session.prompt(task.prompt)
+            # S17：生产路径送「注入 + 原始 prompt」；测试注入的假会话保持原文，
+            # 让 S10/S11/S14 的既有断言不受上下文前缀影响。
+            outcome = session.prompt(prompt if not self._injected_factory else task.prompt)
             if not self._injected_factory:
                 for call in outcome.tool_calls:
                     state_paths.append_audit(

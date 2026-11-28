@@ -177,7 +177,7 @@ graph TD
 | 位置 | 理由 | 是否伪善 |
 |---|---|---|
 | `__init__.py:33` | **懒加载**：CLI 的 `version`/`--help` 不想拖起 fastapi | 正当 |
-| `paths.py:164` | **避免重复定义版本号**：`__version__` 只在包根定义一次；模块级 import 会成环（包根 → server → app → ... → paths） | 正当 |
+| `paths.py:215` | **避免重复定义版本号**：`__version__` 只在包根定义一次；模块级 import 会成环（包根 → server → app → ... → paths） | 正当 |
 | ~~`gateway.py:88`~~ | ~~「避免 import 环」~~ S2 初版。**环是真的，但不该绕开**：用 `Providers` 注入消除 | **已修**（R3） |
 
 **判断标准**：函数内 import 只有在「为了性能/懒加载」或「为了单一事实源」时才正当。
@@ -190,7 +190,7 @@ graph TD
 作为 `Providers` 注入：
 
 ```python
-# app.py:78
+# app.py:128
 gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 ```
 
@@ -243,7 +243,7 @@ gateway.install(app, ws_path, tickets, gateway.Providers(health=health))
 | ~~后续 task/candidate 表~~ → **已出现**：`tasks` + `worktree_leases`（S10 v4）、`candidates`（S11 v5） | 加到 `storage/db.py` 的 `_MIGRATIONS` | `orchestrator.py` / `candidates.py` |
 | ~~`agent/`（ACP 客户端、子进程）~~ → **已出现（S9）**：`agent/acp_client.py`（协议）+ `agent/registry.py`（通道表） | L0 | `api/agents.py` |
 | `permission/`（纯函数判定） | L1（**无 IO**） | 执行前 |
-| ~~`memory/`（charter 与上下文注入）~~ → **S6 拆成两处**：charter 文件 IO 在 `storage/paths.py`（L0）、编排在 `api/bots.py`（L3） | 不新增包 | `storage/paths.py`、`api/bots.py` |
+| ~~`memory/`（charter 与上下文注入）~~ → **S6 拆成两处**：charter 文件 IO 在 `storage/paths.py`（L0）、编排在 `api/bots.py`（L3）。**S17 新增 `memory/inject.py`**（只读上下文装配：实时读 AGENTS.md/README.md/charter，不复制；冲突/预算判定）——与 S6 的「charter IO 在 paths」不冲突：paths 只管 charter 文件，inject 管仓库规范层的只读装配 | L0（只读 IO + 纯函数，禁 import api/web/gitops/agent） | `storage/paths.py`、`api/bots.py`、`orchestrator.py` |
 | 新的 `api/*.py` handler 模块 | L3 | app/gateway |
 
 **关键约束（来自 05-security）**：`permission/` 必须是**纯函数、无 IO**，且判定发生在执行之前。

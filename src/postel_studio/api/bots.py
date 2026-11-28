@@ -35,6 +35,7 @@ from postel_studio.domain.models import (
     bot_name_ok,
     permission_parse,
 )
+from postel_studio.memory import inject as context_inject
 from postel_studio.storage.db import BotStore, RepoStore
 from postel_studio.storage.paths import bot_memory_dir, ensure_memory_space, read_charter
 
@@ -176,6 +177,21 @@ class BotService:
         except OSError as exc:  # 权限 / 磁盘满：D6 的 INTERNAL
             raise _fail(INTERNAL, MSG_MEMORY_FAILED) from exc
         return {"content": content, "rev": charter_rev(content)}
+
+    def context_preview(self, params: dict[str, object]) -> dict[str, object]:
+        """`memory.context.preview`（S17）：只读来源清单，冲突只标 `conflict` 不抛错。
+
+        S17 D1/D4：AGENTS.md/README.md 从绑定仓库**实时读取**，不写盘；Bot charter 用
+        `inject.py` 的只读路径。仓库查不到 → `REPO_NOT_BOUND`（07 §1.3）。
+        """
+        bot = self._require_bot(params)
+        repo = self._repos.get(bot.repo_id)
+        if repo is None:
+            raise _fail(REPO_NOT_BOUND, MSG_REPO_NOT_BOUND)
+        try:
+            return context_inject.preview(repo.path, bot.repo_id, bot.name)
+        except OSError as exc:  # 磁盘读失败：既有 INTERNAL，不新增码
+            raise _fail(INTERNAL, MSG_MEMORY_FAILED) from exc
 
     # -- 内部 ----------------------------------------------------------------
     def _require_repo(self, params: dict[str, object]) -> Repo:

@@ -268,6 +268,7 @@ def test_candidate_diff_matches_git_shortstat(env: Env) -> None:
         bot_create=lambda p: p,
         bot_set_permission=lambda p: p,
         memory_charter_get=lambda p: p,
+        memory_context_preview=lambda p: p,  # S17
         worktree_acquire=lambda p: p,
         worktree_list=lambda p: [],
         worktree_release=lambda p: p,

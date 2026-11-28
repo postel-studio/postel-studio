@@ -585,6 +585,35 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_page_marks_unavailable_level", file="test_permission_gate"),
         "S16 #6：FALLBACK 审计不再驱动页面「不可用」徽标",
     ),
+    # ---- S17：上下文注入的硬约束（S17 spec §2.1）----
+    (
+        "postel_studio/memory/inject.py",
+        "                    truncated=True,",
+        "                    truncated=False,",
+        _target_test("test_budget_truncation_is_marked", file="test_injection"),
+        "S17 #1：超限来源不再标 truncated（静默丢弃）",
+    ),
+    (
+        "postel_studio/memory/inject.py",
+        "        conflict=conflict,",
+        "        conflict=False,",
+        _target_test("test_repo_bot_permission_conflict_blocks_dispatch", file="test_injection"),
+        "S17 #2：Bot 放宽权限的冲突不再标记（静默放行）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        "    loadContext(botId);  // S17：选中 Bot 后读本次会注入的上下文清单",
+        "    /* injected: 选 Bot 不再拉取上下文清单 */",
+        _target_test("test_context_dom_contract", file="test_injection"),
+        "S17 #3：选 Bot 不再刷新上下文清单（面板永远空白）",
+    ),
+    (
+        "postel_studio/storage/db.py",
+        "                if not already or advanced < version:\n                    raise",
+        "                raise  # injected: 对象已在时也直接抛（CI migration flake 回放）",
+        _target_test("test_migration_is_idempotent_when_version_lags", file="test_recovery"),
+        "S17 #4：migration 幂等修复被拆掉 → SIGKILL 后重开库撞 table already exists",
+    ),
 )
 
 
@@ -739,6 +768,26 @@ COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], .
         ),
         _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
         "S16 #7（组合）：绝对路径 + -C 的三条前导通配退回旧形状 → 审查实测的 fail-open 复现",
+    ),
+    # ---- S17 #5（组合）：符号链接守卫 + 越根 containment 一起拆，才回放审查的泄漏 ----
+    (
+        (
+            (
+                "postel_studio/memory/inject.py",
+                "    if path.is_symlink():\n"
+                '        return ContextSource(path=rel, level=level, bytes=0, skipped="symlink")',
+                "    if False:  # injected: 符号链接守卫被拆\n        pass",
+            ),
+            (
+                "postel_studio/memory/inject.py",
+                "    if not resolved.is_relative_to(root):\n"
+                "        return ContextSource(path=rel, level=level, bytes=0, "
+                'skipped="outside-root")',
+                "    if False:  # injected: containment 被拆\n        pass",
+            ),
+        ),
+        _target_test("test_symlinks_outside_repo_never_enter_prompt", file="test_injection"),
+        "S17 #5（组合）：越根读取守卫被拆 → 仓库外 secret 进入 Agent prompt",
     ),
 )
 

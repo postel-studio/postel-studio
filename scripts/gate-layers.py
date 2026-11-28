@@ -48,6 +48,20 @@ LAYERS: dict[str, tuple[str, ...]] = {
         "postel_studio.storage",
         "postel_studio.agent",
     ),
+    # S17：上下文注入的只读装配层（L0，可用 storage/paths 与 domain/models，
+    # 但绝不许碰 api / web / gitops / agent —— 它是被上层调用的叶子）。
+    "memory/__init__.py": (
+        "postel_studio.api",
+        "postel_studio.web",
+        "postel_studio.gitops",
+        "postel_studio.agent",
+    ),
+    "memory/inject.py": (
+        "postel_studio.api",
+        "postel_studio.web",
+        "postel_studio.gitops",
+        "postel_studio.agent",
+    ),
     "gitops/repo.py": (
         "postel_studio.api",
         "postel_studio.web",

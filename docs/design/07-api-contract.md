@@ -135,7 +135,7 @@
 |---|---|---|
 | `memory.charter.get` | `botId` | `{content, rev}` |
 | `memory.charter.set` | `botId, content, expectedRev` | `{rev}` |
-| `memory.context.preview` | `botId` | `{sources:[{path,level,bytes}], totalBytes}` |
+| `memory.context.preview` | `botId` | `{sources:[{path,level,bytes,truncated,injectedBytes}], totalBytes, omittedBytes, conflict}`（S17：`truncated`/`injectedBytes` 标超限整条跳过，`omittedBytes` 是省略的字节，`conflict=true` 表示派活将被 `CONTEXT_CONFLICT` 阻断；预览本身只读、不抛错） |
 
 ### 2.7 接入
 

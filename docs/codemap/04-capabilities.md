@@ -14,8 +14,8 @@
 |---|---|
 | 用户路径 | 终端打印 `http://127.0.0.1:PORT` → 浏览器打开 |
 | 打印地址 | `api/server.py:224`（`_run` 里那几行 `print`） |
-| 渲染页面 | web/assets.py:1429 `render_index()` |
-| 路由 | `api/app.py:76` `GET /` |
+| 渲染页面 | web/assets.py:2495 `render_index()` |
+| 路由 | `api/app.py:111` `GET /` |
 | 由谁守住 | `test_server_boot.py::test_stdout_prints_clickable_loopback_url`、`::test_page_shows_version_and_state_root` |
 
 ### C2 · 单实例保护（不重复启动）
@@ -23,8 +23,8 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 已有一个内核时再启动 → 退出码 1 + `KERNEL_ALREADY_RUNNING` |
-| 抢锁 | `storage/paths.py:180` `acquire_lock()` |
-| 判定存活 | `storage/paths.py:149` `pid_alive()` |
+| 抢锁 | `storage/paths.py:220` `acquire_lock()` |
+| 判定存活 | `storage/paths.py:189` `pid_alive()` |
 | 由谁守住 | `test_server_boot.py::test_refuses_to_start_when_lock_pid_is_alive`、`::test_overwrites_stale_lock_when_pid_is_dead`、`::test_garbage_lock_is_treated_as_stale` |
 
 ### C3 · 优雅退出且不留残骸
@@ -33,8 +33,8 @@
 |---|---|
 | 用户路径 | `Ctrl+C` 或 `kill` → 进程退出、三个文件全删 |
 | 信号处理器 | `api/server.py:164` `_install_signal_handlers()` |
-| 收场 | `api/server.py:245`（`_run` 的 `finally`） |
-| 建设期竞态保护 | `api/server.py:66-66` `_BUILDING` / `_STOP` |
+| 收场 | `api/server.py:251`（`_run` 的 `finally`） |
+| 建设期竞态保护 | `api/server.py:66-67` `_BUILDING` / `_STOP` |
 | 由谁守住 | `test_server_boot.py::test_sigterm_deletes_server_json_and_leaves_no_process`、`::test_sigint_...` |
 
 ### C4 · 页面显示连接状态（三态）
@@ -43,16 +43,16 @@
 |---|---|
 | 用户路径 | 右上角状态灯：已连接 / 已断开 / 重连中 |
 | DOM | `web/assets.py` 里 `id="status"`、`id="status-text"` |
-| 状态切换 | `web/assets.py:527` `setState()` |
+| 状态切换 | `web/assets.py:878` `setState()` |
 | 由谁守住 | `test_gateway.py::test_page_declares_status_lamp_and_three_states`（**文本断言**） |
 
 ### C5 · 断连 ≤3 秒可见 + 灰化 + 重连按钮
 
 | 项 | 位置 |
 |---|---|
-| 心跳判活 | `web/assets.py:1327` `startHeartbeat()` |
-| 唯一向下出口 | `web/assets.py:1282` `fail()` |
-| 灰化规则 | `web/assets.py:117-119` `#content.stale` / `::after` |
+| 心跳判活 | `web/assets.py:2359` `startHeartbeat()` |
+| 唯一向下出口 | `web/assets.py:2296` `fail()` |
+| 灰化规则 | `web/assets.py:122-123` `#content.stale` / `::after` |
 | 按钮显示 | `setState()` 里 `button.style.display = ...` |
 | 由谁守住 | `test_gateway.py::test_server_cleans_up_connection_after_client_disconnect`（**后端侧**）、`::test_page_has_stale_rule_and_toggles_it_on_disconnect`（**文本**） |
 | ⚠️ 真实 DOM 行为 | **无自动化测试**，靠人工浏览器验证 |
@@ -61,10 +61,10 @@
 
 | 项 | 位置 |
 |---|---|
-| 重连入口 | `web/assets.py:1388` `reconnect()` |
-| 取新票 | `web/assets.py:1338` `freshTicket()` |
-| 端口校验 | `web/assets.py:1349` `PORT_CHANGED` |
-| 建连 | `web/assets.py:1364` `connect()` |
+| 重连入口 | `web/assets.py:2422` `reconnect()` |
+| 取新票 | `web/assets.py:2370` `freshTicket()` |
+| 端口校验 | `web/assets.py:2381` `PORT_CHANGED` |
+| 建连 | `web/assets.py:2396` `connect()` |
 | 由谁守住 | `test_gateway.py::test_reconnect_after_disconnect_works_without_restart`（网关侧）、`::test_frontend_reports_port_change_and_does_not_guess`（文本） |
 | ⚠️ 边界 | **端口变了无法自动恢复**（D7），页面会明确告知 |
 
@@ -73,25 +73,25 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 无 UI 入口；是通道自检与心跳的基础 |
-| 方法表 | `api/gateway.py:116` `dispatch()` |
-| 编解码 | `api/frames.py:56` / `:97` |
+| 方法表 | `api/gateway.py:152` `dispatch()` |
+| 编解码 | `api/frames.py:61` / `:102` |
 | 由谁守住 | `test_gateway.py::test_echo_roundtrip_returns_data_and_seq`、`test_frames.py`（18 例） |
 
 ### C8 · 连接认证（一次性 ticket）
 
 | 项 | 位置 |
 |---|---|
-| 签发 | api/gateway.py:53 `TicketRegistry.issue()`（在 `app.index()` 里调用） |
-| 消费 | `api/gateway.py:62` `consume()` |
+| 签发 | api/gateway.py:60 `TicketRegistry.issue()`（在 `app.index()` 里调用） |
+| 消费 | `api/gateway.py:69` `consume()` |
 | 页面注入 | `web/assets.py` 的 `<meta name="postel-handshake">` |
-| 拒绝握手 | `api/gateway.py:151` → HTTP 403 |
+| 拒绝握手 | `api/gateway.py:238` → HTTP 403 |
 | 由谁守住 | `test_gateway.py::test_ticket_is_single_use`、`::test_missing_ticket_is_rejected_with_403`、`::test_forged_ticket_is_rejected_with_403` |
 
 ### C9 · 内核告知自己的位置（`/api/where`）
 
 | 项 | 位置 |
 |---|---|
-| 路由 | `api/app.py:76` |
+| 路由 | `api/app.py:111` |
 | 数据来源 | `create_app(ws_path, host=, port=)` 注入的**本进程真实绑定** |
 | 由谁守住 | `test_gateway_inprocess.py::test_where_reports_this_kernels_real_binding`（删掉 server.json 后仍答同样值） |
 
@@ -101,7 +101,7 @@
 |---|---|
 | WS 访问日志脱敏 | `api/server.py:110` `_WsQueryRedactor` |
 | 内核 logger 挂载 | `api/server.py:128` `log_config()` |
-| token 不进 server.json | `api/server.py:213-216`（只放 `tokenFingerprint`） |
+| token 不进 server.json | `api/server.py:211-218`（只放 `tokenFingerprint`） |
 | 由谁守住 | `test_gateway.py::test_ticket_never_reaches_kernel_logs`、`::test_page_does_not_carry_the_long_term_token`、`test_server_boot.py::test_server_json_does_not_carry_secrets_or_token` |
 
 ### C11 · 绑定本地仓库（`repo.bind`）—— S3
@@ -109,16 +109,16 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 左栏输入框粘绝对路径 → 点「绑定」→ 左栏出现「名称 / 默认分支」 |
-| 前端入口 | `web/assets.py:1251` `submitBind()`（真 `<form>`，回车也可） |
-| 方法表 | `api/gateway.py:116` `dispatch()` 的 `repo.bind` 分支 |
+| 前端入口 | `web/assets.py:2265` `submitBind()`（真 `<form>`，回车也可） |
+| 方法表 | `api/gateway.py:158` `dispatch()` 的 `repo.bind` 分支 |
 | 业务编排 | api/repository.py:205 `RepositoryService.bind()` |
 | 路径校验 | 相对 → `BAD_CWD`；`resolve()`（`api/repository.py` 的 `bind`） |
 | **`.git` 判定** | api/repository.py:123 `_inside_git_dir(root, target)`（T29/T31：看**相对仓库根**的那一段；粘 `.git` / `.git/objects` → `NOT_A_REPO`，但父目录叫 `.git` 的合法仓库照绑） |
 | **子目录校正** | `api/repository.py:_bindable_root()`（D2，见 06 T25） |
-| 探测 | gitops/repo.py:274 `origin_url()`、`:268` `default_branch()` |
-| id | `domain/models.py:124` `repo_id(path)`——**只看路径**，写后永不更新（S3.5 D1，U9 已结案） |
-| origin 识别 | `domain/models.py:111` `origin_hash()` → `repos.origin_hash`（D2；帧层**不暴露**） |
-| 落库 | `storage/db.py:179` `RepoStore.upsert()`（同路径不产第二行；`repo_id` 只 INSERT 时写） |
+| 探测 | gitops/repo.py:274 `origin_url()`、`:288` `default_branch()` |
+| id | `domain/models.py:127` `repo_id(path)`——**只看路径**，写后永不更新（S3.5 D1，U9 已结案） |
+| origin 识别 | `domain/models.py:114` `origin_hash()` → `repos.origin_hash`（D2；帧层**不暴露**） |
+| 落库 | `storage/db.py:267` `RepoStore.upsert()`（同路径不产第二行；`repo_id` 只 INSERT 时写） |
 | 由谁守住 | `tests/test_bind.py`：**52 个 `def test_` → 59 个用例**（参数化展开），真实 git + 真 SQLite；S3.5 加的稳定性/迁移用例见 `storage-db.md`；端到端 `test_websocket_bind_then_list_returns_the_repo` |
 | ⚠️ UI 行为 | pytest 里只有文本断言；验收 1–4 由 `node tools/acceptance/s3_bind.mjs` 在真实 Chrome 里跑（T9） |
 
@@ -127,10 +127,10 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 页面加载 / 重连成功后自动拉一次 |
-| 前端 | `web/assets.py:637` `loadRepos()` → `:578` `renderRepos()` |
-| 方法表 | `api/gateway.py:122` |
+| 前端 | `web/assets.py:1026` `loadRepos()` → `:940` `renderRepos()` |
+| 方法表 | `api/gateway.py:160` |
 | 业务 | api/repository.py:201 `RepositoryService.list()` |
-| 读库 | `storage/db.py:161` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
+| 读库 | `storage/db.py:249` `RepoStore.list()`（`ORDER BY added_at, repo_id`） |
 | 由谁守住 | `test_bind.py::test_list_returns_array_payload_with_camel_case_keys`、`::test_data_survives_reopening_the_store` |
 
 ### C13 · 「没连上」与「没有仓库」可区分（D1）
@@ -138,8 +138,8 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 内核不在 / 断连时，左栏仓库区显示「已断开：内核没有连着，仓库列表未知」，**不显示**空态 |
-| 状态源 | `web/assets.py:538` `setRepoState()` → `#repos[data-state]` |
-| 显隐规则 | `web/assets.py:124-318` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
+| 状态源 | `web/assets.py:889` `setRepoState()` → `#repos[data-state]` |
+| 显隐规则 | `web/assets.py:95-468` 的 CSS（**不是** JS 逐个开关，见 06 T8/T27） |
 | 由谁守住 | `tools/acceptance/s3_bind.mjs` 的 `CHECK D1 …` 四行（CDP 断网 → 读 DOM → 恢复 → 点重连，见 06 T27） |
 
 ### C14 · 点仓库 → 看到分支列表（`repo.branches`）—— S4
@@ -147,10 +147,10 @@
 | 项 | 位置 |
 |---|---|
 | 用户路径 | 点左栏仓库行（鼠标，或聚焦后 `Enter`/`Space`）→ 主区分支面板列出该仓库的**本地**分支：当前分支带「当前」徽章、每个 8 位 sha、有 upstream 才显示 |
-| 前端入口 | `web/assets.py:1231` `selectRepo()` → `:731` `loadBranches()` → `:687` `renderBranches()`；断连/切换的收口是 `:661` `resetBranches()` |
+| 前端入口 | `web/assets.py:2241` `selectRepo()` → `:1120` `loadBranches()` → `:1076` `renderBranches()`；断连/切换的收口是 `:1050` `resetBranches()` |
 | DOM 契约 | `#branches[data-state]`（idle/loading/ready/error）+ `#branches-title` / `#branch-list` / `#branch-empty` / `#branches-error`（D6） |
-| 方法表 | `api/gateway.py:116` `dispatch()` 的 `repo.branches` 分支 |
-| 业务编排 | api/repository.py:269 `RepositoryService.branches()`；`repoId` → 允许根走 `:294` `_require_repo()`（与 `get()` / `diff()` 共用） |
+| 方法表 | `api/gateway.py:162` `dispatch()` 的 `repo.branches` 分支 |
+| 业务编排 | api/repository.py:269 `RepositoryService.branches()`；`repoId` → 允许根走 `:250` `_require_repo()`（与 `get()` / `diff()` 共用） |
 | 探测 | gitops/repo.py:307 `list_branches()`：一次 `for-each-ref refs/heads/`、`%00` 分隔四字段（D2/D3） |
 | 三态 | `list`（空 = 空仓库，**成功**）/ `None`（不是仓库/路径没了 → `REPO_NOT_BOUND`）/ 抛 `GitUnavailableError`·`GitTimeoutError`（D4/D5） |
 | 载荷 | `{name, sha(8 位), isCurrent, upstream}` 四字段（D1）；截 8 位发生在 `api/repository.py` 边界 |
@@ -164,9 +164,9 @@
 | 用户路径 | 点主区分支行（鼠标，或聚焦后 `Enter`/`Space`）→ 该分支与**默认分支**的差异：`N 个文件 · +X −Y` 统计 + 逐行着色的 patch；也可在 `#diff` 面板手填两个 ref 对比 |
 | 前端入口 | `web/assets.py` 的 `#diff` 面板：`selectBranch()` / `submitDiff()` / `requestDiff()`；断连/切仓库收口是 `resetDiff()` |
 | DOM 契约 | `#diff[data-state]`（idle/loading/ready/error）+ `#diff-title` / `#diff-base` / `#diff-head` / `#diff-stat` / `#diff-patch` / `#diff-truncated` / `#diff-error`（S5 D9） |
-| 方法表 | `api/gateway.py:116` `dispatch()` 的 `repo.diff` 分支 |
-| 业务编排 | `api/repository.py:361` `RepositoryService.diff()`：形状 → 路径存活 → 解析 ref → stat/patch → 截断 + camelCase（D7 的顺序就是契约） |
-| 探测（L0） | gitops/repo.py:363 `resolve_commit()`（唯一把用户 ref 送进 git 的地方，D2）、`:383` `diff_stat()`、`:424` `diff_patch()` |
+| 方法表 | `api/gateway.py:164` `dispatch()` 的 `repo.diff` 分支 |
+| 业务编排 | `api/repository.py:317` `RepositoryService.diff()`：形状 → 路径存活 → 解析 ref → stat/patch → 截断 + camelCase（D7 的顺序就是契约） |
+| 探测（L0） | gitops/repo.py:363 `resolve_commit()`（唯一把用户 ref 送进 git 的地方，D2）、`:403` `diff_stat()`、`:444` `diff_patch()` |
 | 三点语义 | `base...head`（共同祖先 → head）：只报 head 改了什么，不把 base 在分支点之后的提交算进来（D1） |
 | 确定性 | `DIFF_FLAGS`（`--no-color` / `--no-ext-diff` / `--no-textconv` / `--no-renames` / `--unified=3`）+ `-c core.quotePath=false`：用户配置改不动输出（D4，T34） |
 | 截断 | `maxChars ∈ [1000, 200000]`、缺省 100k、**越界报错不夹紧**；`truncated` 只影响 patch，`stat` 描述完整差异（D6） |
@@ -181,9 +181,9 @@
 | 用户路径 | 左栏「Bots」区在选中仓库后列出该仓库的 Bot（名字 / 权限徽标 / 职责摘要）→ 点它（鼠标或 `Enter`）→ 主区「Charter」面板显示 charter 全文与记忆目录**绝对路径**。S6 时这里的 `builder` 是内核播种的；**S8 起由人新建**（C18） |
 | 前端入口 | `web/assets.py` 的 `#bots` / `#charter` 面板：`loadBots()` / `selectBot()` / `loadCharter()`；断连 / 切仓库的收口是 `resetBots()` / `resetCharter()` |
 | DOM 契约 | `#bots[data-state]` / `#charter[data-state]` + `li[data-bot-id]` / `.bot-name` / `.bot-permission` / `.bot-charter-summary` / `#charter-memory` / `#charter-content`（S6 D8） |
-| 方法表 | `api/gateway.py:133` `bot.list` / `api/gateway.py:139` `memory.charter.get` |
-| 业务编排 | `api/bots.py:108` `BotService`：摘要五条与 `charterRev`（D5）、错误码（D6）。**S8 删掉了惰性播种**——`bot.list` 现在是纯读（C18） |
-| 数据 | `storage/db.py:284` `BotStore`（v3 的 `bots` 表）；charter **正文在文件**：`storage/paths.py:253` `ensure_memory_space` / `storage/paths.py:272` `read_charter` |
+| 方法表 | `api/gateway.py:166` `bot.list` / `api/gateway.py:172` `memory.charter.get` |
+| 业务编排 | `api/bots.py:109` `BotService`：摘要五条与 `charterRev`（D5）、错误码（D6）。**S8 删掉了惰性播种**——`bot.list` 现在是纯读（C18） |
+| 数据 | `storage/db.py:372` `BotStore`（v3 的 `bots` 表）；charter **正文在文件**：`storage/paths.py:293` `ensure_memory_space` / `storage/paths.py:312` `read_charter` |
 | 安全 | 记忆目录 `<状态根>/bots/<repo_id>/<name>/`：目录 `0700`、`charter.md` `0600`（D3 / T38）；名字白名单 + resolve 越界断言 |
 | 错误码 | `INVALID_PARAMS`（repoId / botId 形状错、botId 查不到）/ `REPO_NOT_BOUND`（repoId 查不到）/ `INTERNAL`（记忆目录读写失败）——07 §1.3 既有码，**一个不新增** |
 | 由谁守住 | `tests/test_bot_charter.py`（真 SQLite + 真文件 + 真 WS 帧）：D11 第 1–14 行；反向注入 5 条在 `tests/test_reverse_checks.py`。S8 把「首次列表即播种」那条改写成「先建后读」 |
@@ -197,10 +197,10 @@
 | 用户路径 | 选中仓库 → 在基础分支输入框（预填默认分支）点「分配工作区」→ 页面显示**路径 / 分支 / Bot**，磁盘上真有那个 worktree → 点「回收工作区」→ 目录消失、`git worktree list` 里不再出现（分支保留） |
 | 前端入口 | `web/assets.py` 的 `#workspace` 卡片：`loadWorkspace()` / `submitWorkspace()` / `releaseWorkspace()`；断连 / 切仓库的收口是 `resetWorkspace()` |
 | DOM 契约 | `#workspace[data-state]` + `#workspace-form` / `#workspace-base` / `#workspace-acquire` / `#workspace-bot` / `#workspace-path` / `#workspace-branch` / `#workspace-release` / `#workspace-empty` / `#workspace-error`（S7 D9） |
-| 方法表 | `api/gateway.py:141` 的 `worktree.acquire` / `worktree.list` / `worktree.release` 三个分支 |
-| 业务编排 | `api/worktrees.py:78` `WorktreeService`：复用/修复/创建状态机（D7）、Bot 归属校验、错误码（D6）——**不落库**（D4） |
-| 写面（L0） | `gitops/worktrees.py:136` `add_worktree` / `:163` `remove_worktree` / `:172` `prune_worktrees`——**S7 起内核唯一会写用户仓库的地方**，允许清单见 S7 D5 |
-| 路径 | `storage/paths.py:295` `worktree_dir()` / `:311` `ensure_worktree_parent()`：`<状态根>/worktrees/<repo_id>/<bot>/`，白名单 + resolve 越界断言（D2） |
+| 方法表 | `api/gateway.py:176` 的 `worktree.acquire` / `worktree.list` / `worktree.release` 三个分支 |
+| 业务编排 | `api/worktrees.py:77` `WorktreeService`：复用/修复/创建状态机（D7）、Bot 归属校验、错误码（D6）——**不落库**（D4） |
+| 写面（L0） | `gitops/worktrees.py:140` `add_worktree` / `:167` `remove_worktree` / `:176` `prune_worktrees`——**S7 起内核唯一会写用户仓库的地方**，允许清单见 S7 D5 |
+| 路径 | `storage/paths.py:335` `worktree_dir()` / `:351` `ensure_worktree_parent()`：`<状态根>/worktrees/<repo_id>/<bot>/`，白名单 + resolve 越界断言（D2） |
 | 错误码 | `INVALID_PARAMS` / `REPO_NOT_BOUND` / `BAD_BASE_REF`（既有）+ **`WORKTREE_CONFLICT`（S7 新增）** / `ADAPTER_UNAVAILABLE` / `INTERNAL` / `NOT_SUPPORTED`（07 §1.3） |
 | 安全 | 工作区只在状态根下（绝不在用户仓库工作目录里）；**不 `--force`**、不删分支、不 reset；脏工作区回收被拒且文件原样保留（D5） |
 | 由谁守住 | `tests/test_worktree.py` **35 个用例**（真 git + 真 SQLite + 真目录）；反向注入 4 条在 `tests/test_reverse_checks.py`（S7 #1–#4） |
@@ -213,9 +213,9 @@
 | 用户路径 | 左栏「新建 Bot」→ 填名字、选权限（L0/L1/L2/L2+）→ 它出现在 Bots 区、徽标就是选的级别 → 刷新后仍在 → 点开它，在 charter 面板里改权限，左栏徽标跟着变 |
 | 前端入口 | `web/assets.py` 的 `#bot-new` / `#bot-create-form` 与 `#charter-permission`：`openBotCreate()` / `submitBotCreate()` / `submitPermissionChange()` |
 | DOM 契约 | `#bot-create-name` / `#bot-create-permission` / `#bot-create-submit` / `#bot-create-cancel` / `#bot-create-error` / `#charter-permission`（S8 D8）；两个下拉**都只有四个选项**，`L3`/`L4` 连灰掉都不出现 |
-| 方法表 | `api/gateway.py:135` `bot.create` / `api/gateway.py:137` `bot.set_permission` |
-| 业务编排 | `api/bots.py:124` `BotService.create`（七步、先判后写）/ `api/bots.py:158` `BotService.set_permission` |
-| 数据 | `storage/db.py:340` `BotStore.set_permission`；**无迁移**（`bots` 表 v3 已在）；权限阶梯在 `domain/models.py:143` `Permission` |
+| 方法表 | `api/gateway.py:168` `bot.create` / `api/gateway.py:170` `bot.set_permission` |
+| 业务编排 | `api/bots.py:125` `BotService.create`（七步、先判后写）/ `api/bots.py:159` `BotService.set_permission` |
+| 数据 | `storage/db.py:428` `BotStore.set_permission`；**无迁移**（`bots` 表 v3 已在）；权限阶梯在 `domain/models.py:145` `Permission` |
 | 安全 | 名字白名单（06 §2.2）在**碰磁盘之前**判；错误文案是常量、不回显输入（05 §4.2）；权限只能由人发起（05 §2.3），而「人」就是这条 WS 入口 |
 | 错误码 | `ALREADY_EXISTS`（**S8 新增**，409，撞名）/ `NOT_SUPPORTED`（L3/L4、`agentKind` 给名字）/ `INVALID_PARAMS` / `REPO_NOT_BOUND` / `INTERNAL` |
 | 由谁守住 | `tests/test_bot_create.py`（真 SQLite + 真文件 + 真 WS 帧，56 个用例）；4 条反向注入（白名单 / 可授予集合 / 默认 L1 / 播种复活） |
@@ -227,11 +227,11 @@
 | | |
 |---|---|
 | 用户路径 | 主区顶部点「检测 Agent」→ 显示 `Agent：OpenCode 1.19.6`、`protocolVersion：1`、握手耗时、以及 **9 条**能力（`loadSession` / `mcp.http` / `session.list` …）；没装时显示「本机没有可用的 Agent 命令」并可重试 |
-| 前端入口 | `web/assets.py:393` 的 `#agent` 卡片：`detectAgent()`（:1538）/ `renderAgent()`（:1501）/ `resetAgent()`（:1491）/ `agentErrorText()`（:1481） |
+| 前端入口 | `web/assets.py:489` 的 `#agent` 卡片：`detectAgent()`（:1802）/ `renderAgent()`（:1765）/ `resetAgent()`（:1755）/ `agentErrorText()`（:1745） |
 | DOM 契约 | `#agent[data-state]`（idle/loading/ready/error）+ `#agent-state` / `#agent-detect` / `#agent-error` / `#agent-detail` / `#agent-kind` / `#agent-version` / `#agent-protocol` / `#agent-elapsed` / `#agent-flags`（S9 D9）；卡片在 `#branches` **之前** |
-| 方法表 | `api/gateway.py:149` `agent.list` / `api/gateway.py:151` `agent.capabilities` |
+| 方法表 | `api/gateway.py:182` `agent.list` / `api/gateway.py:184` `agent.capabilities` |
 | 业务编排 | `api/agents.py:37` `AgentsService`：`list`（:43，**不启进程**）/ `capabilities`（:57，真握手 + 三种失败码） |
-| 协议（L0） | `agent/acp_client.py:99` `initialize`（起 → 发 → 读 → 回收 → 解析）/ `:144` `reap`（D7）/ `:70` `flatten_capabilities`（D3） |
+| 协议（L0） | `agent/acp_client.py:124` `initialize`（起 → 发 → 读 → 回收 → 解析）/ `:169` `reap`（D7）/ `:95` `flatten_capabilities`（D3） |
 | 通道表（L0） | `agent/registry.py:30` `_CHANNELS`（只有 `acp-stdio` 一条）/ `:54` `command_for`（`POSTEL_ACP_COMMAND`，坏值不回退）/ `:73` `is_available`（`which`，不 spawn） |
 | 能力从哪来 | **握手应答**：`result.agentCapabilities` 递归摊平。`sessionCapabilities` 的值是**空对象**，靠「键存在」表达支持——只读布尔会漏掉全部 session 能力（D3） |
 | 超时与回收 | 30 秒（`DEFAULT_TIMEOUT_S`）；`finally` 里 `stdin.close → terminate → wait(5) → kill → wait`；超时也回收（D7） |
@@ -261,7 +261,7 @@
 
 ```
 ① api/frames.py            不一定要动（帧形状已够用）
-② api/gateway.py:116       dispatch() 加一个分支（**别把业务写进来**，转手给 handler 模块）
+② api/gateway.py:152       dispatch() 加一个分支（**别把业务写进来**，转手给 handler 模块）
 ③ docs/design/07-api-contract.md §2   登记方法签名
 ④ tests/test_gateway.py    加一个往返用例 + 一个反例（坏参数 → INVALID_PARAMS）
 ⑤ 若错误码是新的          frames.py 常量 + 07 §1.3 表（**S3 D6：不许新造码**，先改表）
@@ -348,7 +348,7 @@
 | ~~S14~~ | **已完成**：派活→候选→批准一条命令真跑（真 Agent / 真内核 / 真 git） | `scripts/accept_m2.py`、`tests/test_accept_m2.py`；无 `src/` 改动 | 新增 M2 收口；沿用 U21 快照方案（S13 已收口） |
 | S15 | **规格已定（代码中）**：后端恢复在 S10 已落地；S15 补 UI `interrupted` 态 + 重跑按钮、真重启端到端测试；U10 收口、U1/U20 顺延 | `web/assets.py`、`api/server.py`、`tests/test_recovery.py`、`tools/acceptance/s15_recovery.mjs` | 后端零重写（预算纪律）；U20 顺延 S16 与权限门一并裁决 |
 | S16 | **规格已定（代码中）**：opencode v2 `permissions` 执行前真阻断（L0 只读 / L1 禁 push / L2 只许 origin）+ 审计；U20 顺延 S20 且不再顺延 | `domain/permission.py`、`agent/gate.py`、`orchestrator.py`、`tests/test_permission_gate.py` | 不靠 prompt 约束；不可阻断路径 fail-closed + UI/文档标注 |
-| S17 | 上下文可见 | 记忆注入 | |
+| S17 | 上下文可见 | 记忆注入：`memory/inject.py` 实时读 AGENTS.md/README.md/charter（不复制）+ 预览 `memory.context.preview` + 派活前冲突阻断 | `tests/test_injection.py` |
 | S18 | 空态/错误态 | 前端文案体系 | |
 | S19 | doctor | 自检命令 | `__init__.py` 加子命令 |
 | S20 | 发版 | 版本号同步 | 见 [entry.md 版本号两个来源](03-modules/entry.md) |

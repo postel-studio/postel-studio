@@ -779,6 +779,7 @@ def test_gateway_exposes_the_three_worktree_methods() -> None:
         bot_create=lambda params: params,
         bot_set_permission=lambda params: params,
         memory_charter_get=lambda params: params,
+        memory_context_preview=lambda params: params,  # S17
         worktree_acquire=acquire,
         worktree_list=listing,
         worktree_release=release,

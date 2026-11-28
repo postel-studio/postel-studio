@@ -139,6 +139,7 @@ def create_app(
             bot_create=bots.create,  # S8
             bot_set_permission=bots.set_permission,  # S8
             memory_charter_get=bots.charter_get,  # S6
+            memory_context_preview=bots.context_preview,  # S17
             worktree_acquire=worktrees.acquire,  # S7
             worktree_list=worktrees.list,  # S7
             worktree_release=worktrees.release,  # S7

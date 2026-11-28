@@ -178,7 +178,24 @@ def migrate(conn: sqlite3.Connection, *, path_for_chmod: Path | None = None) -> 
     current = int(conn.execute("PRAGMA user_version").fetchone()[0])
     for version in range(current, len(_MIGRATIONS)):
         with conn:  # 一个 with = 一个事务：迁移失败整体回滚，不会留下半张表
-            conn.executescript(_MIGRATIONS[version])
+            try:
+                conn.executescript(_MIGRATIONS[version])
+            except sqlite3.OperationalError as exc:
+                # 内核 SIGKILL 落在 executescript（隐式 commit）与 user_version 写入之间，
+                # 会让下一任连接看到「这一步的对象已在、版本号还停在这一步」。对象已存在
+                # 说明这一步其实做完了：推进版本、继续下一步，而不是撞「already exists」
+                # 让任务失败（CI 实测的 table candidates already exists flake）。
+                # 「对象已存在」有 table / column / index 三种形状；其它错误照常抛。
+                message = str(exc).lower()
+                already = (
+                    "already exists" in message
+                    or "duplicate column name" in message
+                    or "duplicate index" in message
+                )
+                advanced = int(conn.execute("PRAGMA user_version").fetchone()[0])
+                if not already or advanced < version:
+                    raise
+            # 正常迁移与「对象已在」两条路径都在这里推进版本。
             conn.execute(f"PRAGMA user_version={version + 1}")
 
 

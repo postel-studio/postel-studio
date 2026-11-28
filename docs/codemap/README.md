@@ -38,6 +38,7 @@ README.md            ← 你在读的索引页；先看这一页决定往下看�
    │     ├─ gitops.md         └ gitops/repo.py（git 子进程）
    │     ├─ storage-db.md     └ storage/db.py（state.db）
    │     ├─ paths.md          └ storage/paths.py（状态根/文件 IO）
+   │     ├─ memory.md         └ memory/inject.py（S17 上下文注入，只读）
    │     └─ assets.md         └ web/assets.py（页面与前端逻辑）
    ├─ 04-capabilities.md  按用户可见能力反查代码位置
    ├─ 05-change-impact.md 改动影响矩阵：改 X 要连带检查 Y
@@ -66,6 +67,7 @@ README.md            ← 你在读的索引页；先看这一页决定往下看�
 | `storage/db.py` | ✅ 完整 | S3 新增；只有一张表，迁移机制已立 |
 | `gitops/` | ✅ 完整 | S3 新增；只读探测 + 子进程外壳 |
 | `domain/` | ✅ 完整 | S3 新增；无 IO，纯函数 |
+| `memory/` | ✅ 完整 | S17 新增；只读上下文注入，不复制 AGENTS.md |
 | `api/repository.py` | ✅ 完整 | S3 新增；两个方法 |
 | `web/assets.py` | ⚠️ 部分 | JS 状态机有注释索引；**DOM 行为无自动化测试**，见 06 §前端（S3 的左栏同样只靠文本断言 + 人工浏览器） |
 | `tests/` | ⚠️ 部分 | 只索引「哪个测试守哪条约束」，不复述用例 |

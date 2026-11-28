@@ -78,6 +78,8 @@ ERROR_TEXT: Final = {
     # S10：task.dispatch 会回这两个码（07 §1.3 既有码，本刀第一次用到）。
     "BUSY": "这个 Bot 已有任务在跑，等它结束再派",
     "PERMISSION_DENIED": "这个 Bot 是 L0（只读），先在 Charter 里把权限改到 L1 以上",
+    # S17：07 §1.3 已登记的码，本刀第一次用到（矛盾要人工解决，不静默取一方）。
+    "CONTEXT_CONFLICT": "上下文规范冲突，请先解决仓库与 charter 的权限声明差异",
 }
 ERROR_TEXT_FALLBACK: Final = "绑定失败"
 
@@ -271,6 +273,13 @@ INDEX_HTML: Final = """<!doctype html>
   #audit-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; }
   #audit-list li { padding: 4px 0; border-top: 1px solid #1f2430; }
   #audit-list li[data-effect="deny"] { color: #ffb4ab; }
+  /* S17：上下文来源清单（与审计面板同构；truncated 的来源单独着色） */
+  #context { margin-top: 18px; }
+  #context h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+  #context-state { margin: 0; font-size: 12px; color: #8b95a7; }
+  #context-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; }
+  #context-list li { padding: 4px 0; border-top: 1px solid #1f2430; }
+  #context-list li[data-truncated="true"] { color: #ffb4ab; }
   .bot-charter-summary { display: block; margin-top: 2px; font-size: 12px; color: #8b95a7; }
   #bots[data-state="idle"] #bot-list,
   #bots[data-state="idle"] #bot-empty,
@@ -645,6 +654,12 @@ INDEX_HTML: Final = """<!doctype html>
     <p id="audit-state">选择一个 Bot 查看它的权限裁决</p>
     <ul id="audit-list"></ul>
   </section>
+  <!-- S17 D8：本次会注入哪些上下文（只读清单，来源 + 层级 + 字节数）。 -->
+  <section id="context" data-state="idle" aria-live="polite">
+    <h2 id="context-title">本次注入的上下文</h2>
+    <p id="context-state">选择一个 Bot 查看本次会注入的上下文</p>
+    <ul id="context-list"></ul>
+  </section>
   <!-- 左栏（03-ui-spec §2）。初始状态是「loading」而不是 ready：连上之前**没有资格**说
        「还没有仓库」（S3 D1：空 与 没连上 必须可区分）。 -->
   <section id="repos" data-state="loading" aria-live="polite">
@@ -755,6 +770,10 @@ INDEX_HTML: Final = """<!doctype html>
   var botPermissions = {};
   var auditList = document.getElementById("audit-list");
   var auditState = document.getElementById("audit-state");
+  // S17：上下文清单（只读；与 audit 面板同构，改动只走 data-state / textContent）
+  var contextEl = document.getElementById("context");
+  var contextList = document.getElementById("context-list");
+  var contextState = document.getElementById("context-state");
   var botRequestToken = 0;        // 只认最后一次 bot.list 的回包（快速切仓库）
   var charterRequestToken = 0;    // 只认最后一次 charter 请求的回包
 
@@ -905,6 +924,8 @@ INDEX_HTML: Final = """<!doctype html>
     resetTask("idle", state === "disconnected" ? "已断开：任务状态未知" : TASK_HINT);
     resetCandidate("idle", CANDIDATE_HINT);   // S11：候选也属于上一次连接
     resetInbox("idle", INBOX_HINT);           // S12：收件箱也属于上一次连接
+    resetContext("idle", state === "disconnected"
+      ? "已断开：上下文未知" : "正在连接内核…");  // S17：上下文清单也属于上一次连接
   }
 
   // 可读中文错误（07 §1.3 按码映射；表外的码给通用文案，不把服务端 message 贴到页面上）
@@ -1821,6 +1842,42 @@ INDEX_HTML: Final = """<!doctype html>
     // S15：选 Bot 后也查一次（onopen 时可能还没选 Bot）——只有 interrupted 会覆盖 ready。
     restoreInterruptedTask();
     loadAudit(botId);  // S16：选中 Bot 后读该 Bot 的权限裁决
+    loadContext(botId);  // S17：选中 Bot 后读本次会注入的上下文清单
+  }
+
+  // S17 D8：上下文来源清单。只改 data-state / textContent，安全渲染（契约测试守着）。
+  function resetContext(state, text) {
+    contextEl.dataset.state = state;
+    contextState.textContent = text;
+    contextList.textContent = "";
+  }
+
+  function loadContext(botId) {
+    resetContext("loading", "正在读取上下文清单…");
+    // request 的回调形状是 (err, data)：err 为 null 才是成功（07 §1.3 按码映射）。
+    request("memory.context.preview", { botId: botId }, function (err, data) {
+      if (err || !data) {
+        resetContext("error", "读取上下文清单失败");
+        return;
+      }
+      var sources = Array.isArray(data.sources) ? data.sources : [];
+      contextList.textContent = "";
+      for (var i = 0; i < sources.length; i++) {
+        var row = sources[i] || {};
+        var li = document.createElement("li");
+        if (row.truncated === true) { li.dataset.truncated = "true"; }
+        li.textContent = String(row.path || "") + " · " + String(row.level || "")
+          + " · " + String(row.bytes || 0) + " B"
+          + (row.truncated === true ? "（超出预算，未注入）" : "");
+        contextList.appendChild(li);
+      }
+      contextState.textContent = data.conflict === true
+        ? "⚠ 规范冲突：派活将被阻断（共 " + sources.length + " 项，注入 "
+          + Number(data.totalBytes || 0) + " B）"
+        : "共 " + sources.length + " 项，注入 " + Number(data.totalBytes || 0)
+          + " B，省略 " + Number(data.omittedBytes || 0) + " B";
+      contextEl.dataset.state = "ready";
+    });
   }
 
   // S16 D6：审计里出现 FALLBACK = 该 Bot 的权限在当前 Agent 上无法真正阻断 → 徽标标不可用。

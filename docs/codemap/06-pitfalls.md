@@ -177,7 +177,7 @@ S2 审核时实测：变红 5~22ms、按钮出现、灰化生效、换端口时�
 **原因**：发帧时发现对端已没，uvicorn 抛的是 `uvicorn.protocols.utils.ClientDisconnected`；
 Starlette 的 `WebSocketDisconnect` 是**另一个**类型（实测 `issubclass` 为 `False`）。
 
-**已修**：`except (WebSocketDisconnect, ClientDisconnect)`（`gateway.py:115`）。
+**已修**：`except (WebSocketDisconnect, ClientDisconnect)`（`gateway.py:271`）。
 
 **别再踩**：**别把它当冗余删掉。**
 
@@ -509,7 +509,7 @@ c.execute(SQL, ("bbb", "/p", "https://u", "main", 2.0))
 **已修**：`#repos` 有四个 `data-state`（`loading` / `reconnecting` / `ready` / `disconnected`），
 **初始值就是 `loading`**；只有 `ready` 时才显示列表与空态，其它三种状态显示一句状态文案
 （「已断开：内核没有连着，仓库列表未知」）并隐藏 `#repo-list` 与 `#repo-empty`
-（`assets.py:217` 的 `setRepoState()`）。
+（`assets.py:889` 的 `setRepoState()`）。
 
 **别再踩**：
 - 空态（「还没有绑定仓库」）**只能**在"真的拿到了一个数组"之后出现。
@@ -1001,7 +1001,7 @@ rejected），修正后 14/14。**通用**：验收脚本的 `✓` 也要反向�
 | U4 | 页面从 `localhost:` 而非 `127.0.0.1:` 打开时未测试 | 端口比较仍成立，但该 variant 未验证 | **M1 验收（S14）前** | M1 验收若从 `localhost:` 打开，结论建立在未验证的变体上 |
 | U5 | 层依赖检查未进门禁（见 [02-layers §4](02-layers.md#4-可执行检查)） | ✅ **已修（S4.5）**：`scripts/gate-layers.py` 进门禁（`check.sh layers` + CI），且**新模块不登记层就失败**，不再靠 review。文档里那段片段已退役 | ✅ **已修（S4.5）** | 规则靠 review，新模块可静默向上 import——已被 `scripts/gate-layers.py` 收走 |
 | U6 | 版本号有 `pyproject.toml` 与 `__init__.py` 两个副本 | S20 自动化 | **S20（发版）前** | 两个版本号副本，发版时必然出现「包上是 A、运行时是 B」 |
-| U7 | `encode_event()` 从未被调用（S2 登记） | ✅ **已收口（S10 起，S12 复核确认）**：`api/gateway.py:241-245` 的每连接事件泵真实调用 `frames.encode_event()`；`task.updated` / `candidate.proposed` 两个 topic 都有真实订阅者，S12 收件箱沿用同一泵，未新增 topic。原「到期 S12」的复核已完成 | ✅ **已收口（S12 复核）** | — |
+| U7 | `encode_event()` 从未被调用（S2 登记） | ✅ **已收口（S10 起，S12 复核确认）**：`api/gateway.py:256-260` 的每连接事件泵真实调用 `frames.encode_event()`；`task.updated` / `candidate.proposed` 两个 topic 都有真实订阅者，S12 收件箱沿用同一泵，未新增 topic。原「到期 S12」的复核已完成 | ✅ **已收口（S12 复核）** | — |
 | U8 | codemap 门禁只判「动没动地图」，不判「动得对不对」 | **部分结掉（S4.5）**：机械可判的部分（相对链接 / 锚点 / `#L` 行号 / 模块行数表 / 页面 id 一致性）已由 `scripts/gate-docs.py` 进门禁；**文字内容质量仍靠 review**，这一半如实承认没办法 | ✅ **部分结掉（S4.5）** | 机械可判的部分已进门禁；**文字内容质量仍靠 review**，如实承认 |
 | U9 | **仓库加了 origin 之后 `repo_id` 会变**（S3 的已知让步）：界面/后续切片挂在 id 上会"丢失"这个仓库 | ✅ **已修（S3.5）。**怎么修的：`repo_id` 改成 `sha256(绑定时的绝对路径)`、**只在 INSERT 时算一次**，`upsert` 按 path 命中时不再写它（D1）；origin 的哈希降级成新列 `origin_hash`，只识别"同一远端"、不参与主键（D2）；schema v1→v2 只加列、**不重写任何历史 id**（D3）。详见 [08 §6](../design/08-repo-id-stability.md) 与本文 §T32。 | ✅ **已修（S3.5）** | — |
 | U10 | `state.db` 的连接**没地方关**（`create_app()` 构造 `RepoStore`，进程退出时由 OS 回收） | 不丢数据（WAL 已 fsync），但"有开必有关"的纪律是破的。将来 `server.serve()` 的 `finally` 应该关它 | **S15：在 `server.serve()` 的 `finally` 里关闭 store（收口）** | 生命周期是 S15 的主题；「有开必有关」的纪律破着，进程内测试还可能锁库 |
@@ -1013,12 +1013,29 @@ rejected），修正后 14/14。**通用**：验收脚本的 `✓` 也要反向�
 | U16 | **`repo.diff` 把完整 patch 读进内存再截断**：`diff_patch` 先拿全量 stdout（`run_git` 只有 5s 超时，没有字节上限），边界层才 `[:maxChars]`。一个 200MB 的 diff 会先整个进内存再切 100k | S5 未修（`maxChars` 只限制**回给客户端**的大小，不是内核内存）。默认上限 100k 让客户端侧受控，但内核侧仍全量读 | **S18（空态/错误态与大仓库体检）前** | 超大 diff 可能内存尖峰、拖慢整个网关（git 调用在 WS 处理链路上）；届时裁决：流式读 + 字节上限，或明确豁免并写进 05 安全红线 |
 | U17 | **`bot.list` 惰性播种 + `charter_rev` 未维护**（S6 的两处临时形态）。① 惰性播种：`bot.list` 是读方法，却会在该 repo **一个 Bot 都没有**时落一行（S6 D2 的权宜：M1 没有创建入口，而 S6 之前绑定的老仓库只有惰性播种才能自动补上）；② `bots.charter_rev` 列 v3 就建了，但**只在创建时写一次**（D5：charter 正文的事实源是 `charter.md`，载荷里的 `charterRev` 现场按内容算；改 charter 的写路径是 S22 的 `charter.set`）。 | **① ✅ 已结案（S8 D7）**：`_seed` 与 `PRESET_BOT_NAME` 删除，`bot.list` 变成纯读，空仓库回 `[]`（`test_bot_list_returns_created_bots_and_repeats_identically` / `test_list_on_a_repo_with_no_bots_writes_nothing`）。**② 仍未修**（`charter_rev` 允许过期）。 | ① 已到期并完成；② 到期 **S22**（`memory.charter.set`） | ① 无——代价已消失。② 有人去读那一列会读到过期值：**今天没有任何读路径**，S22 必须改成由 `charter.set` 维护它，或者直接删掉这一列。 |
 | U18 | **`bot.agentKind` 仍不可写**：S8 的 `_refuse_agent_kind` 拒绝一切非 null 值，理由是「S9 之前没有任何通道被验证过」。S9 验证了 `acp-stdio`，但**没有**开这个字段——因为它没有「选通道」的 UI，接受页面产生不了的值等于接口先于用户路径（S9 D13）。 | ✅ **已收口（S10 D3）**：派活的通道选择裁决为**缺省第一条已登记通道**（`orchestrator._channel_for`：`bot.agentKind` 优先、缺省 `acp-stdio`；库里存了未登记的 kind 按坏数据报 `INVALID_PARAMS`，不静默回退）。`bot.create` 对非 null `agentKind` **仍拒绝**——页面依然产生不了这个值，但派活不再依赖它 | ✅ **已收口（S10）** | — |
-| U19 | **握手在事件循环里同步执行**：`api/gateway.py:191` 在 async WS handler 里直接调同步的 `dispatch()`；`agent.capabilities` 最坏把**所有** WS/HTTP 请求（含 `system.health`）冻结 30s + 两次 5s reap grace。S9 之前 `worktree add` 已有同样形状，但 S9 让它变成一次普通按钮点击就能触发。 | **部分收口（S10）**：派活这条**分钟级**路径已移出事件循环——`task.dispatch` 只做毫秒级校验与建行，慢活全部在 worker 线程（`orchestrator._run`），ACP 会话在 `acp_client.Session` 里阻塞等（worker 不在事件循环里，实测一轮 8.7s 不影响其它请求）。**但 `dispatch()` 本身仍是同步调用**：`agent.capabilities` / `worktree.acquire` 的 30s 最坏情况还在事件循环里，属既有架构，本刀不顺手改（预算纪律）——升级为独立项 U20 | **U19 主体已收口（S10）；残余进 U20（到期 S15 前，重启恢复会重构 dispatch 形状）** | 派活不再冻结页面；握手/建工作区的长操作仍可能卡别的请求几十秒 |
+| U19 | **握手在事件循环里同步执行**：`api/gateway.py:312` 在 async WS handler 里直接调同步的 `dispatch()`；`agent.capabilities` 最坏把**所有** WS/HTTP 请求（含 `system.health`）冻结 30s + 两次 5s reap grace。S9 之前 `worktree add` 已有同样形状，但 S9 让它变成一次普通按钮点击就能触发。 | **部分收口（S10）**：派活这条**分钟级**路径已移出事件循环——`task.dispatch` 只做毫秒级校验与建行，慢活全部在 worker 线程（`orchestrator._run`），ACP 会话在 `acp_client.Session` 里阻塞等（worker 不在事件循环里，实测一轮 8.7s 不影响其它请求）。**但 `dispatch()` 本身仍是同步调用**：`agent.capabilities` / `worktree.acquire` 的 30s 最坏情况还在事件循环里，属既有架构，本刀不顺手改（预算纪律）——升级为独立项 U20 | **U19 主体已收口（S10）；残余进 U20（到期 S15 前，重启恢复会重构 dispatch 形状）** | 派活不再冻结页面；握手/建工作区的长操作仍可能卡别的请求几十秒 |
 | U20 | **`dispatch()` 仍在事件循环里同步执行**（U19 的残余）：`agent.capabilities` 最坏 30s + 两次 5s reap grace、`worktree.acquire` 最坏几秒，期间所有 WS/HTTP 请求冻结。S10 把分钟级的派活移出了事件循环（worker 线程），但这条既有形状没动——本刀只加不重构。 | **未修（S10 只收口了派活路径）** | 到期 **S20（M3 验收）必须收口，不再顺延**（S16 D7 裁决：S16 是 P2 最高安全项，`src/` 预算集中在权限规则/执行前阻断/审计；U20 是性能问题且要改 async 网关 + `asyncio.to_thread`，与权限门形状不同） | 点「检测 Agent」期间页面其它按钮（health、切仓库）最长卡 40 秒 |
 | U22 | **opencode 版本不识别顶层 `permissions`（v1 用 `permission`/`bash`）**：规则不生效 = 越权可能落空 | **已实现（S16 D6 + review must-fix 2）**：`Session.__init__` 在 `initialize` 之后、`session/new` **之前**用 `supports_top_level_permissions(agentInfo.version)` 探测（major≥2 才认，缺失/异常一律不认）；v1 抛 `AcpPermissionsUnsupportedError`（`AcpProtocolError` 子类，orchestrator 仍翻 `failed` + `INTERNAL`，不新增错误码），`gate` 接住写 `FALLBACK` 审计（`resource=agent-permissions-unsupported`），UI 的 `loadAudit` 见 FALLBACK 就把该 Bot 徽标标「（不可用）」。假 ACP `v1` 模式断言 `session/new` 从未发出；反向注入 S16 #5/#6 守住探测与徽标 | ✅ **已收口（fail-closed，不静默放行）** | — |
 | U21 | **真实 opencode 集成用例依赖外部免费额度**：`tests/test_dispatch.py::test_real_integration_creates_file_and_dirty_worktree` 用真 `opencode acp`（默认 `opencode/big-pickle`）。额度耗尽时 prompt **既不回终态帧也不报错**（日志 `AI_APICallError: Free usage limit reached`），任务永远停在 `running` → 180s 超时；另一形态是终态 `failed/INTERNAL`（维护者独立复跑 0/3）。默认免费模型账号级限额，换免费模型无效。 | **✅ 已收口（S13 收尾）**：测试注入 `session_factory`，用 `XDG_DATA_HOME` 指回本机真实 opencode 凭据库、`OPENCODE_CONFIG_CONTENT` 指定付费模型 `deepseek/deepseek-flash`（凭据只由 opencode 自己读，测试不碰 key），真跑真绿——3/3 独立复跑全 `passed`（2~3s）。无 opencode / 无 deepseek 凭据才 skip；两种失败形态（超时、`failed/INTERNAL`）都只在拿到明确限流日志证据时才跳过，泛化 `INTERNAL` 照常 fail。产品代码零改动（无 prompt 超时，S10 D8 不变） | ✅ **已收口（S13 收尾）**；若日后 deepseek 凭据失效，测试会明确 skip 而非假绿 | — |
 
+
+| U23 | **SIGKILL 落在 migration 的 `executescript` 与 `user_version` 写入之间 → 下一任连接撞 `table candidates already exists`**：PR #32 CI 的 `test_real_kernel_restart_interrupts_half_done_task` 确定性失败（本地全量偶发）。`executescript` 隐式 commit，`with conn` 保不住这一步原子性；表/列已建但版本还停在旧值。 | **已修（S17）**：`storage/db.py::migrate` 捕获「table already exists / duplicate column name / duplicate index」三类「对象已在」错误，若 `user_version >= version`（说明这一步其实做完了）就推进版本继续，其它错误照常抛；`tests/test_recovery.py::test_migration_is_idempotent_when_version_lags` 确定性复现（建库 → 版本退回 0 → 重开必须幂等成功），反向注入 S17 #4 守住 | ✅ **已收口（幂等迁移）** | — |
+
 ---
+
+### S17 ❌ `request()` 的回调是 `(err, data)`，不是 `(frame)`（已踩到）
+
+`assets.py` 的 `request(method, params, done)` 在 `onMessage` 里成功时调 `done(null, result.data)`、
+失败时 `done(code, null)`（07 §1.3：第一参数是错误码，不读 message）。
+S16 的 `loadAudit` 把回调写成 `function (frame) { frame.ok / frame.data … }`——**两个字段都取不到**，
+审计面板实际上永远显示「审计读取失败」。S17 的 `loadContext` 最初照抄了这个形状，真浏览器
+验收里 context 面板一直停在 `error`（`s17_context.mjs` 的第 2 步抓到），改成
+`function (err, data) { if (err || !data) … }` 后 6/6 CHECK 全绿。
+
+**别再踩**：写一个走 `request()` 的新面板，先去看 `onMessage` 的 `done(null, result.data)` 那一行，
+不要照抄 `loadAudit`。S16 的 `loadAudit` 是本刀之外的遗留 bug（本刀不顺手改，避免扩大 diff；
+下一个人读到这段请修它）。静态 DOM 契约测试只能守 id 与 `innerHTML` 零使用，**守不住回调形状**
+——真浏览器脚本才能抓到。
 
 ## 一条通用教训（如果只能记住一句）
 
