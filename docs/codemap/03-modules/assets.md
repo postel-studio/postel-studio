@@ -28,7 +28,7 @@ S6 起左栏还有「Bots」区、主区还有只读的「Charter」面板（D8 
 | `RECONNECT_DELAY_MS` | 44 | `500`，点重连到发起的延迟 |
 | `REQUIRED_PARAMS` | 47 | 全部占位符元组（9 个；S4/S5 都没加新占位符） |
 | `ERROR_TEXT` | 61 | 07 §1.3 错误码 → 用户可读中文（S3 左栏 + S4 分支面板 + S5 差异面板共用；S4 补 `REPO_NOT_BOUND`，S5 补 `BAD_REF` / `NOT_SUPPORTED`） |
-| `ERROR_TEXT_FALLBACK` | 79 | 表外的码走这句通用文案（**只给绑定表单**；分支/差异面板各有自己那句） |
+| `ERROR_TEXT_FALLBACK` | 84 | 表外的码走这句通用文案（**只给绑定表单**；分支/差异面板各有自己那句） |
 | `INDEX_HTML` | 86 | 页面本体 |
 | `error_text_json()` | 2486 | 把 `ERROR_TEXT` 序列化成 JS 对象字面量 |
 | `render_index(...)` | 2495 | 填占位符 |
