@@ -21,6 +21,7 @@ import uvicorn
 import websockets
 from websockets.exceptions import InvalidStatus
 
+from postel_studio.api import errors
 from postel_studio.api.app import create_app
 from postel_studio.api.gateway import active_connection_count
 from postel_studio.api.server import log_config
@@ -230,8 +231,12 @@ def test_ticket_registry_is_single_use_and_expires():
 
 def test_page_renders_a_fresh_ticket_each_time():
     """`/` 每渲染一次就签发一个新 ticket（前端「重连时重新 fetch 页面」的前提）。"""
-    page_a = render_index("0.1.2", "1", "/tmp/x", "ticket-a", "/gateway")
-    page_b = render_index("0.1.2", "1", "/tmp/x", "ticket-b", "/gateway")
+    page_a = render_index(
+        "0.1.2", "1", "/tmp/x", "ticket-a", "/gateway", errors.ERROR_TEXT, errors.UNKNOWN_CODE_TEXT
+    )
+    page_b = render_index(
+        "0.1.2", "1", "/tmp/x", "ticket-b", "/gateway", errors.ERROR_TEXT, errors.UNKNOWN_CODE_TEXT
+    )
 
     assert "ticket-a" in page_a
     assert "ticket-b" in page_b

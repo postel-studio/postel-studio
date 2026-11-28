@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 import websockets
 
-from postel_studio.api import frames
+from postel_studio.api import errors, frames
 from postel_studio.api.bots import (
     ALREADY_EXISTS,
     MSG_ALREADY_EXISTS,
@@ -590,7 +590,7 @@ def test_error_text_table_knows_the_new_code() -> None:
     assert '"ALREADY_EXISTS": "这个仓库已经有叫这个名字的 Bot"' not in page  # 不在全局表里
     assert 'if (code === "ALREADY_EXISTS") { return "这个仓库已经有叫这个名字的 Bot"; }' in page
     assert "第一版不支持这个权限级别（L3 / L4）" in page
-    assert assets.ERROR_TEXT["NOT_SUPPORTED"] == "仓库含非 UTF-8 的名称，第一版不支持"
+    assert errors.ERROR_TEXT["NOT_SUPPORTED"] == "仓库含非 UTF-8 的名称，第一版不支持"
 
 
 # ---------------------------------------------------------------------------

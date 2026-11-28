@@ -24,6 +24,7 @@ import pytest
 import websockets
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from postel_studio.api import errors
 from postel_studio.api.frames import MAX_FRAME_BYTES, MAX_ID_LENGTH
 from postel_studio.web import assets
 
@@ -559,7 +560,9 @@ def test_frontend_disconnect_budget_constants():
 
 def test_page_inlines_the_same_constants_it_tests():
     """页面里的数字必须就是上面断言的常量（否则测试和页面会各自漂移）。"""
-    page = assets.render_index("0.1.2", "1", "/tmp/x", "ticket", "/gateway")
+    page = assets.render_index(
+        "0.1.2", "1", "/tmp/x", "ticket", "/gateway", errors.ERROR_TEXT, errors.UNKNOWN_CODE_TEXT
+    )
 
     assert f"HEARTBEAT_INTERVAL_MS = {assets.HEARTBEAT_INTERVAL_MS};" in page
     assert f"RECONNECT_DELAY_MS = {assets.RECONNECT_DELAY_MS};" in page
@@ -570,7 +573,9 @@ def test_page_inlines_the_same_constants_it_tests():
 
 def test_render_does_not_confuse_braces_with_placeholders():
     """页面里满是 CSS/JS 花括号：渲染必须只替换占位符，不碰别的 `{`。"""
-    page = assets.render_index("0.1.2", "1", "/tmp/a&b<c>", "tk", "/gateway")
+    page = assets.render_index(
+        "0.1.2", "1", "/tmp/a&b<c>", "tk", "/gateway", errors.ERROR_TEXT, errors.UNKNOWN_CODE_TEXT
+    )
 
     assert '{ type: "req", id: id' in page  # JS 里的花括号原样保留
     assert "/tmp/a&amp;b&lt;c&gt;" in page  # 路径已转义

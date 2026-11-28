@@ -614,6 +614,50 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
         _target_test("test_migration_is_idempotent_when_version_lags", file="test_recovery"),
         "S17 #4：migration 幂等修复被拆掉 → SIGKILL 后重开库撞 table already exists",
     ),
+    # ---- S18：空态/错误态的五条硬约束（码表单源、脱敏、空态、不可达、审计回调）----
+    (
+        "postel_studio/api/errors.py",
+        '    "FRAME_TOO_LARGE": "请求太大（单帧超过 1 MiB），拆小后再试",\n',
+        "",
+        _target_test("test_every_documented_code_has_text", file="test_states"),
+        "S18 #1：07 表里的码从 ERROR_TEXT 删掉（页面只能答表外兜底）",
+    ),
+    (
+        "postel_studio/api/errors.py",
+        "    if _TRACEBACK_MARK in text:\n        text = text.split(_TRACEBACK_MARK, 1)[0]\n",
+        "    return text  # 注入：编码层不再脱敏\n",
+        _target_test("test_encode_error_frames_carry_the_sanitized_message", file="test_states"),
+        "S18 #2：encode_error 不再脱敏（绝对路径/堆栈/凭据进帧）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        '    <p id="audit-empty" hidden>这个 Bot 还没有权限裁决记录。</p>\n',
+        "",
+        _target_test("test_every_panel_declares_an_empty_state", file="test_states"),
+        "S18 #3：审计面板的空态被拿掉（0 条时只剩空白）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        'if (reason === "unreachable") { setState("disconnected", UNREACHABLE_TEXT, '
+        "UNREACHABLE_HINT); }",
+        'if (reason === "unreachable") { setState("disconnected", "已断开", UNREACHABLE_HINT); }',
+        _target_test("test_page_declares_unreachable_hint", file="test_states"),
+        "S18 #4：连不上时不再说「内核不可达」（只留一句「已断开」）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        'request("audit.list", { botId: botId }, function (err, data) {',
+        'request("audit.list", { botId: botId }, function (frame) {',
+        _target_test("test_audit_callback_uses_err_data_shape", file="test_states"),
+        "S18 #5：审计回调写回 (frame)（面板永远答「读取审计失败」）",
+    ),
+    (
+        "postel_studio/web/assets.py",
+        "  @media (prefers-color-scheme: light) {",
+        "  @media (max-width: 1px) {",
+        _target_test("test_page_declares_light_theme", file="test_states"),
+        "S18 #6：浅色主题被摘掉（只剩暗色一套 token）",
+    ),
 )
 
 

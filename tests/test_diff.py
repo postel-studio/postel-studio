@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 import websockets
 
-from postel_studio.api import frames
+from postel_studio.api import errors, frames
 from postel_studio.api.repository import (
     DEFAULT_MAX_CHARS,
     MAX_MAX_CHARS,
@@ -850,6 +850,8 @@ def _page() -> str:
         state_root="/tmp/state",
         handshake_ticket="t" * 64,
         ws_path="/gateway/x",
+        error_text=errors.ERROR_TEXT,
+        unknown_code_text=errors.UNKNOWN_CODE_TEXT,
     )
 
 
@@ -946,12 +948,13 @@ def test_page_diff_stat_and_truncation_have_exact_copy() -> None:
     assert '" 个文件 · +"' in page
     assert '" −"' in page
     assert "已截断：差异太大，只显示前一部分" in page
-    # D9 的 CSS 颜色契约（暗色底上可读）
+    # D9 的 CSS 颜色契约。S18 起颜色走 token：规则断言 token 名，
+    # 暗/浅两套取值由 :root 与 prefers-color-scheme 给出（test_states.py 守着）。
     for rule in (
-        ".diff-add { color: #3fb950; }",
-        ".diff-del { color: #f85149; }",
-        ".diff-hunk { color: #58a6ff; }",
-        ".diff-meta { color: #8b949e; }",
+        ".diff-add { color: var(--ok); }",
+        ".diff-del { color: var(--danger); }",
+        ".diff-hunk { color: var(--link); }",
+        ".diff-meta { color: var(--muted-2); }",
         ".diff-ctx { color: inherit; }",
     ):
         assert rule in page, rule

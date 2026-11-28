@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from postel_studio.api import frames, gateway
+from postel_studio.api import errors, frames, gateway
 from postel_studio.api.bots import BotService
 from postel_studio.api.repository import RepositoryService
 from postel_studio.api.worktrees import WorktreeService
@@ -825,8 +825,8 @@ def test_page_declares_workspace_panel() -> None:
     # 显隐只由 data-state 决定（T8）：四个状态名都要出现在 CSS 规则里
     for state in ("idle", "loading", "ready", "error"):
         assert f'#workspace[data-state="{state}"]' in page, state
-    assert assets.ERROR_TEXT["WORKTREE_CONFLICT"] == "工作区目录被占用，或里面有未提交的改动"
-    assert assets.ERROR_TEXT["BAD_BASE_REF"] == "基础分支不存在或不是提交"
+    assert errors.ERROR_TEXT["WORKTREE_CONFLICT"] == "工作区目录被占用，或里面有未提交的改动"
+    assert errors.ERROR_TEXT["BAD_BASE_REF"] == "基础分支不存在或不是提交"
     assert "worktree.acquire" in page and "worktree.release" in page and "worktree.list" in page
     # 新字段只进 textContent：页面里不得出现给它们赋值 innerHTML 的写法
     for field in ("workspacePath", "workspaceBranch", "workspaceBot"):
