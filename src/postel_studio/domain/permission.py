@@ -20,18 +20,22 @@ _DENY_EDIT_ALL: Final[Rule] = ("edit", "*", "deny")
 _DENY_SHELL_ALL: Final[Rule] = ("shell", "*", "deny")
 _ALLOW_EDIT_ALL: Final[Rule] = ("edit", "*", "allow")
 
-# S16 must-fix 1：opencode 的 shell resource 是 scanner 产出的命令字符串，字面
-# `git push *` 匹配不到 `git -C <repo> push`（实测：旧规则下哨兵出现、bare remote 收到
-# ref —— fail-open）。这里把 spec §3 枚举的每种 push 形状都钉成 deny；scanner 对无法
-# 安全解析的命令（如 `eval`）在**存在任何 shell deny 规则**时直接拒绝，所以未识别的
-# push 语法同样 fail-closed（opencode 文档「Scanner」一节）。
-_DENY_PUSH: Final[Rule] = ("shell", "git push *", "deny")
-_DENY_PUSH_BARE: Final[Rule] = ("shell", "git push", "deny")
-_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "deny")
-_DENY_PUSH_OPTS: Final[Rule] = ("shell", "git * push *", "deny")
-_DENY_PUSH_ABS: Final[Rule] = ("shell", "*/git push *", "deny")
-_ALLOW_ORIGIN_PUSH: Final[Rule] = ("shell", "git push origin *", "allow")
-_ALLOW_ORIGIN_PUSH_C: Final[Rule] = ("shell", "git -C * push origin *", "allow")
+# S16 must-fix 1 / review round 2：opencode 的 shell resource 是 scanner 产出的命令
+# 字符串，字面 `git push *` 匹配不到 `git -C <repo> push`，`*/git push *` 又匹配不到
+# `/usr/bin/git -C <repo> push`（git 与 push 之间隔着 -C 参数）——两轮真执行探针都测出
+# 过哨兵出现、bare remote 收到 ref 的 fail-open。这里每条规则都**前导通配**：git 前面
+# 允许任意路径/包装器前缀（`/usr/bin/`、`env`、`sudo`），后面仍把 push 钉死。scanner
+# 对无法安全解析的命令（如 `eval`）在存在任何 shell deny 规则时直接拒绝，所以未识别
+# 的 push 语法同样 fail-closed（opencode 文档「Scanner」一节）。
+_DENY_PUSH: Final[Rule] = ("shell", "*git push *", "deny")
+_DENY_PUSH_BARE: Final[Rule] = ("shell", "*git push", "deny")
+_DENY_PUSH_C: Final[Rule] = ("shell", "*git -C * push*", "deny")
+_DENY_PUSH_OPTS: Final[Rule] = ("shell", "*git * push *", "deny")
+_DENY_PUSH_ABS: Final[Rule] = ("shell", "*/git * push *", "deny")
+# L2 例外同样前导通配：让 `/usr/bin/git ... push origin ...` 仍算「推本仓库 origin」，
+# 但 `/usr/bin/git ... push <foreign>` 仍被上面的 deny 拦住（后匹配优先）。
+_ALLOW_ORIGIN_PUSH: Final[Rule] = ("shell", "*git push origin *", "allow")
+_ALLOW_ORIGIN_PUSH_C: Final[Rule] = ("shell", "*git -C * push origin *", "allow")
 
 _DENY_ALL_PUSH: Final[tuple[Rule, ...]] = (
     _DENY_PUSH,

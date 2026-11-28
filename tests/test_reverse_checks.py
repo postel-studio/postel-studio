@@ -543,15 +543,15 @@ INJECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
     # ---- S16：权限规则是安全约束，必须能证明测试真的守得住 ----
     (
         "postel_studio/domain/permission.py",
-        '_DENY_PUSH: Final[Rule] = ("shell", "git push *", "deny")',
-        '_DENY_PUSH: Final[Rule] = ("shell", "git push *", "allow")',
+        '_DENY_PUSH: Final[Rule] = ("shell", "*git push *", "deny")',
+        '_DENY_PUSH: Final[Rule] = ("shell", "*git push *", "allow")',
         _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
         "S16 #1：裸 git push 拒绝改成允许（越权放行）",
     ),
     (
         "postel_studio/domain/permission.py",
-        '_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "deny")',
-        '_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "allow")',
+        '_DENY_PUSH_C: Final[Rule] = ("shell", "*git -C * push*", "deny")',
+        '_DENY_PUSH_C: Final[Rule] = ("shell", "*git -C * push*", "allow")',
         _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
         "S16 #3：git -C <repo> push 拒绝改成允许（审查实测的 fail-open 回放）",
     ),
@@ -714,6 +714,31 @@ COMPOSITE_INJECTIONS: tuple[tuple[tuple[tuple[str, str, str], ...], str, str], .
         ),
         _target_test("test_interrupted_cannot_become_succeeded", file="test_recovery"),
         "S15 #2（组合）：终态守卫拆掉 + interrupted→succeeded 放行 → 中断任务被伪装成成功",
+    ),
+    # ---- S16 #7（组合）：绝对路径 + -C 由两条前导通配共同兜住，单独拆一条测试仍绿 ----
+    # 回放 review round 2 的 fail-open：`git -C`/`git * push` 退回无前导匹配后，
+    # `/usr/bin/git -C <repo> push ...` 两种规则都不命中，`_DENY_PUSH_ABS` 的
+    # `*/git * push *` 也在同一注入里被拆掉，测试必须红。
+    (
+        (
+            (
+                "postel_studio/domain/permission.py",
+                '_DENY_PUSH_C: Final[Rule] = ("shell", "*git -C * push*", "deny")',
+                '_DENY_PUSH_C: Final[Rule] = ("shell", "git -C * push*", "deny")',
+            ),
+            (
+                "postel_studio/domain/permission.py",
+                '_DENY_PUSH_OPTS: Final[Rule] = ("shell", "*git * push *", "deny")',
+                '_DENY_PUSH_OPTS: Final[Rule] = ("shell", "git * push *", "deny")',
+            ),
+            (
+                "postel_studio/domain/permission.py",
+                '_DENY_PUSH_ABS: Final[Rule] = ("shell", "*/git * push *", "deny")',
+                '_DENY_PUSH_ABS: Final[Rule] = ("shell", "no-such-command-nope", "deny")',
+            ),
+        ),
+        _target_test("test_all_push_shapes_are_denied", file="test_permission_gate"),
+        "S16 #7（组合）：绝对路径 + -C 的三条前导通配退回旧形状 → 审查实测的 fail-open 复现",
     ),
 )
 

@@ -108,11 +108,11 @@ def test_rules_for_all_levels_and_fail_closed() -> None:
     assert rules_for("L0") == (("edit", "*", "deny"), ("shell", "*", "deny"))
     l1 = rules_for("L1") or ()
     assert l1[0] == ("edit", "*", "allow")
-    assert ("shell", "git push *", "deny") in l1
+    assert ("shell", "*git push *", "deny") in l1
     l2 = rules_for("L2") or ()
     assert l2[-2:] == (
-        ("shell", "git push origin *", "allow"),
-        ("shell", "git -C * push origin *", "allow"),
+        ("shell", "*git push origin *", "allow"),
+        ("shell", "*git -C * push origin *", "allow"),
     )
     assert rules_for("L2+") == (("edit", "*", "allow"),)
     for bad in (None, "L3", "L4", "l1", 42, ""):
@@ -142,14 +142,19 @@ def test_all_push_shapes_are_denied() -> None:
         "git -C /tmp/repo push",
         "/usr/bin/git push origin main",
         "git -c core.foo=1 push origin main",
+        # review round 2：绝对路径 + -C（git 与 push 之间隔着 -C 参数）
+        "/usr/bin/git -C /tmp/repo push origin main",
+        "/usr/bin/git -C /tmp/repo push /tmp/other.git main",
+        "/opt/wrapper/git -C /tmp/repo push origin main",
     )
     for shape in shapes:
         assert _effect_of(l1, "shell", shape) == "deny", shape
         assert _effect_of(l1, "shell", shape + " && touch sentinel.txt") == "deny", shape
     l2 = rules_for("L2") or ()
     assert _effect_of(l2, "shell", "git -C /tmp/repo push origin main") == "allow"
+    assert _effect_of(l2, "shell", "/usr/bin/git -C /tmp/repo push origin main") == "allow"
     assert _effect_of(l2, "shell", "git -C /tmp/repo push /tmp/other.git main") == "deny"
-    assert _effect_of(l2, "shell", "/usr/bin/git push origin main") == "deny"
+    assert _effect_of(l2, "shell", "/usr/bin/git -C /tmp/repo push /tmp/other.git main") == "deny"
 
 
 def test_supports_top_level_permissions() -> None:
@@ -282,6 +287,39 @@ def test_l1_git_c_push_blocked_before_execution(
 
 
 @needs_agent
+def test_absolute_git_c_push_blocked_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """review round 2 must-fix 1：`/usr/bin/git -C <repo> push` 的 fail-open 必须真堵住。
+
+    审查实测这一种 3/3 都推成了（旧规则只写 `*/git push *`，git 与 push 之间隔着 -C
+    就不匹配）。这里用**新的** bare remote 与哨兵双重断言，不依赖任何顺序。
+    """
+    _env(tmp_path, monkeypatch, _rules("L1"))
+    repo = _make_repo(tmp_path / "home")
+    bare = tmp_path / "home" / "remote.git"
+    git = shutil.which("git") or "/usr/bin/git"
+    session = gate.session_factory("L1", BOT_ID)(["opencode", "acp"], str(repo))
+    outcome = _prompt(
+        session,
+        f"只使用 shell 工具执行这一条命令：{git} -C {repo} push origin main"
+        " && touch sentinel.txt。不要用 write/edit 工具创建文件。",
+    )
+    assert outcome.stop_reason == "end_turn"
+    assert not (repo / "sentinel.txt").exists(), "绝对路径 git -C push 必须被拦在执行前"
+    refs = subprocess.run(
+        ["git", "--git-dir", str(bare), "for-each-ref", "--format=%(refname)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert refs == "", f"远端不该收到任何 ref：{refs!r}"
+    assert any(call.status == "failed" and "-C" in call.command for call in outcome.tool_calls), (
+        outcome.tool_calls
+    )
+
+
+@needs_agent
 def test_l2_git_c_foreign_push_blocked_before_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -355,7 +393,7 @@ def test_audit_records_denial_with_bot_command_and_result(
         for r in rows
     )
     assert any(
-        r["source"] == "gate" and r["effect"] == "DENY" and r["resource"] == "git push *"
+        r["source"] == "gate" and r["effect"] == "DENY" and r["resource"] == "*git push *"
         for r in rows
     )
     assert any("git push" in call.command for call in outcome.tool_calls), outcome.tool_calls

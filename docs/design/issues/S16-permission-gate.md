@@ -53,11 +53,16 @@
     （只许推本仓库的 `origin`；最后匹配优先）。
   - `L2+`：`edit * = allow`，不追加 push 拒绝（S16 只验收 L0/L1/L2；跨仓库能力在 S17 前保持
     "认识但谨慎"，`L3/L4` 仍不可赋值）。
-  - **push  deny 的五种形状缺一不可**（review must-fix 1）：`git push *` / `git push` /
-    `git -C * push*` / `git * push *` / `*/git push *`。opencode 的 shell resource 是
-    scanner 产出的命令字符串；**只写 `git push *` 时 `git -C <repo> push` 不匹配**，实测
-    哨兵出现且 bare remote 收到 ref（fail-open）。scanner 遇到无法安全解析的命令（如
-    `eval`）时，只要存在任一 shell deny 规则就直接拒绝，因此未识别的 push 语法也 fail-closed。
+  - **push deny 的五种形状缺一不可，且每种都前导通配**（review 两轮 must-fix）：
+    `*git push *` / `*git push` / `*git -C * push*` / `*git * push *` / `*/git * push *`。
+    opencode 的 shell resource 是 scanner 产出的命令字符串：只写 `git push *` 时
+    `git -C <repo> push` 不匹配；只写 `*/git push *` 时 `/usr/bin/git -C <repo> push`
+    又不匹配（git 与 push 之间隔着 -C）。两轮真执行探针都测出过哨兵出现、bare remote
+    收到 ref 的 fail-open。前导 `*` 允许任意二进制路径/包装器前缀（`/usr/bin/`、`env`、
+    `sudo`）；scanner 遇到无法安全解析的命令（如 `eval`）时，只要存在任一 shell deny
+    规则就直接拒绝，因此未识别的 push 语法也 fail-closed。
+  - L2 的 origin 例外同样前导通配（`*git push origin *` / `*git -C * push origin *`），
+    后置覆盖 deny；推 foreign 的形状不匹配 allow，仍是 deny。
   任何无法解析的权限值 → **fail-closed**：按 L0 规则处理，并在审计里记 `FALLBACK`。
 - **D3 — 哨兵文件不能被 `edit/write` 工具绕过去。** 验收用 `git push origin main && touch
   sentinel.txt`：被拦时文件必须不存在。实测（§4）发现只 deny `shell "git push *"` 时，LLM 有时
@@ -98,12 +103,12 @@
 | # | Acceptance criterion | Enforced by |
 |---|---|---|
 | 1 | L0 writes actually blocked | `tests/test_permission_gate.py::test_l0_write_blocked_before_execution`（真 opencode + 哨兵不存在 + 审计行）|
-| 2 | L1 may edit, push blocked | `::test_l1_edit_allowed_push_blocked`（真执行：改文件成功、push 哨兵不存在）+ `::test_l1_git_c_push_blocked_before_execution`（review must-fix 1：真执行 `git -C <repo> push`，哨兵与 bare remote 的 ref 都不存在） |
+| 2 | L1 may edit, push blocked | `::test_l1_edit_allowed_push_blocked`（真执行：改文件成功、push 哨兵不存在）+ `::test_l1_git_c_push_blocked_before_execution`（真执行 `git -C <repo> push`）+ `::test_absolute_git_c_push_blocked_before_execution`（review round 2：真执行 `/usr/bin/git -C <repo> push`，新 bare remote 的 ref 与哨兵都不存在） |
 | 3 | L2 push to origin only | `::test_l2_origin_push_allowed_other_push_blocked` + `::test_l2_git_c_foreign_push_blocked_before_execution`（`git -C <repo> push <foreign>` 真执行拦住） |
 | 4 | Blocking is pre-execution | 上述各例的 `sentinel.txt` 断言 + `::test_control_without_rules_creates_sentinel`（无规则时哨兵**必须**存在，证明探针有效） |
 | 5 | Audit per denial | `::test_audit_records_denial_with_bot_command_and_result`（读 `audit.jsonl`，断言时间/bot/命令/判定） |
 | 6 | Unblockable path is visible | `::test_unknown_permission_fails_closed` + `::test_v1_agent_never_starts_session_and_audits_fallback` + `::test_page_marks_unavailable_level` + 注册反向注入 `INJECTIONS['S16 #2/#5/#6']`（抹 FALLBACK / 抹版本探测 / 抹徽标 → 对应测试红） |
-| shapes | Every push shape denied | `::test_all_push_shapes_are_denied`（纯函数覆盖 `git push` / `git -C` / 绝对路径 / `-c` / 复合 `&&`）+ 反向注入 `S16 #1/#3/#4` |
+| shapes | Every push shape denied | `::test_all_push_shapes_are_denied`（纯函数覆盖 `git push` / `git -C` / 绝对路径 / 绝对路径+`-C` / 包装器 / `-c` / 复合 `&&`）+ 反向注入 `S16 #1/#3/#4/#7`（#7 是组合注入：拆掉三条前导通配 → 回放审查的 fail-open） |
 | DOM | 审计展示 / 不可用标记 | `::test_permission_badge_contract` |
 
 ## 3. Boundary matrix
@@ -153,6 +158,18 @@ old:          sentinel=True  refs='refs/heads/main'   <-- 只写 `git push *`：
 plus-git-C:   sentinel=False refs='refs/heads/main'   <-- 加 `git -C * push *`：工具调用 failed
 deny-all-git: sentinel=False refs='refs/heads/main'
 ```
+
+Review round 2：`/usr/bin/git -C <repo> push origin main && touch sentinel.txt` 在
+`*/git push *` 下仍 3/3 fail-open（git 与 push 之间隔着 -C），审查独立复跑：
+
+```text
+control-without-rules:       sentinel=true  origin_refs='refs/heads/main'
+git -C <repo> push:          sentinel=false origin_refs=''        <-- 第一轮修复已生效
+/usr/bin/git -C <repo> push: sentinel=true  origin_refs='refs/heads/main'  <-- fail-open
+```
+
+修复后前导通配的纯函数与真执行用例（`test_absolute_git_c_push_blocked_before_execution`，
+全新 bare remote）实测：`3 passed`（绝对路径 `-C` / `git -C` / L2 foreign 三条真执行用例）。
 
 （探针按同一 bare remote 顺序运行，ref 是上一轮留下的；判定以本轮哨兵与工具 `status=failed`
 为准。新增的真执行用例 `test_l1_git_c_push_blocked_before_execution` 用一个全新的 bare remote
